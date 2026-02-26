@@ -1,0 +1,46 @@
+# === Java / Maven ===
+AI_Ds/target/
+AI_Ds/.idea/
+*.class
+*.jar
+*.war
+
+# === Vue / Node ===
+AI_Ds-vue/node_modules/
+AI_Ds-vue/dist/
+AI_Ds-vue/.idea/
+
+# === Python ===
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.env
+
+# === Kiro internal ===
+.kiro/settings/
+
+# === OS / IDE ===
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+
+# === Crawl data (large, regenerable) ===
+爬取结果/
+PTA爬虫项目/
+
+# === Logs & temp ===
+*.log
+*.pkl
+*.pid
+
+# === Other large/generated ===
+AI_Ds/.mvn/
+grading_worker/__pycache__/
+grading_worker/pipeline/__pycache__/
+grading_worker/pipeline/rag/__pycache__/
+grading_worker/models/__pycache__/
+teacher-assistant-platform/
+captcha_bg.jpg

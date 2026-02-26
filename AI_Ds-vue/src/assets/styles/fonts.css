@@ -1,0 +1,54 @@
+/* 自由浪漫体声明 */
+@font-face {
+  font-family: 'ZiYouLangManTi';
+  src: url('../fonts/ZiYouLangManTi-2.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap; /* 提高性能的字体加载策略 */
+}
+
+/* 定义基本手写体类 */
+.handwritten-text {
+  font-family: 'ZiYouLangManTi', '楷体', KaiTi, '华文行楷', STKaiti, sans-serif;
+  letter-spacing: 1px; /* 增加字间距，更有手写感 */
+  line-height: 1.6; /* 行高稍微大一点，便于阅读 */
+}
+
+/* 常规手写体风格 - 默认 */
+.handwritten-normal {
+  font-family: 'ZiYouLangManTi', '楷体', sans-serif;
+}
+
+/* 浪漫手写风格 - 字间距更大，微倾斜 */
+.handwritten-romantic {
+  font-family: 'ZiYouLangManTi', '楷体', sans-serif;
+  letter-spacing: 1.5px;
+  transform: rotate(-0.5deg);
+  text-shadow: 0.5px 0.5px 1px rgba(0, 0, 0, 0.05);
+}
+
+/* 正式手写风格 - 更紧凑 */
+.handwritten-formal {
+  font-family: 'ZiYouLangManTi', '楷体', sans-serif;
+  letter-spacing: 0.5px;
+  line-height: 1.5;
+}
+
+/* 大号手写字体 */
+.handwritten-large {
+  font-family: 'ZiYouLangManTi', '楷体', sans-serif;
+  font-size: 18px;
+}
+
+/* 小号手写字体 */
+.handwritten-small {
+  font-family: 'ZiYouLangManTi', '楷体', sans-serif;
+  font-size: 13px;
+}
+
+/* 手写标题风格 */
+.handwritten-title {
+  font-family: 'ZiYouLangManTi', '黑体', sans-serif;
+  font-weight: bold;
+  letter-spacing: 2px;
+}

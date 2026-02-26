@@ -1,0 +1,60 @@
+/* Google-style global theme overrides */
+
+/* Base font */
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  color: #202124;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Element Plus global overrides */
+:root {
+  --el-color-primary: #1a73e8;
+  --el-color-primary-light-3: #4d9ef6;
+  --el-color-primary-light-5: #8cc0fa;
+  --el-color-primary-light-7: #bddafc;
+  --el-color-primary-light-9: #e8f0fe;
+  --el-color-primary-dark-2: #1765cc;
+  --el-color-success: #1e8e3e;
+  --el-color-warning: #e37400;
+  --el-color-danger: #d93025;
+  --el-color-info: #5f6368;
+  --el-border-radius-base: 8px;
+  --el-border-color: #dadce0;
+  --el-border-color-light: #e8eaed;
+  --el-text-color-primary: #202124;
+  --el-text-color-regular: #5f6368;
+  --el-text-color-secondary: #9aa0a6;
+  --el-bg-color: #f8f9fa;
+  --el-fill-color-light: #f1f3f4;
+}
+
+/* Card overrides */
+.el-card {
+  border-radius: 16px;
+  border-color: #dadce0;
+  box-shadow: none;
+}
+
+/* Button pill shape for primary */
+.el-button--primary {
+  border-radius: 100px;
+}
+
+/* Dialog rounded */
+.el-dialog {
+  border-radius: 16px;
+}
+
+/* Tag rounded */
+.el-tag {
+  border-radius: 100px;
+}
+
+/* Table clean */
+.el-table th.el-table__cell {
+  background: #f8f9fa;
+  color: #5f6368;
+  font-weight: 500;
+  font-size: 12px;
+}
