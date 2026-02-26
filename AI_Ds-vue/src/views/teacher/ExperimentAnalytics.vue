@@ -76,7 +76,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, nextTick, onBeforeUnmount, watch } from 'vue'
 import * as echarts from 'echarts'
 import PageHeader from '../../components/PageHeader.vue'
 import { getAnalyticsExperiments, getExperimentAnalytics, getExperimentComparison } from '../../api/tap'
@@ -142,17 +142,30 @@ function renderDistChart() {
   distChart?.dispose()
   distChart = echarts.init(distChartRef.value)
   const d = data.value.scoreDistribution
-  const labels = ['90-100', '80-89', '70-79', '60-69', '<60']
-  const colors = ['#1e8e3e', '#1a73e8', '#e37400', '#f9ab00', '#d93025']
+  // PTA 标准 11 段
+  const labels = ['[100,100]', '[90,100)', '[80,90)', '[70,80)', '[60,70)',
+                   '[50,60)', '[40,50)', '[30,40)', '[20,30)', '[10,20)', '[0,10)']
+  const shortLabels = ['100', '90-99', '80-89', '70-79', '60-69', '50-59', '40-49', '30-39', '20-29', '10-19', '0-9']
+  const values = labels.map(l => d[l] || 0)
+  const total = values.reduce((a, b) => a + b, 0) || 1
   distChart.setOption({
-    tooltip: { trigger: 'axis' },
-    grid: { left: 40, right: 16, top: 20, bottom: 28 },
-    xAxis: { type: 'category', data: labels, axisLabel: { fontSize: 11 } },
+    tooltip: {
+      trigger: 'axis',
+      formatter: p => `${labels[p[0].dataIndex]}<br/>人数: ${p[0].value}<br/>比例: ${(p[0].value / total * 100).toFixed(0)}%`
+    },
+    grid: { left: 40, right: 16, top: 20, bottom: 36 },
+    xAxis: { type: 'category', data: shortLabels, axisLabel: { fontSize: 10, rotate: 30 } },
     yAxis: { type: 'value', name: '人数', minInterval: 1 },
     series: [{
-      type: 'bar', barWidth: '50%',
-      data: labels.map((l, i) => ({ value: d[l] || 0, itemStyle: { color: colors[i], borderRadius: [4, 4, 0, 0] } })),
-      label: { show: true, position: 'top', fontSize: 11 }
+      type: 'bar', barWidth: '60%',
+      data: values.map((v, i) => ({
+        value: v,
+        itemStyle: {
+          color: i <= 1 ? '#1e8e3e' : i <= 3 ? '#1a73e8' : i <= 4 ? '#e37400' : '#d93025',
+          borderRadius: [3, 3, 0, 0]
+        }
+      })),
+      label: { show: true, position: 'top', fontSize: 10, formatter: p => p.value > 0 ? p.value : '' }
     }]
   })
 }
@@ -208,7 +221,6 @@ async function loadComparison() {
 }
 
 // watch showComparison
-import { watch } from 'vue'
 watch(showComparison, v => { if (v) nextTick(() => loadComparison()) })
 
 const handleResize = () => { distChart?.resize(); accChart?.resize(); compChart?.resize() }

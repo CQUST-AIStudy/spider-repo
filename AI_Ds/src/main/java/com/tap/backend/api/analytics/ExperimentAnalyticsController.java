@@ -182,25 +182,32 @@ public class ExperimentAnalyticsController {
     }
 
     private Map<String, Object> computeScoreDistribution(int experimentId) {
+        // PTA 标准 11 段分布
         @SuppressWarnings("unchecked")
         List<Object[]> rows = em.createNativeQuery(
             "SELECT " +
-            "  SUM(CASE WHEN score >= 90 THEN 1 ELSE 0 END) as s90, " +
-            "  SUM(CASE WHEN score >= 80 AND score < 90 THEN 1 ELSE 0 END) as s80, " +
-            "  SUM(CASE WHEN score >= 70 AND score < 80 THEN 1 ELSE 0 END) as s70, " +
-            "  SUM(CASE WHEN score >= 60 AND score < 70 THEN 1 ELSE 0 END) as s60, " +
-            "  SUM(CASE WHEN score < 60 THEN 1 ELSE 0 END) as s0 " +
+            "  SUM(CASE WHEN score = 100 THEN 1 ELSE 0 END), " +
+            "  SUM(CASE WHEN score >= 90 AND score < 100 THEN 1 ELSE 0 END), " +
+            "  SUM(CASE WHEN score >= 80 AND score < 90 THEN 1 ELSE 0 END), " +
+            "  SUM(CASE WHEN score >= 70 AND score < 80 THEN 1 ELSE 0 END), " +
+            "  SUM(CASE WHEN score >= 60 AND score < 70 THEN 1 ELSE 0 END), " +
+            "  SUM(CASE WHEN score >= 50 AND score < 60 THEN 1 ELSE 0 END), " +
+            "  SUM(CASE WHEN score >= 40 AND score < 50 THEN 1 ELSE 0 END), " +
+            "  SUM(CASE WHEN score >= 30 AND score < 40 THEN 1 ELSE 0 END), " +
+            "  SUM(CASE WHEN score >= 20 AND score < 30 THEN 1 ELSE 0 END), " +
+            "  SUM(CASE WHEN score >= 10 AND score < 20 THEN 1 ELSE 0 END), " +
+            "  SUM(CASE WHEN score >= 0 AND score < 10 THEN 1 ELSE 0 END) " +
             "FROM score WHERE experiment_id = ?1 AND score IS NOT NULL"
         ).setParameter(1, experimentId).getResultList();
 
         Map<String, Object> dist = new LinkedHashMap<>();
         if (!rows.isEmpty() && rows.get(0) != null) {
             Object[] r = rows.get(0);
-            dist.put("90-100", toInt(r[0]));
-            dist.put("80-89", toInt(r[1]));
-            dist.put("70-79", toInt(r[2]));
-            dist.put("60-69", toInt(r[3]));
-            dist.put("<60", toInt(r[4]));
+            String[] labels = {"[100,100]", "[90,100)", "[80,90)", "[70,80)", "[60,70)",
+                               "[50,60)", "[40,50)", "[30,40)", "[20,30)", "[10,20)", "[0,10)"};
+            for (int i = 0; i < labels.length; i++) {
+                dist.put(labels[i], toInt(r[i]));
+            }
         }
         return dist;
     }
