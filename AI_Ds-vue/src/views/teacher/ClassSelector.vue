@@ -50,6 +50,7 @@ import { useRouter } from 'vue-router'
 import { useUserStore } from '../../store'
 import { Loading, CircleCheckFilled } from '@element-plus/icons-vue'
 import api from '../../api'
+import { getClassPrefixes } from '../../api/tap'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -59,6 +60,9 @@ const selected = ref(null)
 
 const defaultClassName = computed(() => userStore.userInfo?.classroom || '计科23')
 
+// 班级学生数统计（从实验数据推算）
+const classStudentCounts = ref({})
+
 onMounted(async () => {
   // 如果已经选了班级，直接跳转
   if (userStore.selectedClass) {
@@ -67,15 +71,24 @@ onMounted(async () => {
   }
 
   try {
-    const res = await api.getClassList()
-    const list = Array.isArray(res) ? res : (res?.data || [])
-    classList.value = list
+    // 从实验名称前缀获取班级列表（计科23、计科24 等）
+    const res = await getClassPrefixes()
+    const prefixes = res?.data || res || []
+    classList.value = prefixes.map(p => ({ id: p, name: p }))
     // 如果只有一个班级，自动选中
-    if (list.length === 1) {
-      selected.value = list[0].id || list[0].name
+    if (classList.value.length === 1) {
+      selected.value = classList.value[0].id
     }
   } catch (e) {
-    console.warn('获取班级列表失败，使用默认班级:', e)
+    console.warn('获取班级前缀失败，尝试传统班级列表:', e)
+    try {
+      const res2 = await api.getClassList()
+      const list = Array.isArray(res2) ? res2 : (res2?.data || [])
+      classList.value = list
+      if (list.length === 1) selected.value = list[0].id || list[0].name
+    } catch (e2) {
+      console.warn('获取班级列表也失败:', e2)
+    }
   }
   // 如果没有班级数据，自动选中默认
   if (classList.value.length === 0) {

@@ -87,7 +87,9 @@ import { ref, computed, onMounted, nextTick, onBeforeUnmount, watch } from 'vue'
 import * as echarts from 'echarts'
 import PageHeader from '../../components/PageHeader.vue'
 import { getAnalyticsExperiments, getExperimentAnalytics, getExperimentComparison, getClassPrefixes } from '../../api/tap'
+import { useUserStore } from '../../store'
 
+const userStore = useUserStore()
 const experiments = ref([])
 const selectedExp = ref(null)
 const data = ref(null)
@@ -95,7 +97,8 @@ const loading = ref(false)
 const showComparison = ref(false)
 const compLoading = ref(false)
 const classPrefixes = ref([])
-const selectedClass = ref('')
+// 默认使用 store 中选中的班级
+const selectedClass = ref(userStore.selectedClass?.name || '')
 
 const distChartRef = ref(null)
 const accChartRef = ref(null)
@@ -130,7 +133,7 @@ async function loadClassPrefixes() {
   try {
     const res = await getClassPrefixes()
     classPrefixes.value = res?.data || res || []
-    // 默认选第一个班级
+    // 如果 store 中没有选中班级，默认选第一个
     if (classPrefixes.value.length && !selectedClass.value) {
       selectedClass.value = classPrefixes.value[0]
     }
