@@ -21,13 +21,24 @@ public class ExperimentAnalyticsController {
 
     /**
      * 获取所有实验的概览列表（用于选择器）
+     * @param classPrefix 可选，按班级名称前缀过滤，如 "计科23" / "计科24"
      */
     @GetMapping("/experiments")
-    public ApiResponse<List<Map<String, Object>>> listExperiments() {
+    public ApiResponse<List<Map<String, Object>>> listExperiments(
+            @RequestParam(required = false) String classPrefix) {
+        String sql = "SELECT experiment_id, name, topic_sum FROM experiment";
+        if (classPrefix != null && !classPrefix.isBlank()) {
+            sql += " WHERE name LIKE ?1";
+        }
+        sql += " ORDER BY experiment_id";
+
+        var q = em.createNativeQuery(sql);
+        if (classPrefix != null && !classPrefix.isBlank()) {
+            q.setParameter(1, classPrefix.trim() + "%");
+        }
+
         @SuppressWarnings("unchecked")
-        List<Object[]> rows = em.createNativeQuery(
-            "SELECT experiment_id, name, topic_sum FROM experiment ORDER BY experiment_id"
-        ).getResultList();
+        List<Object[]> rows = q.getResultList();
 
         List<Map<String, Object>> result = new ArrayList<>();
         for (Object[] r : rows) {
@@ -38,6 +49,20 @@ public class ExperimentAnalyticsController {
             result.add(m);
         }
         return ApiResponse.of(result);
+    }
+
+    /**
+     * 获取所有不同的班级前缀（用于班级选择器）
+     * 从实验名称中提取，如 "计科23"、"计科24"
+     */
+    @GetMapping("/class-prefixes")
+    public ApiResponse<List<String>> getClassPrefixes() {
+        @SuppressWarnings("unchecked")
+        List<String> names = em.createNativeQuery(
+            "SELECT DISTINCT SUBSTRING_INDEX(name, '数据结构', 1) AS prefix " +
+            "FROM experiment WHERE name LIKE '%数据结构%' ORDER BY prefix"
+        ).getResultList();
+        return ApiResponse.of(names);
     }
 
     /**

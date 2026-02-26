@@ -2,14 +2,21 @@
   <div class="exp-analytics">
     <page-header title="实验数据分析" description="基于PTA成绩单的多维度分析：正答率、分数分布、难度与区分度" />
 
-    <!-- 实验选择器 -->
+    <!-- 班级 + 实验选择器 -->
     <div class="selector-bar">
+      <el-select v-model="selectedClass" placeholder="选择班级" @change="onClassChange" style="width:160px" v-if="classPrefixes.length > 1">
+        <el-option label="全部班级" value="" />
+        <el-option v-for="c in classPrefixes" :key="c" :label="c" :value="c" />
+      </el-select>
       <el-select v-model="selectedExp" placeholder="选择实验" filterable @change="loadAnalytics" style="width:360px">
         <el-option v-for="e in experiments" :key="e.experimentId" :label="e.name" :value="e.experimentId" />
       </el-select>
       <el-button type="primary" plain @click="showComparison = !showComparison">
         {{ showComparison ? '返回单实验' : '实验横向对比' }}
       </el-button>
+      <el-tag v-if="selectedClass" type="info" size="small" style="margin-left:auto">
+        {{ selectedClass }} · {{ experiments.length }}个实验
+      </el-tag>
     </div>
 
     <!-- 横向对比视图 -->
@@ -79,7 +86,7 @@
 import { ref, computed, onMounted, nextTick, onBeforeUnmount, watch } from 'vue'
 import * as echarts from 'echarts'
 import PageHeader from '../../components/PageHeader.vue'
-import { getAnalyticsExperiments, getExperimentAnalytics, getExperimentComparison } from '../../api/tap'
+import { getAnalyticsExperiments, getExperimentAnalytics, getExperimentComparison, getClassPrefixes } from '../../api/tap'
 
 const experiments = ref([])
 const selectedExp = ref(null)
@@ -87,6 +94,8 @@ const data = ref(null)
 const loading = ref(false)
 const showComparison = ref(false)
 const compLoading = ref(false)
+const classPrefixes = ref([])
+const selectedClass = ref('')
 
 const distChartRef = ref(null)
 const accChartRef = ref(null)
@@ -117,11 +126,29 @@ const accColor = rate => {
   return '#d93025'
 }
 
+async function loadClassPrefixes() {
+  try {
+    const res = await getClassPrefixes()
+    classPrefixes.value = res?.data || res || []
+    // 默认选第一个班级
+    if (classPrefixes.value.length && !selectedClass.value) {
+      selectedClass.value = classPrefixes.value[0]
+    }
+  } catch (e) { console.error(e) }
+}
+
 async function loadExperiments() {
   try {
-    const res = await getAnalyticsExperiments()
+    const res = await getAnalyticsExperiments(selectedClass.value || undefined)
     experiments.value = res?.data || res || []
+    // 切换班级后清空已选实验
+    selectedExp.value = null
+    data.value = null
   } catch (e) { console.error(e) }
+}
+
+function onClassChange() {
+  loadExperiments()
 }
 
 async function loadAnalytics() {
@@ -225,7 +252,8 @@ watch(showComparison, v => { if (v) nextTick(() => loadComparison()) })
 
 const handleResize = () => { distChart?.resize(); accChart?.resize(); compChart?.resize() }
 
-onMounted(() => {
+onMounted(async () => {
+  await loadClassPrefixes()
   loadExperiments()
   window.addEventListener('resize', handleResize)
 })

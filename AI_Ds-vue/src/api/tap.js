@@ -371,8 +371,14 @@ export function getPtaSyncStatus(classId) {
 
 
 // ========== Experiment Analytics ==========
-export function getAnalyticsExperiments() {
-  return tapClient.get('/api/analytics/experiments')
+export function getAnalyticsExperiments(classPrefix) {
+  return tapClient.get('/api/analytics/experiments', {
+    params: classPrefix ? { classPrefix } : {}
+  })
+}
+
+export function getClassPrefixes() {
+  return tapClient.get('/api/analytics/class-prefixes')
 }
 
 export function getExperimentAnalytics(experimentId) {
