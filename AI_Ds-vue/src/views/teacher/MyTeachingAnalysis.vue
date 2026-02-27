@@ -165,75 +165,101 @@ let experimentCompletionChart = null
 let scoreTrendChart = null
 let studentAbilityChart = null
 
-// 获取教学数据
+// 获取教学数据（全部从真实API获取）
 const fetchTeachingData = async () => {
   loading.value = true
   try {
-    // 这里应该调用API获取真实数据，但我们暂时使用模拟数据
-    // const data = await api.getTeachingAnalysisData()
-    
-    // 从班级列表中提取当前教师的班级
-    const classList = await api.getClassList()
-    const userInfo = localStorage.getItem('userInfo') ? JSON.parse(localStorage.getItem('userInfo')) : {}
-    
-    // 过滤出当前教师的班级
-    const myClasses = classList.filter(c => c.teacherId === userInfo.id)
-    
-    // 计算年级分布
+    // 并行获取班级列表、实验列表、所有学生提交数据
+    const [classList, expListRes, allSubmissions] = await Promise.all([
+      api.getClassList().catch(() => []),
+      api.getTeacherExperimentList().catch(() => ({ data: [] })),
+      api.getAllStudentExperiments().catch(() => [])
+    ])
+
+    const myClasses = Array.isArray(classList) ? classList : (classList?.data || [])
+    const expList = Array.isArray(expListRes) ? expListRes : (expListRes?.data || expListRes || [])
+    const submissions = Array.isArray(allSubmissions) ? allSubmissions : []
+
+    // 计算年级分布（从班级名称提取年级信息）
     const gradeDistribution = {}
     myClasses.forEach(cls => {
-      if (!gradeDistribution[cls.grade]) {
-        gradeDistribution[cls.grade] = 0
-      }
-      gradeDistribution[cls.grade] += cls.studentCount || 0
+      const name = cls.name || cls.className || ''
+      // 从班级名中提取年级，如"计科23" → "23级"
+      const match = name.match(/(\d{2})/)
+      const grade = match ? match[1] + '级' : '其他'
+      gradeDistribution[grade] = (gradeDistribution[grade] || 0) + (cls.studentCount || 0)
     })
-    
-    // 模拟实验完成数据
-    const experimentCompletion = [
-      { name: '线性表的实现与应用', completion: 85 },
-      { name: '栈与队列的实现与应用', completion: 76 },
-      { name: '树与二叉树的实现与应用', completion: 62 },
-      { name: '图的基本算法', completion: 45 }
-    ]
-    
-    // 模拟成绩趋势
-    const scoreTrend = [
-      { time: '第1次', '计算机科学1班': 75, '计算机科学2班': 78, '软件工程1班': 82 },
-      { time: '第2次', '计算机科学1班': 77, '计算机科学2班': 80, '软件工程1班': 83 },
-      { time: '第3次', '计算机科学1班': 82, '计算机科学2班': 79, '软件工程1班': 85 },
-      { time: '第4次', '计算机科学1班': 80, '计算机科学2班': 84, '软件工程1班': 88 },
-      { time: '第5次', '计算机科学1班': 85, '计算机科学2班': 86, '软件工程1班': 90 }
-    ]
-    
-    // 模拟学生能力数据
-    const studentAbilities = [
-      { name: '编程能力', value: 80 },
-      { name: '算法设计', value: 75 },
-      { name: '数据结构', value: 85 },
-      { name: '时间复杂度分析', value: 70 },
-      { name: '空间复杂度分析', value: 65 },
-      { name: '问题解决', value: 82 }
-    ]
-    
-    // 计算实验和提交数量
-    const experimentCounts = 4 // 简化处理，实际应该从API获取
-    const submissionCounts = myClasses.reduce((sum, cls) => sum + cls.studentCount * 0.8, 0).toFixed(0) // 假设80%的学生提交
-    
+
+    // 从真实提交数据计算实验完成情况
+    const studentIds = new Set(submissions.map(s => s.studentId || s.student_id))
+    const totalStudents = studentIds.size || 1
+    const expCompletionMap = {}
+    submissions.forEach(s => {
+      const eName = s.experimentName || s.experiment_name || ('实验' + (s.experimentId || s.experiment_id))
+      if (!expCompletionMap[eName]) expCompletionMap[eName] = new Set()
+      expCompletionMap[eName].add(s.studentId || s.student_id)
+    })
+    const experimentCompletion = Object.entries(expCompletionMap).map(([name, students]) => ({
+      name: name.length > 15 ? name.substring(0, 15) + '…' : name,
+      completion: Math.round(students.size / totalStudents * 100)
+    })).slice(0, 10) // 最多显示10个
+
+    // 从真实数据计算成绩趋势（按实验分组，按班级统计平均分）
+    const classNames = [...new Set(submissions.map(s => s.className || s.class_name).filter(Boolean))]
+    const expNames = [...new Set(submissions.map(s => s.experimentName || s.experiment_name).filter(Boolean))]
+    const scoreTrend = expNames.slice(0, 8).map(eName => {
+      const row = { time: eName.length > 8 ? eName.substring(0, 8) + '…' : eName }
+      classNames.forEach(cName => {
+        const classExpSubs = submissions.filter(s =>
+          (s.experimentName || s.experiment_name) === eName &&
+          (s.className || s.class_name) === cName &&
+          (s.score || 0) > 0
+        )
+        row[cName] = classExpSubs.length > 0
+          ? Math.round(classExpSubs.reduce((sum, s) => sum + (s.score || 0), 0) / classExpSubs.length)
+          : null
+      })
+      return row
+    })
+
+    // 从真实数据计算学生能力维度（基于提交情况的统计）
+    const totalSubs = submissions.length
+    const acSubs = submissions.filter(s => s.status === 'completed' || s.situation === 'C').length
+    const acRate = totalSubs > 0 ? Math.round(acSubs / totalSubs * 100) : 0
+    // 按实验类型分组统计能力
+    const dimMap = { '线性表': [], '栈与队列': [], '树': [], '图': [], '哈希': [], '综合': [] }
+    submissions.forEach(s => {
+      const eName = (s.experimentName || s.experiment_name || '').toLowerCase()
+      const isAc = s.status === 'completed' || s.situation === 'C'
+      if (eName.includes('链表') || eName.includes('线性') || eName.includes('顺序')) dimMap['线性表'].push(isAc)
+      else if (eName.includes('栈') || eName.includes('队列')) dimMap['栈与队列'].push(isAc)
+      else if (eName.includes('树') || eName.includes('bst') || eName.includes('huffman')) dimMap['树'].push(isAc)
+      else if (eName.includes('图') || eName.includes('dfs') || eName.includes('bfs') || eName.includes('dijkstra')) dimMap['图'].push(isAc)
+      else if (eName.includes('哈希') || eName.includes('hash')) dimMap['哈希'].push(isAc)
+      else dimMap['综合'].push(isAc)
+    })
+    const studentAbilities = Object.entries(dimMap)
+      .filter(([, arr]) => arr.length > 0)
+      .map(([name, arr]) => ({
+        name,
+        value: Math.round(arr.filter(Boolean).length / arr.length * 100)
+      }))
+    if (studentAbilities.length === 0) {
+      studentAbilities.push({ name: '整体', value: acRate })
+    }
+
     teachingData.value = {
       classCounts: myClasses.length,
       classes: myClasses,
-      experimentCounts,
-      submissionCounts,
+      experimentCounts: expList.length || expNames.length,
+      submissionCounts: totalSubs,
       gradeDistribution,
       experimentCompletion,
       scoreTrend,
       studentAbilities
     }
-    
-    // 确保DOM已经更新后再初始化图表
-    setTimeout(() => {
-      initCharts()
-    }, 100)
+
+    setTimeout(() => { initCharts() }, 100)
   } catch (err) {
     console.error('获取教学数据失败:', err)
   } finally {

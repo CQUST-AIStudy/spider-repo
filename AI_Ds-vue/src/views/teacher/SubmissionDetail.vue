@@ -1153,14 +1153,34 @@ const submitGrade = async () => {
 const generateAIComment = async () => {
   generatingComment.value = true
   try {
-    // 这里应该调用API生成AI评语
-    // const result = await api.generateAIComment(submissionId.value)
+    const code = submission.value.code || ''
+    const expName = submission.value.experimentName || '数据结构实验'
+    const studentName = submission.value.studentName || ''
 
-    // 模拟生成
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    // 调用后端 DeepSeek chat API 生成评语
+    const prompt = `请对以下学生提交的"${expName}"实验代码进行简要点评（150字以内），包括优点、不足和改进建议：\n\n${code.substring(0, 3000)}`
+    const response = await fetch('http://localhost:8081/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ userInput: prompt })
+    })
 
-    const aiComment = '代码实现了基本的链表功能，包括创建、插入和遍历操作。优点是结构清晰，函数命名规范；不足之处是缺少必要的错误处理，例如内存分配失败的情况没有处理。' +
-        '建议优化内存管理，添加链表删除节点的功能，并完善错误处理机制。总体来说，这是一个良好的实现，展示了对链表基本概念的理解。'
+    if (!response.ok) throw new Error('AI服务请求失败')
+
+    // 读取流式响应
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let aiComment = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      aiComment += decoder.decode(value, { stream: true })
+    }
+
+    if (!aiComment.trim()) {
+      throw new Error('AI未返回有效评语')
+    }
 
     if (gradeDialogVisible.value) {
       gradeForm.aiComment = aiComment
@@ -1171,7 +1191,7 @@ const generateAIComment = async () => {
     ElMessage.success('AI评语生成成功')
   } catch (error) {
     console.error('生成AI评语失败:', error)
-    ElMessage.error('生成AI评语失败，请稍后重试')
+    ElMessage.error('生成AI评语失败: ' + (error.message || '请稍后重试'))
   } finally {
     generatingComment.value = false
   }

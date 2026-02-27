@@ -61,6 +61,9 @@ public class ApiController {
     @Autowired
     private AISuggestedProblemService aiSuggestedProblemService;
 
+    @Autowired
+    private com.cqust.ai_server.service.ProfileService profileService;
+
     @Value("${tap.ai.openai.api-key:}")
     private String deepseekApiKey;
 
@@ -831,14 +834,33 @@ public class ApiController {
     }
 
     @GetMapping("/api/student/learning-analysis")
-    public LearningAnalysis getLearningAnalysis() {
-        List<String> weaknessAreas = new ArrayList<>();
-        weaknessAreas.add("Java基础");
-        weaknessAreas.add("算法");
-        List<String> suggestionTopics = new ArrayList<>();
-        suggestionTopics.add("Java高级编程");
-        suggestionTopics.add("数据结构与算法");
-        return new LearningAnalysis(new Overall(90, 80, weaknessAreas, suggestionTopics));
+    public ResponseEntity<?> getLearningAnalysis(HttpServletRequest request) {
+        try {
+            HttpSession session = request.getSession(false);
+            String username = session != null ? (String) session.getAttribute("username") : null;
+            if (username == null) {
+                return ResponseEntity.ok(Map.of("success", false, "message", "用户未登录"));
+            }
+            // 通过username查找studentId
+            StudentController studentController = applicationContext.getBean(StudentController.class);
+            ResponseEntity<Map<String, Object>> sidResp = studentController.findStudentIdByUsername(username);
+            Map<String, Object> sidData = sidResp.getBody();
+            String studentId = null;
+            if (sidData != null && Boolean.TRUE.equals(sidData.get("success"))) {
+                Object sid = sidData.get("studentId");
+                studentId = sid != null ? String.valueOf(sid) : null;
+            }
+            if (studentId == null) {
+                return ResponseEntity.ok(Map.of("success", false, "message", "未找到学生信息"));
+            }
+            Map<String, Object> profile = profileService.getStudentProfile(studentId);
+            if (profile.containsKey("error")) {
+                return ResponseEntity.ok(Map.of("success", false, "message", profile.get("error")));
+            }
+            return ResponseEntity.ok(profile);
+        } catch (Exception e) {
+            return ResponseEntity.ok(Map.of("success", false, "message", "获取学习分析失败: " + e.getMessage()));
+        }
     }
 
     /**
