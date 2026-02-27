@@ -1172,10 +1172,13 @@ const generateAIComment = async () => {
     const reader = response.body.getReader()
     const decoder = new TextDecoder('utf-8')
     let aiComment = ''
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      aiComment += decoder.decode(value, { stream: true })
+    let done = false
+    while (!done) {
+      const result = await reader.read()
+      done = result.done
+      if (!done) {
+        aiComment += decoder.decode(result.value, { stream: true })
+      }
     }
 
     if (!aiComment.trim()) {
