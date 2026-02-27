@@ -104,7 +104,7 @@ const confirmSelect = () => {
     cls = { id: 'default', name: defaultClassName.value }
   } else {
     const found = classList.value.find(c => (c.id || c.name) === selected.value)
-    cls = found ? { id: found.id || found.name, name: found.name || found.className || found.class_name } : { id: selected.value, name: selected.value }
+    cls = found ? { id: found.id || found.name, name: found.name || found.className || found.class_name, ptaKeyword: found.ptaKeyword || '' } : { id: selected.value, name: selected.value }
   }
   userStore.setSelectedClass(cls)
   router.replace('/teacher/dashboard')

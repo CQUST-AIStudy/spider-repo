@@ -33,7 +33,8 @@ public class TeachingClassService {
 
     @Transactional
     public TeachingClassEntity createClass(UserEntity teacher, String name, String classCode,
-                                           String joinPassword, String grade, String courseName, String description) {
+                                           String joinPassword, String grade, String courseName, String description,
+                                           String ptaKeyword, Boolean syncEnabled) {
         if (classRepo.existsByClassCode(classCode)) {
             throw new IllegalArgumentException("班级号已存在: " + classCode);
         }
@@ -45,6 +46,8 @@ public class TeachingClassService {
         tc.setGrade(grade);
         tc.setCourseName(courseName);
         tc.setDescription(description);
+        if (ptaKeyword != null && !ptaKeyword.isBlank()) tc.setPtaKeyword(ptaKeyword);
+        if (syncEnabled != null) tc.setSyncEnabled(syncEnabled);
         return classRepo.save(tc);
     }
 

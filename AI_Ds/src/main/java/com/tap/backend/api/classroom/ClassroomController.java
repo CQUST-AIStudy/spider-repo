@@ -55,14 +55,16 @@ public class ClassroomController {
     }
 
     record CreateClassRequest(String name, String classCode, String joinPassword,
-                              String grade, String courseName, String description) {}
+                              String grade, String courseName, String description,
+                              String ptaKeyword, Boolean syncEnabled) {}
 
     @PostMapping
     public ApiResponse<Map<String, Object>> createClass(@AuthenticationPrincipal UserDetails principal,
                                                          @RequestBody CreateClassRequest req) {
         UserEntity user = resolveUser(principal);
         TeachingClassEntity tc = classService.createClass(user, req.name(), req.classCode(),
-                req.joinPassword(), req.grade(), req.courseName(), req.description());
+                req.joinPassword(), req.grade(), req.courseName(), req.description(),
+                req.ptaKeyword(), req.syncEnabled());
         return ApiResponse.of(toMap(tc));
     }
 

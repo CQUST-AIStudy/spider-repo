@@ -15,6 +15,11 @@
           <template #header><span>数据同步操作</span></template>
           <div class="status-row">
             <div class="status-item">
+              <span class="status-label">同步关键词</span>
+              <el-tag v-if="currentKeyword" type="primary" effect="plain" size="small">{{ currentKeyword }}</el-tag>
+              <el-tag v-else type="warning" effect="plain" size="small">未设置（请在班级管理中配置PTA关键词）</el-tag>
+            </div>
+            <div class="status-item">
               <span class="status-label">Cookie</span>
               <el-tag :type="cookieTagType" effect="dark" size="small">{{ cookieStatusText }}</el-tag>
             </div>
@@ -210,6 +215,8 @@ import axios from 'axios'
 const SPIDER_URL = 'http://localhost:8100'
 const userStore = useUserStore()
 
+const currentKeyword = computed(() => userStore.selectedClass?.ptaKeyword || userStore.selectedClass?.name || '')
+
 const cookieStatus = ref('UNKNOWN')
 const spiderAlive = ref(false)
 const lastSync = ref('')
@@ -260,7 +267,7 @@ async function loadCookieStatus() {
 }
 
 async function loadCooldown() {
-  const keyword = userStore.selectedClass?.name || '数据结构'
+  const keyword = userStore.selectedClass?.ptaKeyword || userStore.selectedClass?.name || '数据结构'
   try {
     const r = await axios.get(`${SPIDER_URL}/cooldown/${encodeURIComponent(keyword)}`, { timeout: 5000 })
     cooldownInfo.value = r.data
@@ -275,7 +282,7 @@ async function loadTaskHistory() {
 }
 
 async function triggerSync(mode) {
-  const keyword = userStore.selectedClass?.name || '数据结构'
+  const keyword = userStore.selectedClass?.ptaKeyword || userStore.selectedClass?.name || '数据结构'
 
   // 强制模式需二次确认
   if (forceMode.value) {
@@ -290,7 +297,8 @@ async function triggerSync(mode) {
   syncLoading.value = mode
   try {
     const r = await axios.post(`${SPIDER_URL}/crawl`, {
-      keyword, mode, force: forceMode.value
+      keyword, mode, force: forceMode.value,
+      class_id: userStore.selectedClass?.id || null
     }, { timeout: 10000 })
 
     // 冷却拦截

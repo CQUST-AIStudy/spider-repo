@@ -311,8 +311,18 @@ const submitClassForm = async () => {
       })
       ElMessage.success('班级更新成功')
     } else {
-      await createTeachingClass({ ...classForm })
+      const res = await createTeachingClass({ ...classForm })
+      const created = extract(res)
       ElMessage.success('班级创建成功')
+      // 如果填写了 PTA 关键词，自动触发首次同步
+      if (classForm.ptaKeyword && classForm.ptaKeyword.trim() && created?.id) {
+        try {
+          await triggerPtaSync(created.id)
+          ElMessage.success('已自动触发 PTA 数据同步')
+        } catch (syncErr) {
+          ElMessage.warning('班级已创建，但自动同步失败: ' + (syncErr.message || '爬虫服务可能未启动'))
+        }
+      }
     }
     classDialogVisible.value = false
     loadClasses()
