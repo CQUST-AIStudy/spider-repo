@@ -98,7 +98,7 @@ apiClient.interceptors.response.use(
 export default {
   // 获取学生信息
   async getStudentInfo() {
-    if (process.env.NODE_ENV === 'development') {
+    if (process.env.NODE_ENV === 'development' && USE_MOCK_DATA) {
       await delay(300)
       return studentInfo
     }
@@ -107,7 +107,7 @@ export default {
 
   // 获取教师信息
   async getTeacherInfo() {
-    if (process.env.NODE_ENV === 'development') {
+    if (process.env.NODE_ENV === 'development' && USE_MOCK_DATA) {
       await delay(300)
       return teacherInfo
     }
@@ -116,7 +116,7 @@ export default {
 
   // 获取管理员信息
   async getAdminInfo() {
-    if (process.env.NODE_ENV === 'development') {
+    if (process.env.NODE_ENV === 'development' && USE_MOCK_DATA) {
       await delay(300)
       return adminInfo
     }
@@ -290,7 +290,7 @@ export default {
 
   // 登出
   async logout() {
-    if (process.env.NODE_ENV === 'development') {
+    if (process.env.NODE_ENV === 'development' && USE_MOCK_DATA) {
       await delay(300)
       return { success: true }
     }
@@ -410,7 +410,7 @@ export default {
 
   // 获取学习分析数据
   async getLearningAnalysis() {
-    if (process.env.NODE_ENV === 'development') {
+    if (process.env.NODE_ENV === 'development' && USE_MOCK_DATA) {
       await delay(800)
       return learningAnalysisData
     }
@@ -448,7 +448,7 @@ export default {
 
   // 获取学生提交列表
   async getStudentSubmissions(experimentId) {
-    if (process.env.NODE_ENV === 'development') {
+    if (process.env.NODE_ENV === 'development' && USE_MOCK_DATA) {
       await delay(600)
       if (experimentId) {
         return studentSubmissionsList.filter(s => s.experimentId === experimentId)
@@ -675,7 +675,7 @@ export default {
 
   // 创建实验
   async createExperiment(data) {
-    if (process.env.NODE_ENV === 'development') {
+    if (process.env.NODE_ENV === 'development' && USE_MOCK_DATA) {
       await delay(800)
       return { success: true, id: Date.now() }
     }
@@ -684,7 +684,7 @@ export default {
 
   // 更新实验
   async updateExperiment(id, data) {
-    if (process.env.NODE_ENV === 'development') {
+    if (process.env.NODE_ENV === 'development' && USE_MOCK_DATA) {
       await delay(700)
       return { success: true }
     }
@@ -693,7 +693,7 @@ export default {
 
   // 提交实验
   async submitExperiment(id, data) {
-    if (process.env.NODE_ENV === 'development') {
+    if (process.env.NODE_ENV === 'development' && USE_MOCK_DATA) {
       await delay(600)
       return { success: true, id: Date.now() }
     }
@@ -701,7 +701,7 @@ export default {
   },
   // 评分提交
   async gradeSubmission(id, data) {
-    if (process.env.NODE_ENV === 'development') {
+    if (process.env.NODE_ENV === 'development' && USE_MOCK_DATA) {
       await delay(500)
       return { success: true }
     }
@@ -710,17 +710,16 @@ export default {
 
   // 保存教师评语
   async saveQuestionComment(submissionId, questionIndex, comment) {
-    if (process.env.NODE_ENV === 'development') {
+    if (process.env.NODE_ENV === 'development' && USE_MOCK_DATA) {
       await delay(300)
       return { success: true }
     }
-    await delay(300)
-    return { success: true }
+    return apiClient.post(`/api/submissions/${submissionId}/comments`, { questionIndex, comment })
   },
 
   // 拒绝提交
   async rejectSubmission(id) {
-    if (process.env.NODE_ENV === 'development') {
+    if (process.env.NODE_ENV === 'development' && USE_MOCK_DATA) {
       await delay(500)
       return { success: true }
     }
@@ -729,7 +728,7 @@ export default {
 
   // 添加用户
   async addUser(data) {
-    if (process.env.NODE_ENV === 'development') {
+    if (process.env.NODE_ENV === 'development' && USE_MOCK_DATA) {
       await delay(800)
       return { success: true, id: `${data.role.charAt(0).toUpperCase()}${Date.now().toString().slice(-7)}` }
     }
@@ -738,7 +737,7 @@ export default {
 
   // 更新用户
   async updateUser(id, data) {
-    if (process.env.NODE_ENV === 'development') {
+    if (process.env.NODE_ENV === 'development' && USE_MOCK_DATA) {
       await delay(700)
       return { success: true }
     }
@@ -747,7 +746,7 @@ export default {
 
   // 删除用户
   async deleteUser(id) {
-    if (process.env.NODE_ENV === 'development') {
+    if (process.env.NODE_ENV === 'development' && USE_MOCK_DATA) {
       await delay(500)
       return { success: true }
     }
