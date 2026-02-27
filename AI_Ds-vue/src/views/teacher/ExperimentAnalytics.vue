@@ -224,28 +224,36 @@ function renderAccChart() {
 async function loadComparison() {
   compLoading.value = true
   try {
-    const res = await getExperimentComparison()
+    const res = await getExperimentComparison(selectedClass.value || undefined)
     const items = res?.data || res || []
+    if (!items.length) { compLoading.value = false; return }
     await nextTick()
-    if (!compChartRef.value) return
-    compChart?.dispose()
-    compChart = echarts.init(compChartRef.value)
-    const names = items.map(i => i.name.length > 10 ? i.name.substring(0, 10) + '…' : i.name)
-    compChart.setOption({
-      tooltip: { trigger: 'axis' },
-      legend: { data: ['平均分', '难度系数', '区分度'], top: 0 },
-      grid: { left: 50, right: 50, top: 36, bottom: 50 },
-      xAxis: { type: 'category', data: names, axisLabel: { rotate: 30, fontSize: 10 } },
-      yAxis: [
-        { type: 'value', name: '分数', min: 0 },
-        { type: 'value', name: '系数', min: 0, max: 1 }
-      ],
-      series: [
-        { name: '平均分', type: 'bar', data: items.map(i => i.avgScore), barWidth: '30%', itemStyle: { color: '#1a73e8', borderRadius: [3, 3, 0, 0] } },
-        { name: '难度系数', type: 'line', yAxisIndex: 1, data: items.map(i => i.difficulty), smooth: true, lineStyle: { color: '#d93025' }, itemStyle: { color: '#d93025' } },
-        { name: '区分度', type: 'line', yAxisIndex: 1, data: items.map(i => i.discrimination), smooth: true, lineStyle: { color: '#1e8e3e' }, itemStyle: { color: '#1e8e3e' } }
-      ]
-    })
+    // 等待 DOM 渲染完成后再初始化图表
+    const tryRender = () => {
+      if (!compChartRef.value) {
+        setTimeout(tryRender, 100)
+        return
+      }
+      compChart?.dispose()
+      compChart = echarts.init(compChartRef.value)
+      const names = items.map(i => i.name.length > 10 ? i.name.substring(0, 10) + '…' : i.name)
+      compChart.setOption({
+        tooltip: { trigger: 'axis' },
+        legend: { data: ['平均分', '难度系数', '区分度'], top: 0 },
+        grid: { left: 50, right: 50, top: 36, bottom: 50 },
+        xAxis: { type: 'category', data: names, axisLabel: { rotate: 30, fontSize: 10 } },
+        yAxis: [
+          { type: 'value', name: '分数', min: 0 },
+          { type: 'value', name: '系数', min: 0, max: 1 }
+        ],
+        series: [
+          { name: '平均分', type: 'bar', data: items.map(i => i.avgScore), barWidth: '30%', itemStyle: { color: '#1a73e8', borderRadius: [3, 3, 0, 0] } },
+          { name: '难度系数', type: 'line', yAxisIndex: 1, data: items.map(i => i.difficulty), smooth: true, lineStyle: { color: '#d93025' }, itemStyle: { color: '#d93025' } },
+          { name: '区分度', type: 'line', yAxisIndex: 1, data: items.map(i => i.discrimination), smooth: true, lineStyle: { color: '#1e8e3e' }, itemStyle: { color: '#1e8e3e' } }
+        ]
+      })
+    }
+    tryRender()
   } catch (e) { console.error(e) }
   finally { compLoading.value = false }
 }

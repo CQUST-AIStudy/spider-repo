@@ -98,11 +98,19 @@ public class ExperimentAnalyticsController {
      * 所有实验的横向对比（每个实验的平均分、难度系数、区分度）
      */
     @GetMapping("/comparison")
-    public ApiResponse<List<Map<String, Object>>> getComparison() {
+    public ApiResponse<List<Map<String, Object>>> getComparison(
+            @RequestParam(required = false) String classPrefix) {
+        String sql = "SELECT experiment_id, name FROM experiment";
+        if (classPrefix != null && !classPrefix.isBlank()) {
+            sql += " WHERE name LIKE ?1";
+        }
+        sql += " ORDER BY experiment_id";
+        var q = em.createNativeQuery(sql);
+        if (classPrefix != null && !classPrefix.isBlank()) {
+            q.setParameter(1, classPrefix.trim() + "%");
+        }
         @SuppressWarnings("unchecked")
-        List<Object[]> expRows = em.createNativeQuery(
-            "SELECT experiment_id, name FROM experiment ORDER BY experiment_id"
-        ).getResultList();
+        List<Object[]> expRows = q.getResultList();
 
         List<Map<String, Object>> result = new ArrayList<>();
         for (Object[] er : expRows) {

@@ -45,6 +45,7 @@
                 <el-menu-item index="/teacher/experiment-create">创建实验</el-menu-item>
                 <el-menu-item index="/teacher/submissions">学生提交</el-menu-item>
                 <el-menu-item index="/teacher/experiment-analytics">数据分析</el-menu-item>
+                <el-menu-item index="/teacher/data-sync">数据同步</el-menu-item>
               </el-sub-menu>
 
               <!-- 4. AI 批改 (批改中心 + 评分标准) -->
@@ -232,7 +233,8 @@ const breadcrumbs = computed(() => {
     'course-analysis': '课程分析', 'department-teachers': '教师管理',
     'department-analytics': '系级分析', 'teacher-ai-management': 'AI 管理',
     'ai-recommendation': '教学建议',
-    'experiment-analytics': '数据分析'
+    'experiment-analytics': '数据分析',
+    'data-sync': '数据同步'
   }
   const paths = route.path.split('/').filter(Boolean)
   return paths[0] === 'teacher' ? paths.slice(1).map(p => pathMap[p.split('/')[0]] || p) : []

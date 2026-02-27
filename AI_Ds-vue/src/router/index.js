@@ -231,6 +231,12 @@ const routes = [
         path: 'experiment-analytics',
         name: 'ExperimentAnalytics',
         component: () => import('../views/teacher/ExperimentAnalytics.vue')
+      },
+      // PTA 数据同步
+      {
+        path: 'data-sync',
+        name: 'DataSync',
+        component: () => import('../views/teacher/DataSyncPanel.vue')
       }
     ]
   },

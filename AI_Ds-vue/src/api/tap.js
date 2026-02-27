@@ -385,8 +385,9 @@ export function getExperimentAnalytics(experimentId) {
   return tapClient.get(`/api/analytics/experiments/${experimentId}`)
 }
 
-export function getExperimentComparison() {
-  return tapClient.get('/api/analytics/comparison')
+export function getExperimentComparison(classPrefix) {
+  const params = classPrefix ? { classPrefix } : {}
+  return tapClient.get('/api/analytics/comparison', { params })
 }
 
 // ========== Student Analytics (班级对比) ==========
