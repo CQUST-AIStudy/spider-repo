@@ -65,6 +65,34 @@
             </div>
           </template>
           <div class="class-compare-body">
+            <!-- 聚合统计卡片 -->
+            <div class="agg-stats-row" v-if="classData.summary">
+              <div class="agg-stat">
+                <div class="agg-val" style="color:#1a73e8">{{ classData.summary.avgMyScore }}</div>
+                <div class="agg-lbl">我的均分</div>
+              </div>
+              <div class="agg-stat">
+                <div class="agg-val" style="color:#e37400">{{ classData.summary.avgClassScore }}</div>
+                <div class="agg-lbl">班级均分</div>
+              </div>
+              <div class="agg-stat">
+                <div class="agg-val" :style="{ color: avgDiffNum >= 0 ? '#1e8e3e' : '#d93025' }">
+                  {{ avgDiffNum >= 0 ? '+' : '' }}{{ avgDiffNum }}
+                </div>
+                <div class="agg-lbl">分差</div>
+              </div>
+              <div class="agg-stat">
+                <div class="agg-val" style="color:#1a73e8">{{ avgPercentile }}%</div>
+                <div class="agg-lbl">平均百分位</div>
+              </div>
+              <div class="agg-stat">
+                <div class="agg-val" :style="{ color: aboveAvgCount >= belowAvgCount ? '#1e8e3e' : '#d93025' }">
+                  {{ aboveAvgCount }} / {{ classData.experiments.length }}
+                </div>
+                <div class="agg-lbl">高于均分次数</div>
+              </div>
+            </div>
+
             <!-- 趋势对比图: 我的分 vs 班级均分 -->
             <div ref="classCompareChartRef" style="height:300px"></div>
             <!-- 每个实验的百分位指示 -->
@@ -193,6 +221,26 @@ const avgDiffText = computed(() => {
   if (!s) return ''
   const diff = (s.avgMyScore - s.avgClassScore).toFixed(1)
   return diff >= 0 ? `高于班级均分 +${diff}` : `低于班级均分 ${diff}`
+})
+const avgDiffNum = computed(() => {
+  const s = classData.value?.summary
+  if (!s) return 0
+  return (s.avgMyScore - s.avgClassScore).toFixed(1)
+})
+const avgPercentile = computed(() => {
+  const exps = classData.value?.experiments
+  if (!exps?.length) return 0
+  return (exps.reduce((s, e) => s + (e.percentile || 0), 0) / exps.length).toFixed(0)
+})
+const aboveAvgCount = computed(() => {
+  const exps = classData.value?.experiments
+  if (!exps?.length) return 0
+  return exps.filter(e => e.diff >= 0).length
+})
+const belowAvgCount = computed(() => {
+  const exps = classData.value?.experiments
+  if (!exps?.length) return 0
+  return exps.filter(e => e.diff < 0).length
 })
 function shortName(name) {
   return name && name.length > 8 ? name.substring(0, 8) + '…' : name
@@ -454,6 +502,15 @@ onBeforeUnmount(() => {
 .summary-chip.positive { background: #e6f4ea; color: #1e8e3e; }
 .summary-chip.negative { background: #fce8e6; color: #d93025; }
 .summary-chip.neutral { background: #f1f3f4; color: #5f6368; }
+.agg-stats-row {
+  display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;
+}
+.agg-stat {
+  flex: 1; min-width: 100px; text-align: center; padding: 12px 8px;
+  background: #f8f9fa; border-radius: 10px; border: 1px solid #e8eaed;
+}
+.agg-val { font-size: 22px; font-weight: 700; line-height: 1.2; }
+.agg-lbl { font-size: 11px; color: #5f6368; margin-top: 4px; }
 .class-compare-body { }
 .percentile-row { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; padding: 0 4px; }
 .pct-item { display: flex; align-items: center; gap: 10px; }

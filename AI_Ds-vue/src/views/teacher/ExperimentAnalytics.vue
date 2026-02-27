@@ -11,7 +11,7 @@
       <el-select v-model="selectedExp" placeholder="选择实验" filterable @change="loadAnalytics" style="width:360px">
         <el-option v-for="e in experiments" :key="e.experimentId" :label="e.name" :value="e.experimentId" />
       </el-select>
-      <el-button type="primary" plain @click="showComparison = !showComparison">
+      <el-button type="primary" plain @click="toggleComparison">
         {{ showComparison ? '返回单实验' : '实验横向对比' }}
       </el-button>
       <el-tag v-if="selectedClass" type="info" size="small" style="margin-left:auto">
@@ -36,6 +36,62 @@
           <div class="kpi-label">{{ k.label }}</div>
         </div>
       </div>
+
+      <!-- PTA 概要统计表 -->
+      <el-card class="g-card compact" style="margin-top:12px">
+        <template #header><span>📊 PTA 概要统计</span></template>
+        <div class="pta-stats-wrapper">
+          <!-- 概要统计行 -->
+          <table class="pta-table">
+            <thead>
+              <tr>
+                <th class="pta-th-title" rowspan="2">概要统计</th>
+                <th>总人数</th><th>最高分</th><th>最低分</th><th>平均分</th><th>中位线</th>
+                <th>高位平均</th><th>低位平均</th><th>难度系数</th><th>区分度</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="pta-td-title">数值</td>
+                <td>{{ data.overview.totalStudents }}</td>
+                <td>{{ data.overview.maxScore }}</td>
+                <td>{{ data.overview.minScore }}</td>
+                <td>{{ data.overview.avgScore }}</td>
+                <td>{{ data.overview.median }}</td>
+                <td>{{ data.overview.topAvg }}</td>
+                <td>{{ data.overview.bottomAvg }}</td>
+                <td :class="difficultyClass">{{ data.overview.difficulty }}</td>
+                <td :class="discriminationClass">{{ data.overview.discrimination }}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <!-- 11段成绩分布表 -->
+          <table class="pta-table" style="margin-top:12px">
+            <thead>
+              <tr>
+                <th class="pta-th-title">成绩</th>
+                <th v-for="seg in scoreSegments" :key="seg.label">{{ seg.label }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="pta-td-title">人数</td>
+                <td v-for="seg in scoreSegments" :key="'c-'+seg.label">{{ seg.count }}</td>
+              </tr>
+              <tr>
+                <td class="pta-td-title">比例</td>
+                <td v-for="seg in scoreSegments" :key="'p-'+seg.label">{{ seg.percent }}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="pta-notes">
+            <span>注1：难度系数 = 1 −（平均分/满分），越小越容易</span>
+            <span>注2：区分度 =（高位平均 − 低位平均）/ 满分，≥0.3为优秀</span>
+          </div>
+        </div>
+      </el-card>
 
       <!-- 图表区 — 左右并排 -->
       <el-row :gutter="16" style="margin-top:12px">
@@ -97,7 +153,6 @@ const loading = ref(false)
 const showComparison = ref(false)
 const compLoading = ref(false)
 const classPrefixes = ref([])
-// 默认使用 store 中选中的班级
 const selectedClass = ref(userStore.selectedClass?.name || '')
 
 const distChartRef = ref(null)
@@ -122,6 +177,31 @@ const kpiItems = computed(() => {
   ]
 })
 
+// PTA 11段成绩分布
+const scoreSegments = computed(() => {
+  const d = data.value?.scoreDistribution
+  if (!d) return []
+  const labels = ['[100,100]', '[90,100)', '[80,90)', '[70,80)', '[60,70)',
+                   '[50,60)', '[40,50)', '[30,40)', '[20,30)', '[10,20)', '[0,10)']
+  const total = labels.reduce((s, l) => s + (d[l] || 0), 0) || 1
+  return labels.map(l => ({
+    label: l,
+    count: d[l] || 0,
+    percent: ((d[l] || 0) / total * 100).toFixed(0) + '%'
+  }))
+})
+
+const difficultyClass = computed(() => {
+  const v = data.value?.overview?.difficulty
+  if (v == null) return ''
+  return v > 0.5 ? 'pta-danger' : v > 0.3 ? 'pta-warn' : 'pta-good'
+})
+const discriminationClass = computed(() => {
+  const v = data.value?.overview?.discrimination
+  if (v == null) return ''
+  return v >= 0.3 ? 'pta-good' : v >= 0.2 ? 'pta-warn' : 'pta-danger'
+})
+
 const accColor = rate => {
   if (rate >= 80) return '#1e8e3e'
   if (rate >= 60) return '#1a73e8'
@@ -133,7 +213,6 @@ async function loadClassPrefixes() {
   try {
     const res = await getClassPrefixes()
     classPrefixes.value = res?.data || res || []
-    // 如果 store 中没有选中班级，默认选第一个
     if (classPrefixes.value.length && !selectedClass.value) {
       selectedClass.value = classPrefixes.value[0]
     }
@@ -144,7 +223,6 @@ async function loadExperiments() {
   try {
     const res = await getAnalyticsExperiments(selectedClass.value || undefined)
     experiments.value = res?.data || res || []
-    // 切换班级后清空已选实验
     selectedExp.value = null
     data.value = null
   } catch (e) { console.error(e) }
@@ -172,7 +250,6 @@ function renderDistChart() {
   distChart?.dispose()
   distChart = echarts.init(distChartRef.value)
   const d = data.value.scoreDistribution
-  // PTA 标准 11 段
   const labels = ['[100,100]', '[90,100)', '[80,90)', '[70,80)', '[60,70)',
                    '[50,60)', '[40,50)', '[30,40)', '[20,30)', '[10,20)', '[0,10)']
   const shortLabels = ['100', '90-99', '80-89', '70-79', '60-69', '50-59', '40-49', '30-39', '20-29', '10-19', '0-9']
@@ -221,17 +298,24 @@ function renderAccChart() {
   })
 }
 
+function toggleComparison() {
+  showComparison.value = !showComparison.value
+}
+
 async function loadComparison() {
   compLoading.value = true
   try {
     const res = await getExperimentComparison(selectedClass.value || undefined)
     const items = res?.data || res || []
     if (!items.length) { compLoading.value = false; return }
-    await nextTick()
-    // 等待 DOM 渲染完成后再初始化图表
+
+    // 等待 DOM 渲染后再初始化图表，使用轮询确保 ref 可用
+    let retries = 0
     const tryRender = () => {
+      retries++
       if (!compChartRef.value) {
-        setTimeout(tryRender, 100)
+        if (retries < 30) setTimeout(tryRender, 100)
+        else compLoading.value = false
         return
       }
       compChart?.dispose()
@@ -252,14 +336,22 @@ async function loadComparison() {
           { name: '区分度', type: 'line', yAxisIndex: 1, data: items.map(i => i.discrimination), smooth: true, lineStyle: { color: '#1e8e3e' }, itemStyle: { color: '#1e8e3e' } }
         ]
       })
+      compLoading.value = false
     }
+    await nextTick()
     tryRender()
-  } catch (e) { console.error(e) }
-  finally { compLoading.value = false }
+  } catch (e) {
+    console.error(e)
+    compLoading.value = false
+  }
 }
 
-// watch showComparison
-watch(showComparison, v => { if (v) nextTick(() => loadComparison()) })
+// watch showComparison — 切换到对比视图时加载数据
+watch(showComparison, v => {
+  if (v) {
+    nextTick(() => loadComparison())
+  }
+})
 
 const handleResize = () => { distChart?.resize(); accChart?.resize(); compChart?.resize() }
 
@@ -277,9 +369,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .exp-analytics { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; }
 .selector-bar { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
-.kpi-grid {
-  display: grid; grid-template-columns: repeat(9, 1fr); gap: 8px;
-}
+.kpi-grid { display: grid; grid-template-columns: repeat(9, 1fr); gap: 8px; }
 .kpi {
   background: #fff; border-radius: 10px; padding: 10px 8px; text-align: center;
   border: 1px solid #e8eaed; transition: box-shadow 0.2s;
@@ -288,11 +378,33 @@ onBeforeUnmount(() => {
 .kpi-val { font-size: 20px; font-weight: 700; line-height: 1.2; }
 .kpi-label { font-size: 11px; color: #5f6368; margin-top: 2px; }
 .g-card { border-radius: 12px; border: 1px solid #dadce0; }
-.g-card.compact { }
 .g-card.compact :deep(.el-card__header) { padding: 10px 16px; font-size: 13px; font-weight: 500; }
 .g-card.compact :deep(.el-card__body) { padding: 8px 12px; }
 .g-card :deep(.el-table th) { font-weight: 500; color: #5f6368; font-size: 12px; }
 .g-card :deep(.el-table td) { font-size: 12px; color: #202124; }
+
+/* PTA 概要统计表 */
+.pta-stats-wrapper { overflow-x: auto; }
+.pta-table {
+  width: 100%; border-collapse: collapse; font-size: 12px; text-align: center;
+}
+.pta-table th, .pta-table td {
+  border: 1px solid #e8eaed; padding: 6px 8px; white-space: nowrap;
+}
+.pta-table thead th {
+  background: #f8f9fa; color: #5f6368; font-weight: 500;
+}
+.pta-th-title, .pta-td-title {
+  background: #f1f3f4; font-weight: 600; color: #202124; min-width: 60px;
+}
+.pta-table tbody td { color: #202124; font-weight: 500; }
+.pta-good { color: #1e8e3e; font-weight: 700; }
+.pta-warn { color: #e37400; font-weight: 700; }
+.pta-danger { color: #d93025; font-weight: 700; }
+.pta-notes {
+  display: flex; gap: 24px; margin-top: 8px; font-size: 11px; color: #9aa0a6;
+}
+
 @media (max-width: 1200px) {
   .kpi-grid { grid-template-columns: repeat(5, 1fr); }
 }
