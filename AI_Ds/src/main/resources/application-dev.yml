@@ -1,0 +1,21 @@
+spring:
+  # 禁用Redis自动配置
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
+
+# 禁用Redis相关功能
+tap:
+  grading:
+    export:
+      max-concurrency: 1
+      submit-interval-ms: 100
+
+server:
+  port: 8082
+
+logging:
+  level:
+    org.springframework.data.redis: OFF
+    io.lettuce: OFF

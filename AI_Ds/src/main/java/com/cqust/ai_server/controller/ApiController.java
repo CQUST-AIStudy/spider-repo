@@ -4,6 +4,7 @@ import com.cqust.ai_server.dao.SubmissionDao;
 import com.cqust.ai_server.entity.*;
 
 import com.cqust.ai_server.service.*;
+import com.cqust.ai_server.entity.LeetCodeRecommendItem;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
@@ -63,6 +64,9 @@ public class ApiController {
 
     @Autowired
     private com.cqust.ai_server.service.ProfileService profileService;
+
+    @Autowired
+    private LeetCodeRecommendationService leetCodeRecommendationService;
 
     @Value("${tap.ai.openai.api-key:}")
     private String deepseekApiKey;
@@ -567,6 +571,38 @@ public class ApiController {
         Map<String, Object> response = new HashMap<>();
 
         try {
+            // 优先尝试使用新的LeetCode推荐系统
+            try {
+                List<LeetCodeRecommendItem> leetCodeItems = leetCodeRecommendationService.generateRecommendationSync(studentId, 20);
+                if (leetCodeItems != null && !leetCodeItems.isEmpty()) {
+                    List<Map<String, Object>> allPractices = new ArrayList<>();
+                    
+                    for (LeetCodeRecommendItem item : leetCodeItems) {
+                        Map<String, Object> practice = new HashMap<>();
+                        practice.put("type", "leetcode_problem");
+                        practice.put("id", item.getProblemId());
+                        practice.put("title", item.getProblem().getTitleMain());
+                        practice.put("difficulty", item.getProblem().getDifficulty());
+                        practice.put("estimatedMinutes", item.getProblem().getEstimatedMinutes());
+                        practice.put("score", item.getScoreTotal());
+                        practice.put("reason", item.getReasonText());
+                        practice.put("problemCode", item.getProblem().getProblemCode());
+                        practice.put("source", "leetcode_recommendation");
+                        
+                        allPractices.add(practice);
+                    }
+                    
+                    response.put("success", true);
+                    response.put("data", allPractices);
+                    response.put("source", "leetcode_recommendation");
+                    System.out.println("使用LeetCode推荐系统为学生ID: " + studentId + "获取推荐，数量: " + allPractices.size());
+                    return ResponseEntity.ok(response);
+                }
+            } catch (Exception e) {
+                System.out.println("LeetCode推荐系统暂不可用，回退到旧系统: " + e.getMessage());
+            }
+
+            // 回退到旧的推荐系统
             List<AISuggestedProblem> suggestedProblems = aiSuggestedProblemService.findByStudentId(studentId);
             List<Map<String, Object>> allPractices = new ArrayList<>();
 
@@ -578,6 +614,7 @@ public class ApiController {
                     for (Map<String, Object> practice : practices) {
                         // 添加实验ID信息
                         practice.put("experimentId", problem.getExperimentId());
+                        practice.put("source", "legacy_recommendation");
                         
                         // 根据返回的类型进行处理
                         if (practice.containsKey("type")) {
@@ -604,10 +641,12 @@ public class ApiController {
 
                 response.put("success", true);
                 response.put("data", allPractices);
+                response.put("source", "legacy_recommendation");
                 System.out.println("获取到学生ID: " + studentId + "的所有推荐练习，数量: " + allPractices.size());
             } else {
                 response.put("success", true);
                 response.put("data", new ArrayList<>());
+                response.put("source", "none");
                 System.out.println("未找到学生ID: " + studentId + "的推荐练习");
             }
         } catch (Exception e) {
@@ -754,32 +793,38 @@ public class ApiController {
 
             // 获取提交记录
             SubmissionDetailEntity submission = submissionDao.findDetailByUsernameAndExperimentId(username, experimentId);
-            System.out.println(submission);
+            StudentCode studentCode = studentCodeService.findCodeByStudentIdAndExperimentId(studentId, experimentId);
+            Score score = scoreService.findByUsernameAndExperimentNum(String.valueOf(studentId), experiment.getNum());
+            if (score == null && username != null && !username.isBlank()) {
+                score = scoreService.findByUsernameAndExperimentNum(username, experiment.getNum());
+            }
 
-            if (submission == null) {
+            if (submission == null && studentCode == null && score == null) {
                 response.put("success", false);
-                response.put("message", "未找到该学生的实验提交记录");
+                response.put("message", "No submission data found for this student and experiment");
                 return ResponseEntity.ok(response);
             }
 
-            // 获取成绩信息
-//            Score score = scoreService.findByUsernameAndExperimentNum(username, experiment.getNum());
-
-//            // 获取学生代码
-//            StudentCode studentCode = studentCodeService.findCodeByStudentIdAndExperimentId(studentId, experimentId);
-
-            // 获取AI点评
             AIRemarks aiRemarks = aiRemarksService.getAIRemarkByStudentAndExperiment(studentId, experimentId);
 
 
 
             // 构建响应数据
-            response.put("studentId",submission.getStudent_id());
-            response.put("studentName", submission.getName());
-            response.put("submitTime",submission.getDate());
-            response.put("class", submission.getClass_name());
-            response.put("code", submission.getCode());
-            response.put("date", submission.getDate());
+            String mergedCode = submission != null ? submission.getCode() : null;
+            if ((mergedCode == null || mergedCode.isBlank()) && studentCode != null) {
+                mergedCode = studentCode.getCode();
+            }
+            Integer mergedScore = score != null ? score.getScore() : null;
+            Date mergedSubmitTime = score != null ? score.getSubmit_time() : null;
+
+            response.put("studentId", student.getStudent_id());
+            response.put("studentName", student.getName());
+            response.put("experimentId", experimentId);
+            response.put("experimentName", experiment.getName());
+            response.put("submitTime", mergedSubmitTime);
+            response.put("class", student.getClass_name());
+            response.put("code", mergedCode != null ? mergedCode : "");
+            response.put("date", mergedSubmitTime);
             response.put("report", "# 线性表实验报告\\n\\n## 实验目的\\n掌握线性表的基本操作和实现方法。\\n\\n## 实验环境\\nVisual Studio Code, JavaScript\\n\\n## 实验内容\\n实现线性表的基本操作，包括增删改查等功能。\\n\\n## 实验步骤\\n1. 首先定义线性表的结构\\n2. 实现增加元素的方法\\n3. 实现删除元素的方法\\n4. 实现查找元素的方法\\n\\n## 实验结果\\n成功实现了线性表的各项功能，测试通过。\\n\\n## 实验总结\\n通过本次实验，我深入理解了线性表的工作原理和实现方法。");
 
 //            Map<String, Object> submissionData = new HashMap<>();
@@ -792,10 +837,15 @@ public class ApiController {
 //            submissionData.put("experimentName", experiment.getName());
 //            submissionData.put("deadline", experiment.getDeadline());
 
-            double avgPlagiarismRate = getPlagiarismRate(studentId, experimentId);
-            avgPlagiarismRate = Math.round(avgPlagiarismRate * 100) / 100.0;
+            double avgPlagiarismRate = 0.0;
+            if (score != null) {
+                avgPlagiarismRate = getPlagiarismRate(studentId, experimentId);
+                avgPlagiarismRate = Math.round(avgPlagiarismRate * 100) / 100.0;
+            }
             response.put("plagiarismRate", avgPlagiarismRate);
-            response.put("score", null);
+            response.put("score", mergedScore);
+            response.put("status", mergedScore != null && mergedScore > 0 ? "graded"
+                    : ((mergedCode != null && !mergedCode.isBlank()) ? "submitted" : "not_started"));
 //            submissionData.put("code", submission.getCode());
 //            submissionData.put("report", submission.getReport());
 //            submissionData.put("submitTime", submission.getSubmit_time());

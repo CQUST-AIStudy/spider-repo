@@ -44,6 +44,9 @@ spring:
           max-idle: 8
           min-idle: 4
           max-wait: 3000ms
+      # 临时禁用Redis以便测试
+      timeout: 1000ms
+      connect-timeout: 1000ms
   servlet:
     session:
       timeout: 3600
@@ -129,7 +132,31 @@ volcano:
     key: cd5f887d-6484-47b9-afbd-dd1c66646e89
     model: deepseek-r1-250120
 
-# ========== TAP 模块配置 ==========
+# ========== LeetCode 推荐系统配置 ==========
+leetcode:
+  recommendation:
+    # 推荐算法权重配置
+    weights:
+      need-match: 0.45
+      difficulty-fit: 0.20
+      success-prob: 0.15
+      novelty: 0.10
+      quality: 0.10
+      repeat-penalty: 0.15
+    # 召回配置
+    recall:
+      weak-skill-ratio: 0.60
+      difficulty-progression-ratio: 0.25
+      exploration-ratio: 0.15
+    # 多样性配置
+    diversity:
+      min-easy-count: 2
+      min-medium-count: 4
+      max-hard-count: 2
+    # 缓存配置
+    cache:
+      recommendation-ttl-minutes: 30
+      skill-profile-ttl-minutes: 60
 tap:
   security:
     jwt:
@@ -186,6 +213,17 @@ tap:
       beta: 0.3
       gamma: 0.1
       delta: 0.1
+    rerank:
+      enabled: true
+      provider: heuristic
+      endpoint: ${RAG_RERANK_ENDPOINT:http://127.0.0.1:8101/rerank}
+      timeout-ms: 2500
+      cross-encoder-weight: 0.7
+      top-n: 5
+      base-weight: 0.45
+      overlap-weight: 0.4
+      phrase-weight: 0.1
+      annotation-weight: 0.05
     mmr:
       lambda: 0.7
     coverage:
@@ -199,3 +237,22 @@ tap:
       enabled: false
     lucene:
       index-path: ${LUCENE_INDEX_PATH:./data/lucene-index}
+  grading:
+    export:
+      max-concurrency: ${GRADING_EXPORT_MAX_CONCURRENCY:6}
+      submit-interval-ms: ${GRADING_EXPORT_SUBMIT_INTERVAL_MS:30}
+
+# PTA spider service
+pta:
+  spider-url: ${PTA_SPIDER_URL:http://127.0.0.1:8100}
+  connect-timeout-ms: ${PTA_SPIDER_CONNECT_TIMEOUT_MS:5000}
+  read-timeout-ms: ${PTA_SPIDER_READ_TIMEOUT_MS:20000}
+  scheduler:
+    max-concurrency: ${PTA_SYNC_MAX_CONCURRENCY:3}
+    submit-interval-ms: ${PTA_SYNC_SUBMIT_INTERVAL_MS:200}
+  auto-start: ${PTA_SPIDER_AUTO_START:true}
+  start-script: ${PTA_SPIDER_START_SCRIPT:../.kiro/start_spider_api.ps1}
+  start-timeout-seconds: ${PTA_SPIDER_START_TIMEOUT_SECONDS:25}
+  auto-stop: ${PTA_SPIDER_AUTO_STOP:true}
+  stop-script: ${PTA_SPIDER_STOP_SCRIPT:../.kiro/stop_spider_api.ps1}
+  stop-timeout-seconds: ${PTA_SPIDER_STOP_TIMEOUT_SECONDS:12}
