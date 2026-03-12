@@ -35,6 +35,7 @@ PTA爬虫项目/
 *.log
 *.pkl
 *.pid
+logs/
 
 # === Other large/generated ===
 AI_Ds/.mvn/
