@@ -448,7 +448,9 @@ export default {
 
   // 提交LeetCode解答
   async submitLeetCodeSolution(data) {
-    return apiClient.post('/api/leetcode/submit', data)
+    return apiClient.post('/api/leetcode/submit', data, {
+      timeout: 90000
+    })
   },
 
   // 获取推荐练习

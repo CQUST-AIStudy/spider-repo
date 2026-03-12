@@ -4,75 +4,137 @@ import com.cqust.ai_server.entity.LeetCodeProblem;
 import com.cqust.ai_server.service.LeetCodeExecutionService;
 import com.cqust.ai_server.service.LeetCodeProblemService;
 import com.cqust.ai_server.service.StudentSkillProfileService;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.MediaType;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestClient;
 
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
-/**
- * LeetCode代码执行服务实现
- */
 @Service
 public class LeetCodeExecutionServiceImpl implements LeetCodeExecutionService {
 
     private static final Logger logger = LoggerFactory.getLogger(LeetCodeExecutionServiceImpl.class);
+    private static final int AI_ESTIMATED_TOTAL_CASES = 10;
+    private static final int DEFAULT_AI_CONNECT_TIMEOUT_MS = 8000;
+    private static final int DEFAULT_AI_READ_TIMEOUT_MS = 60000;
+    private static final int DEFAULT_AI_EVAL_TIMEOUT_SECONDS = 55;
+    private static final ExecutorService AI_EVAL_EXECUTOR = Executors.newFixedThreadPool(2);
 
-    @Autowired
-    private LeetCodeProblemService problemService;
-
-    @Autowired
-    private StudentSkillProfileService skillProfileService;
-
-    // 支持的编程语言配置
     private static final Map<String, LanguageConfig> LANGUAGE_CONFIGS = new HashMap<>();
-    
+
     static {
-        LANGUAGE_CONFIGS.put("java", new LanguageConfig("java", ".java", "javac", "java"));
-        LANGUAGE_CONFIGS.put("python", new LanguageConfig("python", ".py", "python", "python"));
-        LANGUAGE_CONFIGS.put("cpp", new LanguageConfig("cpp", ".cpp", "g++", "./"));
-        LANGUAGE_CONFIGS.put("javascript", new LanguageConfig("javascript", ".js", "node", "node"));
+        LANGUAGE_CONFIGS.put("java", new LanguageConfig("java", ".java", "Solution.java", true));
+        LANGUAGE_CONFIGS.put("python", new LanguageConfig("python", ".py", "solution.py", false));
+        LANGUAGE_CONFIGS.put("c", new LanguageConfig("c", ".c", "solution.c", true));
+        LANGUAGE_CONFIGS.put("cpp", new LanguageConfig("cpp", ".cpp", "solution.cpp", true));
+        LANGUAGE_CONFIGS.put("javascript", new LanguageConfig("javascript", ".js", "solution.js", false));
+    }
+
+    private final LeetCodeProblemService problemService;
+    @SuppressWarnings("unused")
+    private final StudentSkillProfileService skillProfileService;
+    private final ObjectMapper objectMapper;
+    private final RestClient aiRestClient;
+    private final String aiModel;
+    private final int aiConnectTimeoutMs;
+    private final int aiReadTimeoutMs;
+    private final int aiEvalTimeoutSeconds;
+
+    @Autowired
+    public LeetCodeExecutionServiceImpl(
+            LeetCodeProblemService problemService,
+            StudentSkillProfileService skillProfileService,
+            ObjectMapper objectMapper,
+            @Value("${tap.ai.openai.base-url:https://api.deepseek.com/v1}") String aiBaseUrl,
+            @Value("${tap.ai.openai.api-key:}") String aiApiKey,
+            @Value("${tap.ai.openai.model:deepseek-chat}") String aiModel,
+            @Value("${leetcode.ai.connect-timeout-ms:" + DEFAULT_AI_CONNECT_TIMEOUT_MS + "}") int aiConnectTimeoutMs,
+            @Value("${leetcode.ai.read-timeout-ms:" + DEFAULT_AI_READ_TIMEOUT_MS + "}") int aiReadTimeoutMs,
+            @Value("${leetcode.ai.eval-timeout-seconds:" + DEFAULT_AI_EVAL_TIMEOUT_SECONDS + "}") int aiEvalTimeoutSeconds) {
+        this.problemService = problemService;
+        this.skillProfileService = skillProfileService;
+        this.objectMapper = objectMapper;
+        this.aiModel = (aiModel == null || aiModel.isBlank()) ? "deepseek-chat" : aiModel.trim();
+        this.aiConnectTimeoutMs = aiConnectTimeoutMs > 0 ? aiConnectTimeoutMs : DEFAULT_AI_CONNECT_TIMEOUT_MS;
+        this.aiReadTimeoutMs = aiReadTimeoutMs > 0 ? aiReadTimeoutMs : DEFAULT_AI_READ_TIMEOUT_MS;
+        this.aiEvalTimeoutSeconds = aiEvalTimeoutSeconds > 0 ? aiEvalTimeoutSeconds : DEFAULT_AI_EVAL_TIMEOUT_SECONDS;
+
+        String effectiveApiKey = (aiApiKey == null || aiApiKey.isBlank())
+                ? System.getenv("OPENAI_API_KEY")
+                : aiApiKey.trim();
+        if (effectiveApiKey == null || effectiveApiKey.isBlank()) {
+            this.aiRestClient = null;
+        } else {
+            this.aiRestClient = RestClient.builder()
+                    .baseUrl((aiBaseUrl == null || aiBaseUrl.isBlank()) ? "https://api.deepseek.com/v1" : aiBaseUrl.trim())
+                    .defaultHeader("Authorization", "Bearer " + effectiveApiKey)
+                    .requestFactory(createAiRequestFactory())
+                    .build();
+        }
+    }
+
+    private SimpleClientHttpRequestFactory createAiRequestFactory() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(aiConnectTimeoutMs);
+        factory.setReadTimeout(aiReadTimeoutMs);
+        return factory;
     }
 
     @Override
     public Map<String, Object> runCode(Long problemId, String code, String language, String testInput) {
         Map<String, Object> result = new HashMap<>();
-        
+
         try {
-            // 获取题目信息
             LeetCodeProblem problem = problemService.findById(problemId);
             if (problem == null) {
                 result.put("status", "error");
-                result.put("output", "题目不存在");
+                result.put("output", "Problem not found");
                 return result;
             }
 
-            // 验证语言支持
-            LanguageConfig config = LANGUAGE_CONFIGS.get(language);
+            String normalizedLanguage = normalizeLanguage(language);
+            LanguageConfig config = LANGUAGE_CONFIGS.get(normalizedLanguage);
             if (config == null) {
                 result.put("status", "error");
-                result.put("output", "不支持的编程语言: " + language);
+                result.put("output", "Unsupported language: " + language);
                 return result;
             }
 
-            // 执行代码
-            ExecutionResult execResult = executeCode(code, language, testInput, false);
-            
+            ExecutionResult execResult = executeCode(code, normalizedLanguage, testInput);
             result.put("status", execResult.success ? "success" : "error");
             result.put("output", execResult.output);
             result.put("error", execResult.error);
             result.put("runtime", execResult.runtime + "ms");
-            
         } catch (Exception e) {
-            logger.error("运行代码失败", e);
+            logger.error("Run code failed", e);
             result.put("status", "error");
-            result.put("output", "运行失败: " + e.getMessage());
+            result.put("output", "Run failed: " + e.getMessage());
         }
 
         return result;
@@ -81,546 +143,433 @@ public class LeetCodeExecutionServiceImpl implements LeetCodeExecutionService {
     @Override
     public Map<String, Object> submitSolution(Integer studentId, Long problemId, String code, String language) {
         Map<String, Object> result = new HashMap<>();
-        
+
         try {
-            // 获取题目信息
-            LeetCodeProblem problem = problemService.findById(problemId);
-            if (problem == null) {
+            String normalizedLanguage = normalizeLanguage(language);
+            if (!LANGUAGE_CONFIGS.containsKey(normalizedLanguage)) {
                 result.put("accepted", false);
-                result.put("message", "题目不存在");
+                result.put("status", "failed");
+                result.put("message", "Unsupported language: " + language);
+                return result;
+            }
+            if (code == null || code.trim().isEmpty()) {
+                result.put("accepted", false);
+                result.put("status", "failed");
+                result.put("message", "Code cannot be empty");
                 return result;
             }
 
-            // 执行完整测试
-            List<TestCase> testCases = generateTestCases(problem);
-            ExecutionSummary summary = runAllTestCases(code, language, testCases);
-            
-            // 计算得分
-            int score = calculateScore(summary);
-            boolean accepted = summary.passedCases == summary.totalCases && summary.totalCases > 0;
-            
-            // 生成AI反馈
-            String aiFeedback = generateAIFeedback(problem, code, language, summary, accepted);
-            
-            // 更新学生技能画像
-            if (accepted) {
-                updateStudentSkillProfile(studentId, problem, true);
-            } else {
-                updateStudentSkillProfile(studentId, problem, false);
+            LeetCodeProblem problem = problemService.findById(problemId);
+            if (problem == null) {
+                result.put("accepted", false);
+                result.put("status", "failed");
+                result.put("message", "Problem not found");
+                return result;
             }
 
-            // 构建返回结果
+            // AI-only evaluation path: no internal test-case judging.
+            AIEvaluation evaluation = evaluateByAi(problem, code, normalizedLanguage);
+            boolean accepted = evaluation.accepted;
+            int score = clampScore(evaluation.score);
+            int passedCases = (int) Math.round(clamp01(evaluation.estimatedPassRate) * AI_ESTIMATED_TOTAL_CASES);
+
+            if (!evaluation.unavailable) {
+                updateStudentSkillProfile(studentId, problem, accepted);
+            }
+
             result.put("accepted", accepted);
-            result.put("score", score);
-            result.put("aiFeedback", aiFeedback);
-            
+            result.put("status", evaluation.unavailable ? "unavailable" : (accepted ? "success" : "failed"));
+            result.put("score", evaluation.unavailable ? null : score);
+            result.put("aiFeedback", evaluation.feedback);
+
             Map<String, Object> details = new HashMap<>();
-            details.put("passedCases", summary.passedCases);
-            details.put("totalCases", summary.totalCases);
-            details.put("runtime", summary.avgRuntime + "ms");
-            details.put("memory", "N/A"); // 暂不实现内存统计
-            if (!summary.errors.isEmpty()) {
-                details.put("error", String.join("\n", summary.errors));
+            details.put("passedCases", evaluation.unavailable ? 0 : passedCases);
+            details.put("totalCases", evaluation.unavailable ? 0 : AI_ESTIMATED_TOTAL_CASES);
+            details.put("runtime", "AI static review");
+            details.put("memory", "N/A");
+            details.put("confidence", String.format(Locale.ROOT, "%.0f%%", clamp01(evaluation.confidence) * 100));
+            if (!evaluation.riskNotes.isEmpty()) {
+                details.put("error", String.join("\n", evaluation.riskNotes));
             }
             result.put("details", details);
-            
-            // 技能提升建议
-            result.put("skillSuggestions", generateSkillSuggestions(problem, accepted));
-            
+            result.put("skillSuggestions", evaluation.skillSuggestions.isEmpty()
+                    ? defaultSkillSuggestions(accepted)
+                    : evaluation.skillSuggestions);
+
         } catch (Exception e) {
-            logger.error("提交解答失败", e);
+            logger.error("Submit solution failed", e);
             result.put("accepted", false);
-            result.put("message", "提交失败: " + e.getMessage());
+            result.put("status", "failed");
+            result.put("message", "Submit failed: " + e.getMessage());
         }
 
         return result;
     }
 
-    /**
-     * 执行代码
-     */
-    private ExecutionResult executeCode(String code, String language, String input, boolean isFullTest) {
-        ExecutionResult result = new ExecutionResult();
-        
+    private String normalizeLanguage(String language) {
+        if (language == null) {
+            return "";
+        }
+        String normalized = language.trim().toLowerCase(Locale.ROOT);
+        if ("c++".equals(normalized) || "cplusplus".equals(normalized)) {
+            return "cpp";
+        }
+        return normalized;
+    }
+
+    private AIEvaluation evaluateByAi(LeetCodeProblem problem, String code, String language) {
+        if (aiRestClient == null) {
+            return buildFallbackEvaluation("AI service is not configured. Set tap.ai.openai.api-key first.");
+        }
+
+        Future<AIEvaluation> future = AI_EVAL_EXECUTOR.submit(() -> {
+            String prompt = buildAiEvaluationPrompt(problem, code, language);
+            String content = callChatCompletions(prompt);
+            return parseAiEvaluation(content);
+        });
+
         try {
-            LanguageConfig config = LANGUAGE_CONFIGS.get(language);
-            
-            // 创建临时目录
-            Path tempDir = Files.createTempDirectory("leetcode_exec_");
-            Path sourceFile = tempDir.resolve("Solution" + config.extension);
-            
-            // 写入源代码
-            Files.write(sourceFile, code.getBytes());
-            
-            long startTime = System.currentTimeMillis();
-            
-            // 编译（如果需要）
-            if (config.needsCompilation()) {
+            return future.get(aiEvalTimeoutSeconds, TimeUnit.SECONDS);
+        } catch (TimeoutException timeoutException) {
+            future.cancel(true);
+            logger.warn("AI evaluation timed out after {}s", aiEvalTimeoutSeconds);
+            return buildFallbackEvaluation("AI request timed out after " + aiEvalTimeoutSeconds + " seconds");
+        } catch (Exception e) {
+            future.cancel(true);
+            logger.warn("AI evaluation failed, fallback used: {}", e.getMessage());
+            return buildFallbackEvaluation("AI request failed: " + e.getMessage());
+        }
+    }
+
+    private String buildAiEvaluationPrompt(LeetCodeProblem problem, String code, String language) {
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("You are a strict LeetCode reviewer. Do NOT execute code.\n");
+        prompt.append("Use static reasoning only and return JSON only, no markdown.\n");
+        prompt.append("Scoring rubric (0-100): correctness 60, edge-cases 20, complexity 10, code quality 10.\n");
+        prompt.append("Output schema:\n");
+        prompt.append("{");
+        prompt.append("\"accepted\":true|false,");
+        prompt.append("\"score\":0-100,");
+        prompt.append("\"confidence\":0-1,");
+        prompt.append("\"estimated_pass_rate\":0-1,");
+        prompt.append("\"summary\":\"one sentence\",");
+        prompt.append("\"feedback_markdown\":\"detailed markdown feedback in Chinese\",");
+        prompt.append("\"strengths\":[\"...\"],");
+        prompt.append("\"issues\":[\"...\"],");
+        prompt.append("\"skill_suggestions\":[\"...\"],");
+        prompt.append("\"risk_notes\":[\"...\"]");
+        prompt.append("}\n\n");
+        prompt.append("Problem Title: ").append(safeText(problem.getTitleMain(), 200)).append("\n");
+        prompt.append("Difficulty: ").append(safeText(problem.getDifficulty(), 40)).append("\n");
+        prompt.append("Language: ").append(language).append("\n\n");
+        prompt.append("Problem Statement:\n").append(safeText(problem.getProblemText(), 7000)).append("\n\n");
+        prompt.append("Official Solution Reference:\n").append(safeText(problem.getSolutionText(), 5000)).append("\n\n");
+        prompt.append("Student Code:\n").append(safeText(code, 12000)).append("\n\n");
+        prompt.append("Constraints:\n");
+        prompt.append("- Prefer concrete bug findings and edge-cases.\n");
+        prompt.append("- If confidence < 0.6, keep accepted=false unless code is clearly correct.\n");
+        prompt.append("- Use concise Chinese in feedback_markdown.\n");
+        return prompt.toString();
+    }
+
+    private String callChatCompletions(String prompt) throws Exception {
+        ObjectNode body = objectMapper.createObjectNode();
+        body.put("model", aiModel);
+        body.put("temperature", 0.2);
+        body.put("max_tokens", 800);
+        body.set("messages", objectMapper.valueToTree(List.of(
+                messageNode("system", "You are a senior programming reviewer. Output valid JSON only."),
+                messageNode("user", prompt)
+        )));
+
+        String raw = aiRestClient.post()
+                .uri("/chat/completions")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(objectMapper.writeValueAsString(body))
+                .retrieve()
+                .body(String.class);
+
+        JsonNode root = objectMapper.readTree(raw);
+        return root.path("choices").path(0).path("message").path("content").asText("");
+    }
+
+    private ObjectNode messageNode(String role, String content) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("role", role);
+        node.put("content", content);
+        return node;
+    }
+
+    private AIEvaluation parseAiEvaluation(String content) {
+        if (content == null || content.isBlank()) {
+            return buildFallbackEvaluation("AI returned empty content.");
+        }
+
+        try {
+            String normalized = content.trim();
+            if (normalized.startsWith("```")) {
+                int firstLine = normalized.indexOf('\n');
+                int lastFence = normalized.lastIndexOf("```");
+                if (firstLine > 0 && lastFence > firstLine) {
+                    normalized = normalized.substring(firstLine + 1, lastFence).trim();
+                }
+            }
+            int start = normalized.indexOf('{');
+            int end = normalized.lastIndexOf('}');
+            if (start >= 0 && end > start) {
+                normalized = normalized.substring(start, end + 1);
+            }
+
+            JsonNode n = objectMapper.readTree(normalized);
+            AIEvaluation evaluation = new AIEvaluation();
+            evaluation.accepted = n.path("accepted").asBoolean(false);
+            evaluation.score = clampScore(n.path("score").asInt(evaluation.accepted ? 85 : 55));
+            evaluation.confidence = clamp01(n.path("confidence").asDouble(evaluation.accepted ? 0.8 : 0.6));
+            evaluation.estimatedPassRate = clamp01(n.path("estimated_pass_rate").asDouble(evaluation.accepted ? 0.85 : 0.5));
+
+            String summary = n.path("summary").asText("");
+            String feedback = n.path("feedback_markdown").asText("");
+            List<String> strengths = toStringList(n.path("strengths"));
+            List<String> issues = toStringList(n.path("issues"));
+            List<String> suggestions = toStringList(n.path("skill_suggestions"));
+            List<String> risks = toStringList(n.path("risk_notes"));
+
+            if (feedback.isBlank()) {
+                StringBuilder autoFeedback = new StringBuilder();
+                autoFeedback.append("## AI Review Summary\n");
+                autoFeedback.append("- Verdict: ").append(evaluation.accepted ? "Likely accepted (static reasoning)" : "Not accepted (static reasoning)").append("\n");
+                if (!summary.isBlank()) {
+                    autoFeedback.append("- Summary: ").append(summary).append("\n");
+                }
+                if (!strengths.isEmpty()) {
+                    autoFeedback.append("\n### Strengths\n");
+                    strengths.forEach(item -> autoFeedback.append("- ").append(item).append("\n"));
+                }
+                if (!issues.isEmpty()) {
+                    autoFeedback.append("\n### Issues\n");
+                    issues.forEach(item -> autoFeedback.append("- ").append(item).append("\n"));
+                }
+                if (!suggestions.isEmpty()) {
+                    autoFeedback.append("\n### Improvement Suggestions\n");
+                    suggestions.forEach(item -> autoFeedback.append("- ").append(item).append("\n"));
+                }
+                feedback = autoFeedback.toString();
+            }
+
+            evaluation.feedback = feedback;
+            evaluation.skillSuggestions = suggestions;
+            evaluation.riskNotes = risks;
+            return evaluation;
+        } catch (Exception e) {
+            return buildFallbackEvaluation("AI JSON parse failed: " + e.getMessage());
+        }
+    }
+
+    private AIEvaluation buildFallbackEvaluation(String reason) {
+        AIEvaluation evaluation = new AIEvaluation();
+        evaluation.unavailable = true;
+        evaluation.accepted = false;
+        evaluation.score = 0;
+        evaluation.confidence = 0.0;
+        evaluation.estimatedPassRate = 0.0;
+        evaluation.feedback = "## AI Review Unavailable\n"
+                + "- Reason: " + reason + "\n"
+                + "- This is not a final grading result.\n"
+                + "- Please retry later or check AI API configuration.";
+        evaluation.skillSuggestions = new ArrayList<>(List.of(
+                "Please retry once AI service recovers",
+                "Verify API key and outbound network policy",
+                "Switch to a faster model if needed"
+        ));
+        evaluation.riskNotes = new ArrayList<>(List.of(reason));
+        return evaluation;
+    }
+
+    private List<String> toStringList(JsonNode node) {
+        List<String> items = new ArrayList<>();
+        if (node == null || node.isMissingNode()) {
+            return items;
+        }
+        if (node.isArray()) {
+            node.forEach(item -> {
+                String text = item.asText("").trim();
+                if (!text.isEmpty()) {
+                    items.add(text);
+                }
+            });
+        } else {
+            String text = node.asText("").trim();
+            if (!text.isEmpty()) {
+                items.add(text);
+            }
+        }
+        return items;
+    }
+
+    private List<String> defaultSkillSuggestions(boolean accepted) {
+        if (accepted) {
+            return new ArrayList<>(List.of("Algorithm optimization", "Code readability", "Boundary-case verification"));
+        }
+        return new ArrayList<>(List.of("Language fundamentals", "Boundary-case handling", "Complexity analysis"));
+    }
+
+    private int clampScore(int score) {
+        return Math.max(0, Math.min(100, score));
+    }
+
+    private double clamp01(double value) {
+        return Math.max(0d, Math.min(1d, value));
+    }
+
+    private String safeText(String text, int maxLen) {
+        if (text == null) {
+            return "";
+        }
+        String trimmed = text.trim();
+        return trimmed.length() <= maxLen ? trimmed : trimmed.substring(0, maxLen);
+    }
+
+    private ExecutionResult executeCode(String code, String language, String input) {
+        ExecutionResult result = new ExecutionResult();
+        LanguageConfig config = LANGUAGE_CONFIGS.get(language);
+        if (config == null) {
+            result.success = false;
+            result.error = "Unsupported language: " + language;
+            return result;
+        }
+
+        Path tempDir = null;
+        try {
+            tempDir = Files.createTempDirectory("leetcode_exec_");
+            Path sourceFile = tempDir.resolve(config.sourceFileName);
+            Files.write(sourceFile, code.getBytes(StandardCharsets.UTF_8));
+
+            long start = System.currentTimeMillis();
+            String executableName = isWindows() ? "solution.exe" : "solution";
+
+            if (config.needsCompilation) {
                 ProcessBuilder compileBuilder = new ProcessBuilder();
                 compileBuilder.directory(tempDir.toFile());
-                
                 if ("java".equals(language)) {
-                    compileBuilder.command("javac", sourceFile.getFileName().toString());
+                    compileBuilder.command("javac", config.sourceFileName);
+                } else if ("c".equals(language)) {
+                    compileBuilder.command("gcc", "-std=c11", "-O2", "-o", executableName, config.sourceFileName);
                 } else if ("cpp".equals(language)) {
-                    compileBuilder.command("g++", "-o", "solution", sourceFile.getFileName().toString());
+                    compileBuilder.command("g++", "-std=c++17", "-O2", "-o", executableName, config.sourceFileName);
                 }
-                
+
                 Process compileProcess = compileBuilder.start();
                 int compileExitCode = compileProcess.waitFor();
-                
                 if (compileExitCode != 0) {
                     result.success = false;
                     result.error = readStream(compileProcess.getErrorStream());
                     return result;
                 }
             }
-            
-            // 执行
+
             ProcessBuilder runBuilder = new ProcessBuilder();
             runBuilder.directory(tempDir.toFile());
-            
             if ("java".equals(language)) {
                 runBuilder.command("java", "Solution");
             } else if ("python".equals(language)) {
-                runBuilder.command("python", sourceFile.getFileName().toString());
-            } else if ("cpp".equals(language)) {
-                runBuilder.command("./solution");
+                runBuilder.command("python", config.sourceFileName);
+            } else if ("c".equals(language) || "cpp".equals(language)) {
+                runBuilder.command(isWindows() ? executableName : "./" + executableName);
             } else if ("javascript".equals(language)) {
-                runBuilder.command("node", sourceFile.getFileName().toString());
+                runBuilder.command("node", config.sourceFileName);
             }
-            
+
             Process runProcess = runBuilder.start();
-            
-            // 提供输入
             if (input != null && !input.trim().isEmpty()) {
                 try (PrintWriter writer = new PrintWriter(runProcess.getOutputStream())) {
                     writer.println(input);
                     writer.flush();
                 }
             }
-            
-            // 等待执行完成（设置超时）
-            boolean finished = runProcess.waitFor(5, TimeUnit.SECONDS);
-            
+
+            boolean finished = runProcess.waitFor(6, TimeUnit.SECONDS);
             if (!finished) {
                 runProcess.destroyForcibly();
                 result.success = false;
-                result.error = "执行超时";
+                result.error = "Execution timeout";
                 return result;
             }
-            
-            long endTime = System.currentTimeMillis();
-            result.runtime = endTime - startTime;
-            
+
+            result.runtime = System.currentTimeMillis() - start;
             int exitCode = runProcess.exitValue();
             if (exitCode == 0) {
                 result.success = true;
                 result.output = readStream(runProcess.getInputStream());
             } else {
                 result.success = false;
-                result.error = readStream(runProcess.getErrorStream());
+                String err = readStream(runProcess.getErrorStream());
+                String out = readStream(runProcess.getInputStream());
+                result.error = (err == null || err.isBlank()) ? out : err;
             }
-            
-            // 清理临时文件
-            deleteDirectory(tempDir.toFile());
-            
         } catch (Exception e) {
-            logger.error("执行代码异常", e);
             result.success = false;
-            result.error = "执行异常: " + e.getMessage();
+            result.error = "Execution error: " + e.getMessage();
+        } finally {
+            if (tempDir != null) {
+                deleteDirectory(tempDir.toFile());
+            }
         }
-        
+
         return result;
     }
 
-    /**
-     * 生成测试用例
-     */
-    private List<TestCase> generateTestCases(LeetCodeProblem problem) {
-        List<TestCase> testCases = new ArrayList<>();
-        
-        // 这里简化处理，实际应该从题目描述中解析或从数据库获取
-        testCases.add(new TestCase("示例输入1", "期望输出1"));
-        testCases.add(new TestCase("示例输入2", "期望输出2"));
-        testCases.add(new TestCase("边界情况1", "边界输出1"));
-        
-        return testCases;
+    private boolean isWindows() {
+        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
     }
 
-    /**
-     * 运行所有测试用例
-     */
-    private ExecutionSummary runAllTestCases(String code, String language, List<TestCase> testCases) {
-        ExecutionSummary summary = new ExecutionSummary();
-        summary.totalCases = testCases.size();
-        
-        long totalRuntime = 0;
-        
-        for (TestCase testCase : testCases) {
-            ExecutionResult result = executeCode(code, language, testCase.input, true);
-            
-            if (result.success) {
-                // 简化的输出比较，实际应该更智能
-                if (result.output.trim().equals(testCase.expectedOutput.trim())) {
-                    summary.passedCases++;
-                }
-            } else {
-                summary.errors.add(result.error);
-            }
-            
-            totalRuntime += result.runtime;
-        }
-        
-        summary.avgRuntime = summary.totalCases > 0 ? totalRuntime / summary.totalCases : 0;
-        
-        return summary;
-    }
-
-    /**
-     * 计算得分
-     */
-    private int calculateScore(ExecutionSummary summary) {
-        if (summary.totalCases == 0) return 0;
-        
-        double passRate = (double) summary.passedCases / summary.totalCases;
-        int baseScore = (int) (passRate * 80); // 基础分80%
-        
-        // 性能加分
-        if (summary.avgRuntime < 100) {
-            baseScore += 20;
-        } else if (summary.avgRuntime < 500) {
-            baseScore += 10;
-        }
-        
-        return Math.min(100, baseScore);
-    }
-
-    /**
-     * 生成AI反馈 - 优化提示词设计
-     */
-    private String generateAIFeedback(LeetCodeProblem problem, String code, String language, 
-                                    ExecutionSummary summary, boolean accepted) {
-        StringBuilder feedback = new StringBuilder();
-        
-        // 分析代码特征
-        CodeAnalysis analysis = analyzeCode(code, language);
-        
-        feedback.append("## 🤖 AI代码评测报告\n\n");
-        
-        if (accepted) {
-            feedback.append("### 🎉 恭喜通过！\n");
-            feedback.append("你的解答**完全正确**，所有测试用例都通过了！\n\n");
-            
-            feedback.append("### 📊 代码质量分析\n");
-            feedback.append(String.format("- ✅ **正确性**: 完美 (%d/%d 测试用例通过)\n", 
-                summary.passedCases, summary.totalCases));
-            
-            // 性能评估
-            if (summary.avgRuntime < 50) {
-                feedback.append("- ⚡ **执行效率**: 优秀 (平均 ").append(summary.avgRuntime).append("ms)\n");
-            } else if (summary.avgRuntime < 200) {
-                feedback.append("- 🚀 **执行效率**: 良好 (平均 ").append(summary.avgRuntime).append("ms)\n");
-            } else {
-                feedback.append("- 🐌 **执行效率**: 可优化 (平均 ").append(summary.avgRuntime).append("ms)\n");
-            }
-            
-            // 代码风格评估
-            feedback.append("- 📝 **代码风格**: ").append(analysis.getStyleRating()).append("\n");
-            feedback.append("- 🧠 **算法复杂度**: ").append(analysis.getComplexityEstimate()).append("\n\n");
-            
-        } else {
-            feedback.append("### ❌ 需要改进\n");
-            feedback.append(String.format("你的解答通过了 **%d/%d** 个测试用例 (%.1f%%)\n\n", 
-                summary.passedCases, summary.totalCases, 
-                (double) summary.passedCases / summary.totalCases * 100));
-            
-            feedback.append("### 🔍 问题诊断\n");
-            
-            if (summary.passedCases == 0) {
-                feedback.append("- 🚨 **基础逻辑错误**: 代码可能存在语法错误或基本逻辑问题\n");
-            } else if (summary.passedCases < summary.totalCases / 2) {
-                feedback.append("- ⚠️ **算法思路问题**: 核心算法可能需要重新思考\n");
-            } else {
-                feedback.append("- 🎯 **边界情况处理**: 大部分逻辑正确，注意特殊情况\n");
-            }
-            
-            if (!summary.errors.isEmpty()) {
-                feedback.append("- 💥 **主要错误类型**:\n");
-                Set<String> uniqueErrors = new HashSet<>(summary.errors);
-                for (String error : uniqueErrors) {
-                    feedback.append("  - ").append(categorizeError(error)).append("\n");
-                }
-            }
-            feedback.append("\n");
-        }
-        
-        // 个性化建议
-        feedback.append("### 💡 个性化建议\n");
-        feedback.append(generatePersonalizedSuggestions(problem, code, language, analysis, accepted));
-        
-        // 学习路径
-        feedback.append("\n### 📚 推荐学习\n");
-        feedback.append(generateLearningPath(problem, accepted));
-        
-        return feedback.toString();
-    }
-
-    /**
-     * 代码分析
-     */
-    private CodeAnalysis analyzeCode(String code, String language) {
-        CodeAnalysis analysis = new CodeAnalysis();
-        
-        // 分析代码长度和复杂度
-        int lineCount = code.split("\n").length;
-        analysis.lineCount = lineCount;
-        
-        // 检查注释
-        analysis.hasComments = code.contains("//") || code.contains("/*");
-        
-        // 检查变量命名
-        analysis.hasGoodNaming = checkVariableNaming(code, language);
-        
-        // 估算时间复杂度
-        analysis.estimatedComplexity = estimateTimeComplexity(code);
-        
-        return analysis;
-    }
-
-    /**
-     * 生成个性化建议
-     */
-    private String generatePersonalizedSuggestions(LeetCodeProblem problem, String code, 
-                                                 String language, CodeAnalysis analysis, boolean accepted) {
-        StringBuilder suggestions = new StringBuilder();
-        
-        if (accepted) {
-            suggestions.append("🌟 **进阶挑战**:\n");
-            suggestions.append("- 尝试优化算法的时间复杂度\n");
-            suggestions.append("- 考虑空间复杂度的优化方案\n");
-            suggestions.append("- 用不同的算法思路重新实现\n");
-            
-            if (!analysis.hasComments) {
-                suggestions.append("- 添加注释提高代码可读性\n");
-            }
-            
-            if (analysis.lineCount > 50) {
-                suggestions.append("- 考虑将复杂逻辑拆分成多个函数\n");
-            }
-        } else {
-            suggestions.append("🎯 **改进方向**:\n");
-            suggestions.append("- 先在纸上画出算法流程图\n");
-            suggestions.append("- 用简单的例子手动验证算法逻辑\n");
-            suggestions.append("- 添加调试输出跟踪程序执行过程\n");
-            suggestions.append("- 仔细检查边界条件和特殊情况\n");
-            
-            if (!analysis.hasGoodNaming) {
-                suggestions.append("- 使用更有意义的变量名\n");
-            }
-        }
-        
-        return suggestions.toString();
-    }
-
-    /**
-     * 生成学习路径
-     */
-    private String generateLearningPath(LeetCodeProblem problem, boolean accepted) {
-        StringBuilder path = new StringBuilder();
-        
-        String difficulty = problem.getDifficulty();
-        
-        if (accepted) {
-            path.append("继续挑战相关题目:\n");
-            if ("Easy".equalsIgnoreCase(difficulty)) {
-                path.append("- 尝试同类型的中等难度题目\n");
-                path.append("- 学习更高效的算法和数据结构\n");
-            } else if ("Medium".equalsIgnoreCase(difficulty)) {
-                path.append("- 挑战困难级别的相关题目\n");
-                path.append("- 深入学习算法优化技巧\n");
-            } else {
-                path.append("- 你已经掌握了高难度题目！\n");
-                path.append("- 可以尝试参加编程竞赛\n");
-            }
-        } else {
-            path.append("建议学习顺序:\n");
-            path.append("1. 复习相关的基础算法和数据结构\n");
-            path.append("2. 练习类似的简单题目\n");
-            path.append("3. 逐步提高难度\n");
-            path.append("4. 重新挑战这道题\n");
-        }
-        
-        return path.toString();
-    }
-
-    /**
-     * 错误分类
-     */
-    private String categorizeError(String error) {
-        if (error.contains("compile") || error.contains("syntax")) {
-            return "语法错误 - 检查代码语法";
-        } else if (error.contains("timeout") || error.contains("超时")) {
-            return "执行超时 - 算法效率需要优化";
-        } else if (error.contains("null") || error.contains("NullPointer")) {
-            return "空指针异常 - 检查变量初始化";
-        } else if (error.contains("index") || error.contains("bounds")) {
-            return "数组越界 - 检查索引范围";
-        } else {
-            return "运行时错误 - " + error.substring(0, Math.min(50, error.length()));
-        }
-    }
-
-    /**
-     * 检查变量命名
-     */
-    private boolean checkVariableNaming(String code, String language) {
-        // 简单的命名检查，实际可以更复杂
-        return !code.matches(".*\\b[a-z]\\b.*") && // 避免单字母变量
-               code.matches(".*[a-zA-Z]{2,}.*"); // 包含有意义的变量名
-    }
-
-    /**
-     * 估算时间复杂度
-     */
-    private String estimateTimeComplexity(String code) {
-        if (code.contains("for") && code.indexOf("for", code.indexOf("for") + 1) != -1) {
-            return "O(n²) - 嵌套循环";
-        } else if (code.contains("for") || code.contains("while")) {
-            return "O(n) - 线性时间";
-        } else {
-            return "O(1) - 常数时间";
-        }
-    }
-
-    /**
-     * 代码分析结果类
-     */
-    private static class CodeAnalysis {
-        int lineCount = 0;
-        boolean hasComments = false;
-        boolean hasGoodNaming = false;
-        String estimatedComplexity = "O(1)";
-        
-        String getStyleRating() {
-            int score = 0;
-            if (hasComments) score++;
-            if (hasGoodNaming) score++;
-            if (lineCount < 30) score++;
-            
-            switch (score) {
-                case 3: return "优秀 ⭐⭐⭐";
-                case 2: return "良好 ⭐⭐";
-                case 1: return "一般 ⭐";
-                default: return "需改进";
-            }
-        }
-        
-        String getComplexityEstimate() {
-            return estimatedComplexity;
-        }
-    }
-
-    /**
-     * 生成改进建议
-     */
-    private String generateImprovementSuggestions(LeetCodeProblem problem, String code, 
-                                                String language, boolean accepted) {
-        StringBuilder suggestions = new StringBuilder();
-        
-        if (accepted) {
-            suggestions.append("- 考虑是否可以进一步优化时间复杂度\n");
-            suggestions.append("- 检查代码的可读性和注释\n");
-            suggestions.append("- 尝试用其他算法思路解决同一问题\n");
-        } else {
-            suggestions.append("- 仔细检查边界条件的处理\n");
-            suggestions.append("- 确认算法逻辑是否正确\n");
-            suggestions.append("- 可以先在纸上画出算法流程图\n");
-            suggestions.append("- 建议添加调试输出来跟踪程序执行\n");
-        }
-        
-        return suggestions.toString();
-    }
-
-    /**
-     * 更新学生技能画像
-     */
-    private void updateStudentSkillProfile(Integer studentId, LeetCodeProblem problem, boolean success) {
-        try {
-            // 这里应该调用技能画像服务更新学生的掌握情况
-            // skillProfileService.updateSkillByProblem(studentId, problem, success);
-            logger.info("更新学生 {} 的技能画像，题目：{}，结果：{}", studentId, problem.getTitleMain(), success);
-        } catch (Exception e) {
-            logger.error("更新学生技能画像失败", e);
-        }
-    }
-
-    /**
-     * 生成技能提升建议
-     */
-    private List<String> generateSkillSuggestions(LeetCodeProblem problem, boolean accepted) {
-        List<String> suggestions = new ArrayList<>();
-        
-        if (accepted) {
-            suggestions.add("数组操作");
-            suggestions.add("算法优化");
-        } else {
-            suggestions.add("基础语法");
-            suggestions.add("逻辑思维");
-            suggestions.add("边界处理");
-        }
-        
-        return suggestions;
-    }
-
-    /**
-     * 读取流内容
-     */
     private String readStream(InputStream stream) throws IOException {
         StringBuilder sb = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream))) {
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
             String line;
             while ((line = reader.readLine()) != null) {
-                sb.append(line).append("\n");
+                sb.append(line).append('\n');
             }
         }
-        return sb.toString();
+        return sb.toString().trim();
     }
 
-    /**
-     * 删除目录
-     */
     private void deleteDirectory(File directory) {
-        if (directory.exists()) {
-            File[] files = directory.listFiles();
-            if (files != null) {
-                for (File file : files) {
-                    if (file.isDirectory()) {
-                        deleteDirectory(file);
-                    } else {
-                        file.delete();
-                    }
+        if (directory == null || !directory.exists()) {
+            return;
+        }
+        File[] files = directory.listFiles();
+        if (files != null) {
+            for (File file : files) {
+                if (file.isDirectory()) {
+                    deleteDirectory(file);
+                } else {
+                    //noinspection ResultOfMethodCallIgnored
+                    file.delete();
                 }
             }
-            directory.delete();
         }
+        //noinspection ResultOfMethodCallIgnored
+        directory.delete();
     }
 
-    // 内部类
+    private void updateStudentSkillProfile(Integer studentId, LeetCodeProblem problem, boolean success) {
+        logger.info("Update skill profile studentId={} problemId={} success={}",
+                studentId,
+                problem == null ? null : problem.getId(),
+                success);
+    }
+
     private static class LanguageConfig {
-        String name;
-        String extension;
-        String compiler;
-        String runner;
-        
-        LanguageConfig(String name, String extension, String compiler, String runner) {
+        final String name;
+        final String extension;
+        final String sourceFileName;
+        final boolean needsCompilation;
+
+        private LanguageConfig(String name, String extension, String sourceFileName, boolean needsCompilation) {
             this.name = name;
             this.extension = extension;
-            this.compiler = compiler;
-            this.runner = runner;
-        }
-        
-        boolean needsCompilation() {
-            return "java".equals(name) || "cpp".equals(name);
+            this.sourceFileName = sourceFileName;
+            this.needsCompilation = needsCompilation;
         }
     }
 
@@ -631,20 +580,14 @@ public class LeetCodeExecutionServiceImpl implements LeetCodeExecutionService {
         long runtime = 0;
     }
 
-    private static class TestCase {
-        String input;
-        String expectedOutput;
-        
-        TestCase(String input, String expectedOutput) {
-            this.input = input;
-            this.expectedOutput = expectedOutput;
-        }
-    }
-
-    private static class ExecutionSummary {
-        int totalCases = 0;
-        int passedCases = 0;
-        long avgRuntime = 0;
-        List<String> errors = new ArrayList<>();
+    private static class AIEvaluation {
+        boolean unavailable;
+        boolean accepted;
+        int score;
+        double confidence;
+        double estimatedPassRate;
+        String feedback = "";
+        List<String> skillSuggestions = new ArrayList<>();
+        List<String> riskNotes = new ArrayList<>();
     }
 }

@@ -1,6 +1,6 @@
-<template>
+﻿<template>
   <div class="leetcode-practice">
-    <!-- 题目详情区域 -->
+    <!-- 棰樼洰璇︽儏鍖哄煙 -->
     <div class="problem-section">
       <div class="problem-header">
         <div class="problem-title">
@@ -9,38 +9,38 @@
         </div>
         <div class="problem-actions">
           <el-button @click="showSolution = !showSolution" type="info" plain>
-            {{ showSolution ? '隐藏题解' : '查看题解' }}
+            {{ showSolution ? '闅愯棌棰樿В' : '鏌ョ湅棰樿В' }}
           </el-button>
-          <el-button @click="resetCode" type="warning" plain>重置代码</el-button>
+          <el-button @click="resetCode" type="warning" plain>閲嶇疆浠ｇ爜</el-button>
         </div>
       </div>
 
-      <!-- 题目内容 -->
+      <!-- 棰樼洰鍐呭 -->
       <div class="problem-content">
         <div class="problem-description">
           <div class="content-section">
-            <h3>题目描述</h3>
+            <h3>棰樼洰鎻忚堪</h3>
             <div class="formatted-content" v-html="renderedProblemText"></div>
           </div>
           
           <div class="content-section" v-if="problem.examples">
-            <h3>示例</h3>
+            <h3>绀轰緥</h3>
             <div class="examples-container">
               <div 
                 v-for="(example, index) in parsedExamples" 
                 :key="index" 
                 class="example-item"
               >
-                <h4>示例 {{ index + 1 }}:</h4>
+                <h4>绀轰緥 {{ index + 1 }}:</h4>
                 <div class="example-content">
                   <div class="example-input">
-                    <strong>输入:</strong> <code>{{ example.input }}</code>
+                    <strong>杈撳叆:</strong> <code>{{ example.input }}</code>
                   </div>
                   <div class="example-output">
-                    <strong>输出:</strong> <code>{{ example.output }}</code>
+                    <strong>杈撳嚭:</strong> <code>{{ example.output }}</code>
                   </div>
                   <div v-if="example.explanation" class="example-explanation">
-                    <strong>解释:</strong> {{ example.explanation }}
+                    <strong>瑙ｉ噴:</strong> {{ example.explanation }}
                   </div>
                 </div>
               </div>
@@ -48,24 +48,24 @@
           </div>
 
           <div class="content-section" v-if="problem.constraints">
-            <h3>提示</h3>
+            <h3>鎻愮ず</h3>
             <div class="constraints-content" v-html="renderedConstraints"></div>
           </div>
         </div>
       </div>
 
-      <!-- 官方题解（优化渲染） -->
+      <!-- 瀹樻柟棰樿В锛堜紭鍖栨覆鏌擄級 -->
       <el-collapse v-if="showSolution" class="solution-section">
         <el-collapse-item name="solution">
           <template #title>
             <div class="solution-title">
               <el-icon><Document /></el-icon>
-              <span>官方题解</span>
+              <span>瀹樻柟棰樿В</span>
             </div>
           </template>
           <div class="solution-content">
             <div class="solution-approach" v-if="parsedSolution.approach">
-              <h4>解题思路</h4>
+              <h4>瑙ｉ鎬濊矾</h4>
               <div class="approach-content" v-html="parsedSolution.approach"></div>
             </div>
             
@@ -92,28 +92,29 @@
       </el-collapse>
     </div>
 
-    <!-- 代码编辑区域 -->
+    <!-- 浠ｇ爜缂栬緫鍖哄煙 -->
     <div class="code-section">
       <div class="code-header">
         <div class="language-selector">
           <el-select v-model="selectedLanguage" @change="onLanguageChange">
             <el-option label="Java" value="java" />
             <el-option label="Python" value="python" />
+            <el-option label="C" value="c" />
             <el-option label="C++" value="cpp" />
             <el-option label="JavaScript" value="javascript" />
           </el-select>
         </div>
         <div class="code-actions">
           <el-button @click="runCode" :loading="running" type="primary" plain>
-            运行代码
+            杩愯浠ｇ爜
           </el-button>
           <el-button @click="submitCode" :loading="submitting" type="success">
-            提交解答
+            鎻愪氦瑙ｇ瓟
           </el-button>
         </div>
       </div>
 
-      <!-- 代码编辑器 -->
+      <!-- 浠ｇ爜缂栬緫鍣?-->
       <div class="code-editor" @click="focusEditor">
         <codemirror
           ref="editorRef"
@@ -126,22 +127,22 @@
         />
       </div>
 
-      <!-- 测试用例输入 -->
+      <!-- 娴嬭瘯鐢ㄤ緥杈撳叆 -->
       <div class="test-input">
         <el-tabs v-model="activeTab">
-          <el-tab-pane label="测试用例" name="testcase">
+          <el-tab-pane label="娴嬭瘯鐢ㄤ緥" name="testcase">
             <el-input
               v-model="testInput"
               type="textarea"
               :rows="4"
-              placeholder="输入测试用例，每行一个..."
+              placeholder="杈撳叆娴嬭瘯鐢ㄤ緥锛屾瘡琛屼竴涓?.."
             />
           </el-tab-pane>
-          <el-tab-pane label="运行结果" name="result" v-if="runResult">
+          <el-tab-pane label="杩愯缁撴灉" name="result" v-if="runResult">
             <div class="run-result">
               <div class="result-status" :class="runResult.status">
                 <el-icon><Check v-if="runResult.status === 'success'" /><Close v-else /></el-icon>
-                {{ runResult.status === 'success' ? '运行成功' : '运行失败' }}
+                {{ runResult.status === 'success' ? '杩愯鎴愬姛' : '杩愯澶辫触' }}
               </div>
               <div class="result-content">
                 <pre>{{ runResult.output }}</pre>
@@ -152,10 +153,10 @@
       </div>
     </div>
 
-    <!-- 提交结果弹窗 -->
+    <!-- 鎻愪氦缁撴灉寮圭獥 -->
     <el-dialog
       v-model="showSubmitResult"
-      title="提交结果"
+      title="鎻愪氦缁撴灉"
       width="80%"
       :close-on-click-modal="false"
     >
@@ -163,38 +164,38 @@
         <div class="result-header">
           <div class="status" :class="submitResult.status">
             <el-icon><Check v-if="submitResult.accepted" /><Close v-else /></el-icon>
-            {{ submitResult.accepted ? '通过' : '未通过' }}
+            {{ submitResult.status === 'unavailable' ? '璇勬祴鏆備笉鍙敤' : (submitResult.accepted ? '閫氳繃' : '鏈€氳繃') }}
           </div>
-          <div class="score" v-if="submitResult.score">
-            得分: {{ submitResult.score }}/100
+          <div class="score" v-if="submitResult.score !== null && submitResult.score !== undefined">
+            寰楀垎: {{ submitResult.score }}/100
           </div>
         </div>
 
-        <!-- AI评测结果 -->
+        <!-- AI璇勬祴缁撴灉 -->
         <div class="ai-feedback" v-if="submitResult.aiFeedback">
-          <h3>AI 评测反馈</h3>
+          <h3>AI 璇勬祴鍙嶉</h3>
           <div class="feedback-content" v-html="renderedAiFeedback"></div>
         </div>
 
-        <!-- 执行详情 -->
+        <!-- 鎵ц璇︽儏 -->
         <div class="execution-details" v-if="submitResult.details">
-          <el-descriptions title="执行详情" :column="2" border>
-            <el-descriptions-item label="执行时间">
+          <el-descriptions title="鎵ц璇︽儏" :column="2" border>
+            <el-descriptions-item label="鎵ц鏃堕棿">
               {{ submitResult.details.runtime || 'N/A' }}
             </el-descriptions-item>
             <el-descriptions-item label="内存消耗">
               {{ submitResult.details.memory || 'N/A' }}
             </el-descriptions-item>
-            <el-descriptions-item label="通过用例">
+            <el-descriptions-item label="閫氳繃鐢ㄤ緥">
               {{ submitResult.details.passedCases || 0 }} / {{ submitResult.details.totalCases || 0 }}
             </el-descriptions-item>
-            <el-descriptions-item label="错误信息" v-if="submitResult.details.error">
+            <el-descriptions-item label="閿欒淇℃伅" v-if="submitResult.details.error">
               <pre class="error-message">{{ submitResult.details.error }}</pre>
             </el-descriptions-item>
           </el-descriptions>
         </div>
 
-        <!-- 技能提升建议 -->
+        <!-- 鎶€鑳芥彁鍗囧缓璁?-->
         <div class="skill-suggestions" v-if="submitResult.skillSuggestions">
           <h3>技能提升建议</h3>
           <el-tag
@@ -209,8 +210,8 @@
       </div>
 
       <template #footer>
-        <el-button @click="showSubmitResult = false">关闭</el-button>
-        <el-button type="primary" @click="continuePractice">继续练习</el-button>
+        <el-button @click="showSubmitResult = false">鍏抽棴</el-button>
+        <el-button type="primary" @click="continuePractice">缁х画缁冧範</el-button>
       </template>
     </el-dialog>
   </div>
@@ -236,7 +237,7 @@ const route = useRoute()
 const router = useRouter()
 marked.setOptions({ gfm: true, breaks: true })
 
-// 响应式数据
+// 鍝嶅簲寮忔暟鎹?
 const problem = ref({})
 const selectedLanguage = ref('java')
 const code = ref('')
@@ -252,22 +253,30 @@ const editorRef = ref(null)
 const editorInstance = ref(null)
 const solutionLanguage = ref('java')
 
-// 代码模板
+// 浠ｇ爜妯℃澘
 const codeTemplates = {
   java: `class Solution {
     public int[] twoSum(int[] nums, int target) {
-        // 请在这里编写你的代码
+        // 璇峰湪杩欓噷缂栧啓浣犵殑浠ｇ爜
         
     }
 }`,
   python: `class Solution:
     def twoSum(self, nums: List[int], target: int) -> List[int]:
-        # 请在这里编写你的代码
+        # 璇峰湪杩欓噷缂栧啓浣犵殑浠ｇ爜
         pass`,
+  c: `#include <stdio.h>
+#include <stdlib.h>
+
+int* twoSum(int* nums, int numsSize, int target, int* returnSize) {
+    // write your code here
+    *returnSize = 0;
+    return NULL;
+}`,
   cpp: `class Solution {
 public:
     vector<int> twoSum(vector<int>& nums, int target) {
-        // 请在这里编写你的代码
+        // 璇峰湪杩欓噷缂栧啓浣犵殑浠ｇ爜
         
     }
 };`,
@@ -277,19 +286,19 @@ public:
  * @return {number[]}
  */
 var twoSum = function(nums, target) {
-    // 请在这里编写你的代码
+    // 璇峰湪杩欓噷缂栧啓浣犵殑浠ｇ爜
     
 };`
 }
 
-// 编辑器配置
+// 缂栬緫鍣ㄩ厤缃?
 const editorExtensions = computed(() => ([
   getLanguageExtension(),
   oneDark,
   EditorView.lineWrapping
 ]))
 
-// 计算属性
+// 璁＄畻灞炴€?
 const difficultyType = computed(() => {
   const difficulty = problem.value.difficulty?.toLowerCase()
   switch (difficulty) {
@@ -333,11 +342,11 @@ const parsedSolution = computed(() => {
   if (!problem.value.solutionText) return {}
   
   try {
-    // 尝试解析结构化的题解
+    // 灏濊瘯瑙ｆ瀽缁撴瀯鍖栫殑棰樿В
     const solution = JSON.parse(problem.value.solutionText)
     return solution
   } catch {
-    // 如果不是JSON格式，按markdown处理
+    // 濡傛灉涓嶆槸JSON鏍煎紡锛屾寜markdown澶勭悊
     const text = problem.value.solutionText
     return {
       approach: DOMPurify.sanitize(marked(text))
@@ -345,11 +354,12 @@ const parsedSolution = computed(() => {
   }
 })
 
-// 方法
+// 鏂规硶
 function getLanguageExtension() {
   switch (selectedLanguage.value) {
     case 'java': return java()
     case 'python': return python()
+    case 'c': return cpp()
     case 'cpp': return cpp()
     case 'javascript': return javascript()
     default: return javascript()
@@ -400,19 +410,19 @@ function getLanguageLabel(lang) {
 }
 
 function resetCode() {
-  ElMessageBox.confirm('确定要重置代码吗？这将清除当前的所有修改。', '确认重置', {
-    confirmButtonText: '确定',
-    cancelButtonText: '取消',
+  ElMessageBox.confirm('Are you sure you want to reset code? Unsaved edits will be lost.', 'Reset Code', {
+    confirmButtonText: 'Confirm',
+    cancelButtonText: 'Cancel',
     type: 'warning'
   }).then(() => {
     code.value = codeTemplates[selectedLanguage.value] || ''
-    ElMessage.success('代码已重置')
+    ElMessage.success('Code has been reset')
   }).catch(() => {})
 }
 
 async function runCode() {
   if (!code.value.trim()) {
-    ElMessage.warning('请先编写代码')
+    ElMessage.warning('璇峰厛缂栧啓浠ｇ爜')
     return
   }
 
@@ -425,11 +435,10 @@ async function runCode() {
       testInput: testInput.value
     })
 
-    // 处理API响应
     if (response.success) {
       runResult.value = response.data
       activeTab.value = 'result'
-      
+
       if (response.data.status === 'success') {
         ElMessage.success('代码运行成功')
       } else {
@@ -439,8 +448,8 @@ async function runCode() {
       ElMessage.error('运行失败: ' + (response.message || '未知错误'))
     }
   } catch (error) {
-    console.error('运行代码失败:', error)
-    let errorMessage = '运行代码失败'
+    console.error('杩愯浠ｇ爜澶辫触:', error)
+    let errorMessage = '杩愯浠ｇ爜澶辫触'
     
     if (error.response) {
       errorMessage += ': ' + (error.response.data?.message || error.response.statusText)
@@ -456,7 +465,7 @@ async function runCode() {
 
 async function submitCode() {
   if (!code.value.trim()) {
-    ElMessage.warning('请先编写代码')
+    ElMessage.warning('璇峰厛缂栧啓浠ｇ爜')
     return
   }
 
@@ -470,25 +479,26 @@ async function submitCode() {
       studentId
     })
 
-    // 处理API响应
     if (response.success) {
       submitResult.value = response.data
       showSubmitResult.value = true
-      
-      if (response.data.accepted) {
-        ElMessage.success('恭喜！解答正确')
+
+      if (response.data.status === 'unavailable') {
+        ElMessage.warning('AI evaluation is temporarily unavailable. Fallback result is shown.')
+      } else if (response.data.accepted) {
+        ElMessage.success('答案通过')
       } else {
-        ElMessage.error('解答未通过，请查看详细反馈')
+        ElMessage.error('答案未通过，请查看详细反馈')
       }
     } else {
       ElMessage.error('提交失败: ' + (response.message || '未知错误'))
     }
   } catch (error) {
-    console.error('提交代码失败:', error)
-    let errorMessage = '提交代码失败'
+    console.error('鎻愪氦浠ｇ爜澶辫触:', error)
+    let errorMessage = '鎻愪氦浠ｇ爜澶辫触'
     
     if (error.response) {
-      // 服务器返回错误
+      // 鏈嶅姟鍣ㄨ繑鍥為敊璇?
       errorMessage += ': ' + (error.response.data?.message || error.response.statusText)
     } else if (error.message) {
       errorMessage += ': ' + error.message
@@ -516,25 +526,25 @@ async function loadProblem() {
   try {
     const response = await api.getLeetCodeProblem(problemId)
     if (!response?.success || !response.data) {
-      throw new Error(response?.message || '题目数据为空')
+      throw new Error(response?.message || '棰樼洰鏁版嵁涓虹┖')
     }
     problem.value = response.data
     
-    // 设置默认代码模板
+    // 璁剧疆榛樿浠ｇ爜妯℃澘
     code.value = codeTemplates[selectedLanguage.value] || ''
     
-    // 设置默认测试用例
+    // 璁剧疆榛樿娴嬭瘯鐢ㄤ緥
     if (problem.value.sampleTestCases) {
       testInput.value = problem.value.sampleTestCases.join('\n')
     }
   } catch (error) {
-    console.error('加载题目失败:', error)
-    ElMessage.error('加载题目失败')
+    console.error('鍔犺浇棰樼洰澶辫触:', error)
+    ElMessage.error('鍔犺浇棰樼洰澶辫触')
     router.push('/student/practice')
   }
 }
 
-// 生命周期
+// 鐢熷懡鍛ㄦ湡
 onMounted(() => {
   loadProblem()
 })
@@ -947,3 +957,4 @@ onMounted(() => {
   }
 }
 </style>
+
