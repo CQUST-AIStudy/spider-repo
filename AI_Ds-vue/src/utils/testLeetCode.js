@@ -39,7 +39,7 @@ export async function testLeetCodeFeatures() {
       })
       console.log('提交结果:', submitResponse)
       
-      if (submitResponse.data && submitResult.data.aiFeedback) {
+      if (submitResponse.data && submitResponse.data.aiFeedback) {
         console.log('🤖 AI批改反馈:', submitResponse.data.aiFeedback)
       }
     }

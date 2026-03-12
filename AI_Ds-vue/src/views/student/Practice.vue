@@ -77,7 +77,7 @@
                     <div v-html="getFormattedDescription(selectedPractice)"></div>
                   </div>
                   <div v-else>
-                    <div class="detail-actions" v-if="selectedPractice.type === 'problem'">
+                    <div class="detail-actions" v-if="canStartPractice(selectedPractice)">
                       <el-button type="primary" @click="startProblem(selectedPractice)">开始解答</el-button>
                     </div>
                   </div>
@@ -139,7 +139,7 @@
           <div class="section-content" v-html="getFormattedDescription(selectedPractice)"></div>
         </div>
 
-        <div class="detail-actions-dialog" v-if="selectedPractice.type === 'problem'">
+        <div class="detail-actions-dialog" v-if="canStartPractice(selectedPractice)">
           <el-button type="primary" @click="startProblem(selectedPractice)">开始解题</el-button>
           <el-button @click="detailDialogVisible = false">关闭</el-button>
         </div>
@@ -225,6 +225,15 @@ const currentPagePractices = computed(() => {
 const selectPractice = (practice) => {
   if (!practice) return
   selectedPractice.value = practice
+}
+
+const canStartPractice = (practice) => {
+  if (!practice) return false
+  if (practice.type === 'introduction') return false
+  return practice.type === 'problem' ||
+    practice.type === 'leetcode_problem' ||
+    practice.source === 'leetcode_recommendation' ||
+    !!practice.url
 }
 
 // 开始解题

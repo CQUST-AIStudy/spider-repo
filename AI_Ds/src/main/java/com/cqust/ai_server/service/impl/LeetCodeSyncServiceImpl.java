@@ -15,6 +15,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.io.File;
 import java.math.BigDecimal;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.regex.Pattern;
 
@@ -70,12 +72,13 @@ public class LeetCodeSyncServiceImpl implements LeetCodeSyncService {
     public int syncProblemsFromJson(String jsonFilePath) {
         try {
             logger.info("开始从JSON文件同步LeetCode题目: {}", jsonFilePath);
-            
-            File jsonFile = new File(jsonFilePath);
-            if (!jsonFile.exists()) {
-                logger.error("JSON文件不存在: {}", jsonFilePath);
+
+            File jsonFile = resolveJsonFile(jsonFilePath);
+            if (jsonFile == null || !jsonFile.exists()) {
+                logger.error("JSON文件不存在，原始路径: {}", jsonFilePath);
                 return 0;
             }
+            logger.info("使用数据文件: {}", jsonFile.getAbsolutePath());
 
             JsonNode rootNode = objectMapper.readTree(jsonFile);
             if (!rootNode.isArray()) {
@@ -276,5 +279,38 @@ public class LeetCodeSyncServiceImpl implements LeetCodeSyncService {
             return "code:" + problemCode;
         }
         return "title:" + title.hashCode();
+    }
+
+    private File resolveJsonFile(String inputPath) {
+        if (inputPath == null || inputPath.isBlank()) {
+            return null;
+        }
+
+        Set<Path> candidates = new LinkedHashSet<>();
+        Path given = Paths.get(inputPath);
+        candidates.add(given);
+
+        Path userDir = Paths.get(System.getProperty("user.dir", "."));
+        candidates.add(userDir.resolve(inputPath));
+
+        // 向上回溯目录，兼容从 AI_Ds 子目录启动后端的场景
+        Path current = userDir;
+        for (int i = 0; i < 5 && current != null; i++) {
+            candidates.add(current.resolve(inputPath));
+            candidates.add(current.resolve("datasets").resolve("leetcode").resolve("solutions_cleaned.json"));
+            current = current.getParent();
+        }
+
+        for (Path candidate : candidates) {
+            try {
+                File file = candidate.normalize().toFile();
+                if (file.exists() && file.isFile()) {
+                    return file;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+
+        return null;
     }
 }

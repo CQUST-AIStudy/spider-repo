@@ -132,6 +132,10 @@ public class IntelligentRecommendationServiceImpl implements LeetCodeRecommendat
 
             FeedbackContext feedbackContext = buildFeedbackContext(studentId);
             candidateById = applyHistoryFilter(candidateById, feedbackContext, actualLimit);
+            int minCandidateCount = Math.max(actualLimit, Math.min(60, actualLimit * 3));
+            if (candidateById.size() < minCandidateCount) {
+                supplementCandidates(candidateById, minCandidateCount);
+            }
 
             logger.info("召回候选题目数量(过滤后): {}", candidateById.size());
 
@@ -650,6 +654,33 @@ public class IntelligentRecommendationServiceImpl implements LeetCodeRecommendat
                 continue;
             }
             candidateById.putIfAbsent(problem.getId(), problem);
+        }
+    }
+
+    private void supplementCandidates(Map<Long, LeetCodeProblem> candidateById, int targetCount) {
+        if (candidateById == null || targetCount <= 0) {
+            return;
+        }
+
+        try {
+            int batchSize = Math.max(targetCount * 2, 40);
+            List<LeetCodeProblem> pageProblems = problemDao.findByPage(0, batchSize);
+            addCandidates(candidateById, pageProblems);
+            if (candidateById.size() >= targetCount) {
+                return;
+            }
+        } catch (Exception e) {
+            logger.warn("分页补充候选失败: {}", e.getMessage());
+        }
+
+        try {
+            List<LeetCodeProblem> allProblems = problemDao.findAll();
+            if (allProblems != null && !allProblems.isEmpty()) {
+                Collections.shuffle(allProblems);
+                addCandidates(candidateById, allProblems);
+            }
+        } catch (Exception e) {
+            logger.warn("全量补充候选失败: {}", e.getMessage());
         }
     }
 

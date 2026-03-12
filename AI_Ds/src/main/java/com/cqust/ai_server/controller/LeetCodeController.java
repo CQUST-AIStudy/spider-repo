@@ -3,10 +3,13 @@ package com.cqust.ai_server.controller;
 import com.cqust.ai_server.entity.LeetCodeProblem;
 import com.cqust.ai_server.service.LeetCodeProblemService;
 import com.cqust.ai_server.service.LeetCodeExecutionService;
+import com.cqust.ai_server.service.StudentService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpSession;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,7 +19,10 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/leetcode")
-@CrossOrigin(origins = "http://localhost:8080", allowCredentials = "true")
+@CrossOrigin(
+        origins = {"http://localhost:8080", "http://127.0.0.1:8080", "http://localhost:5173", "http://127.0.0.1:5173"},
+        allowCredentials = "true"
+)
 public class LeetCodeController {
 
     @Autowired
@@ -24,6 +30,9 @@ public class LeetCodeController {
 
     @Autowired
     private LeetCodeExecutionService executionService;
+
+    @Autowired
+    private StudentService studentService;
 
     /**
      * 获取题目详情
@@ -68,13 +77,18 @@ public class LeetCodeController {
      */
     @PostMapping("/run")
     public ResponseEntity<Map<String, Object>> runCode(
-            @RequestBody Map<String, Object> request) {
+            @RequestBody Map<String, Object> request,
+            HttpServletRequest httpRequest) {
         
         Map<String, Object> response = new HashMap<>();
         
         try {
-            // 暂时使用固定学生ID，后续可以从JWT token或session获取
-            Integer studentId = 1;
+            Integer studentId = getCurrentStudentId(httpRequest, request);
+            if (studentId == null) {
+                response.put("success", false);
+                response.put("message", "用户未登录");
+                return ResponseEntity.ok(response);
+            }
 
             Long problemId = Long.valueOf(request.get("problemId").toString());
             String code = (String) request.get("code");
@@ -101,13 +115,18 @@ public class LeetCodeController {
      */
     @PostMapping("/submit")
     public ResponseEntity<Map<String, Object>> submitSolution(
-            @RequestBody Map<String, Object> request) {
+            @RequestBody Map<String, Object> request,
+            HttpServletRequest httpRequest) {
         
         Map<String, Object> response = new HashMap<>();
         
         try {
-            // 暂时使用固定学生ID，后续可以从JWT token或session获取
-            Integer studentId = 1;
+            Integer studentId = getCurrentStudentId(httpRequest, request);
+            if (studentId == null) {
+                response.put("success", false);
+                response.put("message", "用户未登录");
+                return ResponseEntity.ok(response);
+            }
 
             Long problemId = Long.valueOf(request.get("problemId").toString());
             String code = (String) request.get("code");
@@ -126,6 +145,61 @@ public class LeetCodeController {
         }
 
         return ResponseEntity.ok(response);
+    }
+
+    private Integer getCurrentStudentId(HttpServletRequest request, Map<String, Object> payload) {
+        if (request != null) {
+            HttpSession session = request.getSession(false);
+            if (session != null) {
+                Integer studentId = parseInteger(session.getAttribute("studentId"));
+                if (studentId != null) {
+                    return studentId;
+                }
+                Integer usernum = parseInteger(session.getAttribute("usernum"));
+                if (usernum != null) {
+                    return usernum;
+                }
+                String username = (String) session.getAttribute("username");
+                if (username != null && !username.isBlank()) {
+                    try {
+                        Integer sid = studentService.findStudentIdByUsername(username);
+                        if (sid != null) {
+                            return sid;
+                        }
+                    } catch (Exception ignored) {
+                    }
+                }
+            }
+        }
+
+        if (payload != null) {
+            Integer studentId = parseInteger(payload.get("studentId"));
+            if (studentId != null) {
+                return studentId;
+            }
+        }
+
+        return null;
+    }
+
+    private Integer parseInteger(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            if (value instanceof Number) {
+                int parsed = ((Number) value).intValue();
+                return parsed > 0 ? parsed : null;
+            }
+            String text = String.valueOf(value).trim();
+            if (text.isEmpty()) {
+                return null;
+            }
+            int parsed = Integer.parseInt(text);
+            return parsed > 0 ? parsed : null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**

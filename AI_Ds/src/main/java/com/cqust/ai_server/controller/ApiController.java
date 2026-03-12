@@ -70,6 +70,12 @@ public class ApiController {
     @Qualifier("intelligentRecommendationService")
     private LeetCodeRecommendationService leetCodeRecommendationService;
 
+    @Autowired
+    private LeetCodeSyncService leetCodeSyncService;
+
+    private static final String LEETCODE_CLEANED_DATA_PATH = "datasets/leetcode/solutions_cleaned.json";
+    private volatile boolean leetCodeDataWarmupAttempted = false;
+
     @Value("${tap.ai.openai.api-key:}")
     private String deepseekApiKey;
 
@@ -576,6 +582,12 @@ public class ApiController {
             // 优先尝试使用新的智能LeetCode推荐系统
             try {
                 List<LeetCodeRecommendItem> leetCodeItems = leetCodeRecommendationService.generateRecommendationSync(studentId, 20);
+                if (leetCodeItems == null || leetCodeItems.isEmpty()) {
+                    int syncedCount = warmupLeetCodeDataIfNeeded();
+                    if (syncedCount > 0) {
+                        leetCodeItems = leetCodeRecommendationService.generateRecommendationSync(studentId, 20);
+                    }
+                }
                 if (leetCodeItems != null && !leetCodeItems.isEmpty()) {
                     List<Map<String, Object>> allPractices = new ArrayList<>();
                     
@@ -660,6 +672,27 @@ public class ApiController {
         }
 
         return ResponseEntity.ok(response);
+    }
+
+    private int warmupLeetCodeDataIfNeeded() {
+        if (leetCodeDataWarmupAttempted) {
+            return 0;
+        }
+
+        synchronized (this) {
+            if (leetCodeDataWarmupAttempted) {
+                return 0;
+            }
+            leetCodeDataWarmupAttempted = true;
+            try {
+                int synced = leetCodeSyncService.syncProblemsFromJson(LEETCODE_CLEANED_DATA_PATH);
+                System.out.println("LeetCode 数据预热完成，导入数量: " + synced);
+                return synced;
+            } catch (Exception e) {
+                System.out.println("LeetCode 数据预热失败: " + e.getMessage());
+                return 0;
+            }
+        }
     }
 
     /**

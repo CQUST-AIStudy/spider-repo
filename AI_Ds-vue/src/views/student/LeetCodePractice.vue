@@ -462,10 +462,12 @@ async function submitCode() {
 
   submitting.value = true
   try {
+    const studentId = getCurrentStudentId()
     const response = await api.submitLeetCodeSolution({
       problemId: problem.value.id,
       code: code.value,
-      language: selectedLanguage.value
+      language: selectedLanguage.value,
+      studentId
     })
 
     // 处理API响应
