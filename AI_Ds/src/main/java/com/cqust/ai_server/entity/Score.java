@@ -7,6 +7,7 @@ public class Score {
     private String username;
     private String real_name;
     private int experiment_id;
+    private Integer num;
     private Integer score;
 
     public String getReal_name() {
@@ -52,6 +53,7 @@ public class Score {
                 "score_id=" + score_id +
                 ", username='" + username + '\'' +
                 ", experiment_id=" + experiment_id +
+                ", num=" + num +
                 ", score=" + score +
                 ", submit_time=" + submit_time +
                 ", plagiarism_rate=" + plagiarism_rate +
@@ -98,6 +100,14 @@ public class Score {
 
     public void setExperiment_id(int experiment_id) {
         this.experiment_id = experiment_id;
+    }
+
+    public Integer getNum() {
+        return num;
+    }
+
+    public void setNum(Integer num) {
+        this.num = num;
     }
 
     public void setSubmit_time(Date submit_time) {

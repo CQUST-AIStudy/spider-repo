@@ -5,6 +5,7 @@ import com.tap.backend.repo.TeachingClassRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,12 +24,17 @@ public class PtaSyncService {
     private final TeachingClassRepository classRepo;
     private final RestTemplate restTemplate;
 
-    @Value("${pta.spider-url:http://localhost:8100}")
+    @Value("${pta.spider-url:http://127.0.0.1:8100}")
     private String spiderUrl;
 
-    public PtaSyncService(TeachingClassRepository classRepo) {
+    public PtaSyncService(TeachingClassRepository classRepo,
+                          @Value("${pta.connect-timeout-ms:5000}") int connectTimeoutMs,
+                          @Value("${pta.read-timeout-ms:20000}") int readTimeoutMs) {
         this.classRepo = classRepo;
-        this.restTemplate = new RestTemplate();
+        SimpleClientHttpRequestFactory rf = new SimpleClientHttpRequestFactory();
+        rf.setConnectTimeout(Math.max(1000, connectTimeoutMs));
+        rf.setReadTimeout(Math.max(1000, readTimeoutMs));
+        this.restTemplate = new RestTemplate(rf);
     }
 
     @Transactional

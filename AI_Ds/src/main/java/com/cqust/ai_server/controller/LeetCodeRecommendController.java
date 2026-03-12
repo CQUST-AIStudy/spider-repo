@@ -7,6 +7,7 @@ import com.cqust.ai_server.service.LeetCodeSyncService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -25,6 +26,7 @@ public class LeetCodeRecommendController {
     private static final Logger logger = LoggerFactory.getLogger(LeetCodeRecommendController.class);
 
     @Autowired
+    @Qualifier("intelligentRecommendationService")
     private LeetCodeRecommendationService recommendationService;
 
     @Autowired

@@ -80,12 +80,15 @@ export async function createFolder(folderName) {
   return tapClient.post('/api/uploads/folders', { folderName })
 }
 
-export async function uploadFiles(folderId, files) {
+export async function uploadFiles(folderId, files, relativePaths = null) {
   const fd = new FormData()
   const paths = []
-  files.forEach(f => {
+  files.forEach((f, idx) => {
     fd.append('files', f)
-    paths.push(f.name)
+    const p = Array.isArray(relativePaths) && relativePaths[idx]
+      ? relativePaths[idx]
+      : (f.webkitRelativePath || f.name)
+    paths.push(p)
   })
   fd.append('relativePaths', JSON.stringify(paths))
   const token = localStorage.getItem('tap_token')
@@ -96,6 +99,21 @@ export async function uploadFiles(folderId, files) {
   })
   const json = await res.json()
   if (!res.ok) throw new Error(json?.message || '上传失败')
+  return json
+}
+
+export async function uploadZipFolder(folderName, file) {
+  const fd = new FormData()
+  if (folderName) fd.append('folderName', folderName)
+  fd.append('file', file)
+  const token = localStorage.getItem('tap_token')
+  const res = await fetch(`${TAP_BASE}/api/uploads/folders/zip`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: fd
+  })
+  const json = await res.json()
+  if (!res.ok) throw new Error(json?.message || 'ZIP upload failed')
   return json
 }
 
@@ -136,6 +154,10 @@ export function chatSend(message, history = []) {
 // ========== Agent ==========
 export function submitAgentJob(uploadFolderId) {
   return tapClient.post('/api/agent/jobs', { uploadFolderId: Number(uploadFolderId) })
+}
+
+export function listAgentJobs(limit = 20) {
+  return tapClient.get('/api/agent/jobs', { params: { limit } })
 }
 
 export function queryAgentJob(jobId) {

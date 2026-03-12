@@ -11,64 +11,59 @@ import java.util.List;
  */
 @Mapper
 public interface LeetCodeProblemDao {
-
+    
     /**
-     * 根据ID查询题目
+     * 根据ID查找题目
      */
     LeetCodeProblem findById(@Param("id") Long id);
-
+    
     /**
-     * 根据sourceKey查询题目
+     * 根据题目代码查找题目
      */
-    LeetCodeProblem findBySourceKey(@Param("sourceKey") String sourceKey);
-
+    LeetCodeProblem findByProblemCode(@Param("problemCode") String problemCode);
+    
     /**
-     * 查询所有题目
+     * 获取所有题目
      */
     List<LeetCodeProblem> findAll();
-
+    
     /**
-     * 根据难度查询题目
+     * 根据难度查找题目
      */
     List<LeetCodeProblem> findByDifficulty(@Param("difficulty") String difficulty);
 
     /**
-     * 根据质量分数范围查询题目
+     * 批量根据ID查找题目
      */
-    List<LeetCodeProblem> findByQualityRange(@Param("minQuality") Double minQuality, @Param("maxQuality") Double maxQuality);
-
+    List<LeetCodeProblem> findByIds(@Param("ids") List<Long> ids);
+    
     /**
-     * 插入题目（支持重复键更新）
+     * 插入题目
      */
-    int insertOrUpdate(LeetCodeProblem problem);
-
+    void insert(LeetCodeProblem problem);
+    
     /**
-     * 批量插入题目
+     * 插入或更新题目
      */
-    int batchInsert(@Param("problems") List<LeetCodeProblem> problems);
-
+    void insertOrUpdate(LeetCodeProblem problem);
+    
     /**
      * 更新题目
      */
-    int update(LeetCodeProblem problem);
-
+    void update(LeetCodeProblem problem);
+    
     /**
      * 删除题目
      */
-    int deleteById(@Param("id") Long id);
-
+    void deleteById(@Param("id") Long id);
+    
+    /**
+     * 分页查询题目
+     */
+    List<LeetCodeProblem> findByPage(@Param("offset") int offset, @Param("limit") int limit);
+    
     /**
      * 统计题目总数
      */
     int count();
-
-    /**
-     * 根据标签查询题目
-     */
-    List<LeetCodeProblem> findByTag(@Param("tagName") String tagName);
-
-    /**
-     * 根据多个标签查询题目（交集）
-     */
-    List<LeetCodeProblem> findByTags(@Param("tagNames") List<String> tagNames);
 }

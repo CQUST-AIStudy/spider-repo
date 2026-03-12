@@ -16,6 +16,7 @@ import okhttp3.Request;
 import okhttp3.Response;
 import org.apache.tomcat.util.net.openssl.ciphers.Authentication;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationContext;
 import org.springframework.http.HttpStatus;
@@ -66,6 +67,7 @@ public class ApiController {
     private com.cqust.ai_server.service.ProfileService profileService;
 
     @Autowired
+    @Qualifier("intelligentRecommendationService")
     private LeetCodeRecommendationService leetCodeRecommendationService;
 
     @Value("${tap.ai.openai.api-key:}")
@@ -571,7 +573,7 @@ public class ApiController {
         Map<String, Object> response = new HashMap<>();
 
         try {
-            // 优先尝试使用新的LeetCode推荐系统
+            // 优先尝试使用新的智能LeetCode推荐系统
             try {
                 List<LeetCodeRecommendItem> leetCodeItems = leetCodeRecommendationService.generateRecommendationSync(studentId, 20);
                 if (leetCodeItems != null && !leetCodeItems.isEmpty()) {
@@ -581,6 +583,7 @@ public class ApiController {
                         Map<String, Object> practice = new HashMap<>();
                         practice.put("type", "leetcode_problem");
                         practice.put("id", item.getProblemId());
+                        practice.put("problemId", item.getProblemId()); // 添加problemId字段
                         practice.put("title", item.getProblem().getTitleMain());
                         practice.put("difficulty", item.getProblem().getDifficulty());
                         practice.put("estimatedMinutes", item.getProblem().getEstimatedMinutes());
@@ -588,6 +591,7 @@ public class ApiController {
                         practice.put("reason", item.getReasonText());
                         practice.put("problemCode", item.getProblem().getProblemCode());
                         practice.put("source", "leetcode_recommendation");
+                        // 不再需要URL字段，因为使用内置练习页面
                         
                         allPractices.add(practice);
                     }

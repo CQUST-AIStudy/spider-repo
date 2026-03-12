@@ -37,6 +37,20 @@ def parse_pdf(pdf_bytes: bytes) -> ParsedDocument:
                 except Exception:
                     continue
 
+            # Fallback for scanned/image-only pages:
+            # render whole page to PNG so OCR can still run.
+            if len(images) == 0 and len(text.strip()) < 20:
+                try:
+                    pix = page.get_pixmap(dpi=180, alpha=False)
+                    page_png = pix.tobytes("png")
+                    images.append(ImageInfo(
+                        page=page_num + 1,
+                        bbox=[0.0, 0.0, float(page.rect.width), float(page.rect.height)],
+                        image_bytes=page_png,
+                    ))
+                except Exception:
+                    pass
+
             pages.append(ParsedPage(
                 page_num=page_num + 1,
                 text=text,

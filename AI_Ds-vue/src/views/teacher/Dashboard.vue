@@ -88,6 +88,7 @@ const userInfo = computed(() => {
 const recentExperiments = ref([])
 const allExperiments = ref([])
 const recentSubmissions = ref([])
+const chartStudentCount = ref(0)
 const stats = reactive({ experimentCount: 0, activeExperiments: 0, pendingSubmissions: 0, classCount: 0 })
 
 const statCards = computed(() => [
@@ -104,6 +105,7 @@ const loadExperiments = async () => {
     if (response?.data && Array.isArray(response.data)) experiments = response.data
     else if (Array.isArray(response)) experiments = response
     else if (response?.data?.data) experiments = response.data.data
+    chartStudentCount.value = Number(response?.studentCount || response?.data?.studentCount || 0) || 0
     allExperiments.value = Array.isArray(experiments) ? experiments : []
     recentExperiments.value = allExperiments.value.slice(0, 4)
     stats.experimentCount = allExperiments.value.length
@@ -145,10 +147,12 @@ const getCompletionColor = rate => {
 
 const initClassChart = () => {
   if (!classChartRef.value || !allExperiments.value.length) return
-  const studentCount = allExperiments.value.reduce((max, e) => Math.max(max, e.submissionCount || 0), 0) || 49
+  const maxSubmissionCount = allExperiments.value.reduce((max, e) => Math.max(max, e.submissionCount || 0), 0)
+  const studentCount = chartStudentCount.value > 0 ? chartStudentCount.value : (maxSubmissionCount || 49)
   const chartData = allExperiments.value.map(e => {
     const sc = e.submissionCount || 0
-    return { name: e.name, rate: studentCount > 0 ? Math.round(sc / studentCount * 100) : 0 }
+    const rate = studentCount > 0 ? Math.round((sc / studentCount) * 100) : 0
+    return { name: e.name, rate: Math.min(100, Math.max(0, rate)) }
   }).sort((a, b) => b.rate - a.rate).slice(0, 10)
 
   classChart = echarts.init(classChartRef.value)

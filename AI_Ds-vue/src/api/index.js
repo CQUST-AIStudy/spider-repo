@@ -436,6 +436,21 @@ export default {
     }
   },
 
+  // 获取LeetCode题目详情
+  async getLeetCodeProblem(problemId) {
+    return apiClient.get(`/api/leetcode/problem/${problemId}`)
+  },
+
+  // 运行LeetCode代码
+  async runLeetCodeSolution(data) {
+    return apiClient.post('/api/leetcode/run', data)
+  },
+
+  // 提交LeetCode解答
+  async submitLeetCodeSolution(data) {
+    return apiClient.post('/api/leetcode/submit', data)
+  },
+
   // 获取推荐练习
   async getRecommendedPractices() {
     if (process.env.NODE_ENV === 'development' && USE_MOCK_DATA) {
@@ -513,7 +528,51 @@ export default {
     try {
       console.log('正在获取提交详情...');
       const response = await apiClient.get(`/api/submissions/${submissionId}`);
-      console.log('获取到提交详情数据:', response);
+      console.log('getSubmissionDetail response:', response);
+      if (response && response.success === false) {
+        throw new Error(response.message || 'Failed to load submission detail')
+      }
+
+      if (typeof submissionId === 'string' && submissionId.includes('-')) {
+        const [studentId, experimentId] = submissionId.split('-')
+
+        if (!response?.code) {
+          try {
+            const codeRes = await apiClient.get(`/api/student/code/${studentId}/${experimentId}`)
+            if (codeRes?.success && codeRes?.code?.code) {
+              response.code = codeRes.code.code
+            }
+          } catch (e) {
+            console.warn('Fallback code query failed:', e)
+          }
+        }
+
+        if (!response?.studentName || !response?.studentId || !response?.experimentName) {
+          try {
+            const allRes = await apiClient.get('/api/teacher/allStudentExperiments')
+            const allList = Array.isArray(allRes) ? allRes : allRes?.data || []
+            const matched = allList.find(item =>
+              String(item.studentId) === String(studentId) &&
+              String(item.experimentId) === String(experimentId)
+            )
+            if (matched) {
+              response.studentId = response.studentId || matched.studentId
+              response.studentName = response.studentName || matched.studentName
+              response.experimentId = response.experimentId || matched.experimentId
+              response.experimentName = response.experimentName || matched.experimentName
+              response.class = response.class || matched.className
+              response.submitTime = response.submitTime || matched.submitTime || null
+              response.date = response.date || matched.submitTime || null
+              if (response.score === null || response.score === undefined) {
+                response.score = matched.score > 0 ? matched.score : null
+              }
+            }
+          } catch (e) {
+            console.warn('Fallback student/experiment merge failed:', e)
+          }
+        }
+      }
+
       return response;
     } catch (error) {
       console.error('获取提交详情失败:', error);

@@ -235,10 +235,18 @@ const startProblem = (practice) => {
 
   detailDialogVisible.value = false
 
-  // 构建跳转链接
-  const externalUrl = currentPractice.url
-  // 使用router进行导航
-  window.open(externalUrl, '_blank')
+  // 跳转到内置的LeetCode练习页面
+  if (currentPractice.type === 'leetcode_problem' || currentPractice.source === 'leetcode_recommendation') {
+    router.push(`/student/leetcode-practice/${currentPractice.id || currentPractice.problemId}`)
+  } else {
+    // 对于其他类型的题目，如果有URL则外部跳转
+    const externalUrl = currentPractice.url
+    if (externalUrl) {
+      window.open(externalUrl, '_blank')
+    } else {
+      ElMessage.warning('该题目暂不支持在线练习')
+    }
+  }
 
   ElMessage({
     message: `开始解答题目: ${currentPractice.title || currentPractice.name}`,

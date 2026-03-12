@@ -52,6 +52,11 @@ const routes = [
         component: () => import('../views/student/Practice.vue')
       },
       {
+        path: 'leetcode-practice/:id',
+        name: 'LeetCodePractice',
+        component: () => import('../views/student/LeetCodePractice.vue')
+      },
+      {
         path: 'ability-profile',
         name: 'AbilityProfile',
         component: () => import('../views/student/AbilityProfile.vue')

@@ -55,7 +55,7 @@ class VlmResult(BaseModel):
 
 class EvidenceBlock(BaseModel):
     evidence_id: str
-    kind: str  # text, ocr, vlm, vlm_failed
+    kind: str  # text, ocr, vlm, image, vlm_failed
     page: int
     content: str
     confidence: Optional[float] = None

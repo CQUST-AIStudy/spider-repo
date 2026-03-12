@@ -10,6 +10,12 @@ $PYTHON = "F:\downloads\miniconda\envs\mylangchain\python.exe"
 
 Write-Host "Starting Grading Worker (Python: $PYTHON)..." -ForegroundColor Green
 
+if (-not $env:CELERY_CONCURRENCY) { $env:CELERY_CONCURRENCY = "4" }
+if (-not $env:CELERY_POOL) { $env:CELERY_POOL = "threads" }
+if (-not $env:DIMENSION_SCORE_CONCURRENCY) { $env:DIMENSION_SCORE_CONCURRENCY = "2" }
+
+Write-Host "CELERY_CONCURRENCY=$env:CELERY_CONCURRENCY, CELERY_POOL=$env:CELERY_POOL, DIMENSION_SCORE_CONCURRENCY=$env:DIMENSION_SCORE_CONCURRENCY" -ForegroundColor DarkCyan
+
 # Start Celery worker in background
 $celeryJob = Start-Job -ScriptBlock {
     param($py)

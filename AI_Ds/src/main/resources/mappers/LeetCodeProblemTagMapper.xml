@@ -1,84 +1,74 @@
-<?xml version="1.0" encoding="UTF-8" ?>
+<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.cqust.ai_server.dao.LeetCodeProblemTagDao">
 
     <!-- 结果映射 -->
-    <resultMap id="leetCodeProblemTagResultMap" type="com.cqust.ai_server.entity.LeetCodeProblemTag">
-        <id property="id" column="id"/>
-        <result property="problemId" column="problem_id"/>
-        <result property="tagName" column="tag_name"/>
-        <result property="tagCategory" column="tag_category"/>
-        <result property="relevanceScore" column="relevance_score"/>
-        <result property="isPrimary" column="is_primary"/>
-        <result property="createdAt" column="created_at"/>
+    <resultMap id="LeetCodeProblemTagResultMap" type="com.cqust.ai_server.entity.LeetCodeProblemTag">
+        <id column="id" property="id"/>
+        <result column="problem_id" property="problemId"/>
+        <result column="tag_type" property="tagType"/>
+        <result column="tag_value" property="tagValue"/>
+        <result column="confidence" property="confidence"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
     </resultMap>
 
-    <!-- 根据题目ID查询标签 -->
-    <select id="findByProblemId" resultMap="leetCodeProblemTagResultMap">
+    <!-- 根据题目ID查找标签 -->
+    <select id="findByProblemId" resultMap="LeetCodeProblemTagResultMap">
         SELECT * FROM leetcode_problem_tag 
         WHERE problem_id = #{problemId}
-        ORDER BY is_primary DESC, relevance_score DESC
+        ORDER BY tag_type, confidence DESC
     </select>
 
-    <!-- 根据标签名查询题目标签 -->
-    <select id="findByTagName" resultMap="leetCodeProblemTagResultMap">
-        SELECT * FROM leetcode_problem_tag 
-        WHERE tag_name = #{tagName}
-        ORDER BY relevance_score DESC
+    <!-- 根据标签类型和值查找题目ID -->
+    <select id="findProblemIdsByTag" resultType="java.lang.Long">
+        SELECT DISTINCT problem_id FROM leetcode_problem_tag 
+        WHERE tag_type = #{tagType} AND tag_value = #{tagValue}
+        ORDER BY confidence DESC
     </select>
 
-    <!-- 插入或更新标签 -->
-    <insert id="insertOrUpdate" parameterType="com.cqust.ai_server.entity.LeetCodeProblemTag" useGeneratedKeys="true" keyProperty="id">
-        INSERT INTO leetcode_problem_tag (
-            problem_id, tag_name, tag_category, relevance_score, is_primary
-        ) VALUES (
-            #{problemId}, #{tagName}, #{tagCategory}, #{relevanceScore}, #{isPrimary}
-        ) ON DUPLICATE KEY UPDATE
-            tag_category = VALUES(tag_category),
-            relevance_score = VALUES(relevance_score),
-            is_primary = VALUES(is_primary)
+    <!-- 根据多个标签查找题目ID -->
+    <select id="findProblemIdsByTags" resultType="java.lang.Long">
+        SELECT DISTINCT problem_id FROM leetcode_problem_tag 
+        WHERE tag_type = #{tagType} 
+        AND tag_value IN
+        <foreach collection="tagValues" item="tagValue" open="(" separator="," close=")">
+            #{tagValue}
+        </foreach>
+        ORDER BY confidence DESC
+    </select>
+
+    <!-- 获取所有标签类型 -->
+    <select id="findAllTagTypes" resultType="java.lang.String">
+        SELECT DISTINCT tag_type FROM leetcode_problem_tag 
+        ORDER BY tag_type
+    </select>
+
+    <!-- 根据标签类型获取所有标签值 -->
+    <select id="findTagValuesByType" resultType="java.lang.String">
+        SELECT DISTINCT tag_value FROM leetcode_problem_tag 
+        WHERE tag_type = #{tagType}
+        ORDER BY tag_value
+    </select>
+
+    <!-- 插入标签 -->
+    <insert id="insert" parameterType="com.cqust.ai_server.entity.LeetCodeProblemTag" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO leetcode_problem_tag (problem_id, tag_type, tag_value, confidence)
+        VALUES (#{problemId}, #{tagType}, #{tagValue}, #{confidence})
     </insert>
 
     <!-- 批量插入标签 -->
     <insert id="batchInsert" parameterType="java.util.List">
-        INSERT INTO leetcode_problem_tag (
-            problem_id, tag_name, tag_category, relevance_score, is_primary
-        ) VALUES
+        INSERT INTO leetcode_problem_tag (problem_id, tag_type, tag_value, confidence)
+        VALUES
         <foreach collection="tags" item="tag" separator=",">
-            (#{tag.problemId}, #{tag.tagName}, #{tag.tagCategory}, #{tag.relevanceScore}, #{tag.isPrimary})
+            (#{tag.problemId}, #{tag.tagType}, #{tag.tagValue}, #{tag.confidence})
         </foreach>
-        ON DUPLICATE KEY UPDATE
-            tag_category = VALUES(tag_category),
-            relevance_score = VALUES(relevance_score),
-            is_primary = VALUES(is_primary)
     </insert>
 
     <!-- 删除题目的所有标签 -->
     <delete id="deleteByProblemId">
         DELETE FROM leetcode_problem_tag WHERE problem_id = #{problemId}
     </delete>
-
-    <!-- 删除特定标签 -->
-    <delete id="deleteByProblemIdAndTag">
-        DELETE FROM leetcode_problem_tag 
-        WHERE problem_id = #{problemId} AND tag_name = #{tagName}
-    </delete>
-
-    <!-- 获取所有标签名称 -->
-    <select id="getAllTagNames" resultType="java.lang.String">
-        SELECT DISTINCT tag_name FROM leetcode_problem_tag ORDER BY tag_name
-    </select>
-
-    <!-- 统计标签使用次数 -->
-    <select id="getTagUsageStats" resultType="java.util.Map">
-        SELECT 
-            tag_name as tagName,
-            tag_category as tagCategory,
-            COUNT(*) as usageCount,
-            AVG(relevance_score) as avgRelevance
-        FROM leetcode_problem_tag 
-        GROUP BY tag_name, tag_category
-        ORDER BY usageCount DESC
-    </select>
 
 </mapper>

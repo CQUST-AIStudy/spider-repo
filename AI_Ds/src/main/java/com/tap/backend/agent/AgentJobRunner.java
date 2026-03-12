@@ -171,41 +171,90 @@ public class AgentJobRunner {
   private Map<Long, AgentFileExtractEntity> stageExtract(AgentJobEntity job, List<AgentJobFileEntity> jobFiles) {
     Map<Long, AgentFileExtractEntity> map = new HashMap<>();
     int total = jobFiles.size();
-    int done = 0;
-    for (AgentJobFileEntity jf : jobFiles) {
-      try {
-        DocumentEntity doc = jf.getDocument();
-        String fullText = doc.getExtractedText();
-        if (fullText == null || fullText.isBlank()) {
-          byte[] bytes = storage.getBytes(jf.getObjectKey());
-          fullText = textExtractor.extract(jf.getFilename(), jf.getContentType(), bytes);
-          // Save back to document for future use
-          if (fullText != null && !fullText.isBlank()) {
-            int maxChars = docProps.extractedTextMaxChars() <= 0 ? 20000 : docProps.extractedTextMaxChars();
-            doc.setExtractedText(fullText.length() > maxChars ? fullText.substring(0, maxChars) : fullText);
-            doc.setExtractedTextTruncated(fullText.length() > maxChars);
-            doc.setLanguage(LanguageHeuristic.detect(fullText));
-            documentRepo.save(doc);
-          }
-        }
-        if (fullText == null) fullText = "";
+    if (total == 0) return map;
 
-        // Build structured AI input: title candidate + headings + abstract + body preview
-        AgentFileExtractEntity ext = new AgentFileExtractEntity();
-        ext.setJobFile(jf);
-        ext.setTitleCandidate(guessTitle(fullText, jf.getFilename()));
-        ext.setAbstractSnippet(extractAbstract(fullText));
-        ext.setBodyPreview(safe(fullText, AI_TEXT_LIMIT));
-        ext.setHeadingsJson(om.writeValueAsString(extractHeadings(fullText)));
-        ext.setMetadataJson(om.writeValueAsString(guessMetadata(fullText, jf.getFilename())));
-        map.put(jf.getId(), extractRepo.save(ext));
+    // Pre-read values in main thread to avoid lazy-loading in worker threads.
+    Map<Long, String> extractedTextByDocId = new HashMap<>();
+    List<Long> docIds = new ArrayList<>();
+    for (AgentJobFileEntity jf : jobFiles) {
+      Long docId = jf.getDocument().getId();
+      if (docId != null) docIds.add(docId);
+    }
+    for (DocumentEntity d : documentRepo.findAllById(docIds)) {
+      extractedTextByDocId.put(d.getId(), d.getExtractedText());
+    }
+
+    record ExtractTask(Long jfId, Long docId, String objectKey, String filename, String contentType, String cachedText) {}
+    record ExtractResult(Long jfId, AgentFileExtractEntity ext, String errorMessage) {}
+
+    List<ExtractTask> tasks = new ArrayList<>();
+    for (AgentJobFileEntity jf : jobFiles) {
+      Long docId = jf.getDocument().getId();
+      tasks.add(new ExtractTask(
+          jf.getId(),
+          docId,
+          jf.getObjectKey(),
+          jf.getFilename(),
+          jf.getContentType(),
+          docId == null ? null : extractedTextByDocId.get(docId)
+      ));
+    }
+
+    var mdc = MDC.getCopyOfContextMap();
+    ExecutorCompletionService<ExtractResult> cs = new ExecutorCompletionService<>(docExecutor);
+    for (ExtractTask task : tasks) {
+      cs.submit(() -> {
+        if (mdc != null) MDC.setContextMap(mdc);
+        try {
+          String fullText = task.cachedText();
+          if (fullText == null || fullText.isBlank()) {
+            byte[] bytes = storage.getBytes(task.objectKey());
+            fullText = textExtractor.extract(task.filename(), task.contentType(), bytes);
+
+            // Save extracted text back to document for future reuse.
+            if (task.docId() != null && fullText != null && !fullText.isBlank()) {
+              int maxChars = docProps.extractedTextMaxChars() <= 0 ? 20000 : docProps.extractedTextMaxChars();
+              final String finalFullText = fullText;
+              documentRepo.findById(task.docId()).ifPresent(doc -> {
+                doc.setExtractedText(finalFullText.length() > maxChars ? finalFullText.substring(0, maxChars) : finalFullText);
+                doc.setExtractedTextTruncated(finalFullText.length() > maxChars);
+                doc.setLanguage(LanguageHeuristic.detect(finalFullText));
+                documentRepo.save(doc);
+              });
+            }
+          }
+          if (fullText == null) fullText = "";
+
+          AgentFileExtractEntity ext = new AgentFileExtractEntity();
+          ext.setJobFile(jobFileRepo.getReferenceById(task.jfId()));
+          ext.setTitleCandidate(guessTitle(fullText, task.filename()));
+          ext.setAbstractSnippet(extractAbstract(fullText));
+          ext.setBodyPreview(safe(fullText, AI_TEXT_LIMIT));
+          ext.setHeadingsJson(om.writeValueAsString(extractHeadings(fullText)));
+          ext.setMetadataJson(om.writeValueAsString(guessMetadata(fullText, task.filename())));
+          return new ExtractResult(task.jfId(), extractRepo.save(ext), null);
+        } catch (Exception e) {
+          return new ExtractResult(task.jfId(), null, e.getMessage());
+        }
+      });
+    }
+
+    for (int i = 0; i < total; i++) {
+      try {
+        ExtractResult result = cs.take().get();
+        if (result.ext() != null) {
+          map.put(result.jfId(), result.ext());
+        } else {
+          jobFileRepo.findById(result.jfId()).ifPresent(jf -> {
+            jf.setStatus("EXTRACT_FAILED");
+            jf.setErrorMessage(result.errorMessage());
+            jobFileRepo.save(jf);
+          });
+        }
       } catch (Exception e) {
-        jf.setStatus("EXTRACT_FAILED");
-        jf.setErrorMessage(e.getMessage());
-        jobFileRepo.save(jf);
+        log.warn("extract task error", e);
       }
-      done++;
-      setStep(job, "EXTRACT", 12 + (int)(18.0 * done / Math.max(1, total)), null);
+      setStep(job, "EXTRACT", 12 + (int)(18.0 * (i + 1) / Math.max(1, total)), null);
     }
     return map;
   }
@@ -378,23 +427,51 @@ public class AgentJobRunner {
   // ==================== Stage 5b: Apply ====================
   private void stageApply(AgentJobEntity job, List<AgentOrganizePlanEntity> plans) {
     int total = plans.size();
-    int done = 0;
+    if (total == 0) return;
+
+    record ApplyTask(Long planId, String sourceObjectKey, String targetObjectKey, boolean alreadyApplied) {}
+    record ApplyResult(Long planId, boolean success, String errorMessage) {}
+
+    Map<Long, AgentOrganizePlanEntity> planMap = new HashMap<>();
+    List<ApplyTask> tasks = new ArrayList<>();
     for (AgentOrganizePlanEntity plan : plans) {
+      planMap.put(plan.getId(), plan);
+      tasks.add(new ApplyTask(plan.getId(), plan.getSourceObjectKey(), plan.getTargetObjectKey(), plan.isApplied()));
+    }
+
+    ExecutorCompletionService<ApplyResult> cs = new ExecutorCompletionService<>(docExecutor);
+    for (ApplyTask task : tasks) {
+      cs.submit(() -> {
+        if (task.alreadyApplied()) {
+          return new ApplyResult(task.planId(), true, null);
+        }
+        try {
+          storage.copyObject(task.sourceObjectKey(), task.targetObjectKey());
+          return new ApplyResult(task.planId(), true, null);
+        } catch (Exception e) {
+          return new ApplyResult(task.planId(), false, e.getMessage());
+        }
+      });
+    }
+
+    for (int i = 0; i < total; i++) {
       try {
-        // Idempotent: check if target already exists (from previous attempt)
-        if (!plan.isApplied()) {
-          storage.copyObject(plan.getSourceObjectKey(), plan.getTargetObjectKey());
-          plan.setApplied(true);
+        ApplyResult r = cs.take().get();
+        AgentOrganizePlanEntity plan = planMap.get(r.planId());
+        if (plan != null) {
+          if (r.success()) {
+            plan.setApplied(true);
+          } else {
+            log.warn("Copy failed: {} -> {}: {}", plan.getSourceObjectKey(), plan.getTargetObjectKey(), r.errorMessage());
+            plan.setReviewFlag(true);
+            plan.setReviewReason("复制失败: " + r.errorMessage());
+          }
           planRepo.save(plan);
         }
       } catch (Exception e) {
-        log.warn("Copy failed: {} -> {}: {}", plan.getSourceObjectKey(), plan.getTargetObjectKey(), e.getMessage());
-        plan.setReviewFlag(true);
-        plan.setReviewReason("复制失败: " + e.getMessage());
-        planRepo.save(plan);
+        log.warn("apply task error", e);
       }
-      done++;
-      setStep(job, "DELIVER", 82 + (int)(8.0 * done / Math.max(1, total)), null);
+      setStep(job, "DELIVER", 82 + (int)(8.0 * (i + 1) / Math.max(1, total)), null);
     }
   }
 
@@ -474,17 +551,44 @@ public class AgentJobRunner {
       zos.write(readme.toString().getBytes(StandardCharsets.UTF_8));
       zos.closeEntry();
 
-      // Add organized files
+      // Add organized files (concurrent prefetch + single-thread zip write).
+      record ZipReadTask(Long planId, String objectKey, String zipPath) {}
+      record ZipReadResult(Long planId, String zipPath, byte[] data, String objectKey, String errorMessage) {}
+
+      List<ZipReadTask> zipTasks = new ArrayList<>();
       for (AgentOrganizePlanEntity p : plans) {
         if (!p.isApplied()) continue;
+        zipTasks.add(new ZipReadTask(
+            p.getId(),
+            p.getTargetObjectKey(),
+            p.getTargetFolder() + "/" + p.getNewFilename()
+        ));
+      }
+
+      ExecutorCompletionService<ZipReadResult> zipCs = new ExecutorCompletionService<>(docExecutor);
+      for (ZipReadTask t : zipTasks) {
+        zipCs.submit(() -> {
+          try {
+            byte[] data = storage.getBytes(t.objectKey());
+            return new ZipReadResult(t.planId(), t.zipPath(), data, t.objectKey(), null);
+          } catch (Exception e) {
+            return new ZipReadResult(t.planId(), t.zipPath(), null, t.objectKey(), e.getMessage());
+          }
+        });
+      }
+
+      for (int i = 0; i < zipTasks.size(); i++) {
         try {
-          byte[] data = storage.getBytes(p.getTargetObjectKey());
-          String zipPath = p.getTargetFolder() + "/" + p.getNewFilename();
-          zos.putNextEntry(new ZipEntry(zipPath));
-          zos.write(data);
+          ZipReadResult r = zipCs.take().get();
+          if (r.data() == null) {
+            log.warn("Failed to add to zip: {} ({})", r.objectKey(), r.errorMessage());
+            continue;
+          }
+          zos.putNextEntry(new ZipEntry(r.zipPath()));
+          zos.write(r.data());
           zos.closeEntry();
         } catch (Exception e) {
-          log.warn("Failed to add to zip: {}", p.getTargetObjectKey(), e);
+          log.warn("Failed to collect zip payload", e);
         }
       }
     }

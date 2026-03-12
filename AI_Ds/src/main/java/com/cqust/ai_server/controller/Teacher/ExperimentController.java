@@ -110,9 +110,14 @@ public class ExperimentController {
                         // 获取该实验的所有成绩
                         List<Score> experimentScores = scoreService.findByExperimentId(exp.getExperiment_id());
                         System.out.println("Experiment Scores: " + experimentScores);
-                        // 计算提交人数 (不重复的用户名数量)
+                        // 计算完成人数（兼容历史数据：status 可能未维护，score>0 也视为已完成）
                         long submissionCount = experimentScores.stream()
-                            .filter(score -> "completed".equals(score.getStatus()))
+                            .filter(score -> {
+                                String status = score.getStatus();
+                                Integer scoreVal = score.getScore();
+                                return "completed".equalsIgnoreCase(status)
+                                        || (scoreVal != null && scoreVal > 0);
+                            })
                             .map(Score::getUsername)
                             .distinct()
                             .count();

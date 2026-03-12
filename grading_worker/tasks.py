@@ -1,20 +1,20 @@
 """Celery tasks for the grading pipeline."""
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
-import uuid
 import redis as redis_lib
 from decimal import Decimal
 from minio import Minio
 from celery_app import app
 from config import (
     MINIO_ENDPOINT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY, MINIO_BUCKET, MINIO_SECURE,
-    REDIS_HOST, REDIS_PORT, RESULT_CHANNEL,
+    REDIS_HOST, REDIS_PORT, RESULT_CHANNEL, DIMENSION_SCORE_CONCURRENCY,
 )
 from models.pipeline_models import (
     TaskMessage, EvidenceBlock, ImageKind,
 )
 from models.db_models import (
-    get_session, GradingSubmission, GradingRubric, RubricDimension,
-    EvidenceBlock as EvidenceBlockDB, ScoreItem, GradingTrace,
+    get_session, GradingSubmission, GradingRubric,
+    EvidenceBlock as EvidenceBlockDB, ScoreItem,
 )
 from pipeline.pdf_parser import parse_pdf
 from pipeline.image_classifier import classify_image
@@ -33,6 +33,23 @@ def _get_minio():
 
 def _get_redis():
     return redis_lib.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
+
+
+def _upload_image(minio_client, submission_id: int, ev_counter: int, image_bytes: bytes):
+    """Upload evidence image to MinIO and return object key."""
+    img_key = f"grading/{submission_id}/img-{ev_counter}.png"
+    try:
+        import io
+        minio_client.put_object(
+            MINIO_BUCKET,
+            img_key,
+            io.BytesIO(image_bytes),
+            len(image_bytes),
+            content_type="image/png",
+        )
+        return img_key
+    except Exception:
+        return None
 
 
 @app.task(bind=True, max_retries=3, default_retry_delay=30)
@@ -121,15 +138,7 @@ def process_submission(self, task_message_json: str):
                     elif ocr_text:
                         # VLM unavailable, use OCR result instead
                         ev_counter += 1
-                        img_key = f"grading/{msg.submissionId}/img-{ev_counter}.png"
-                        try:
-                            import io
-                            minio_client.put_object(MINIO_BUCKET, img_key,
-                                                     io.BytesIO(img.image_bytes),
-                                                     len(img.image_bytes),
-                                                     content_type="image/png")
-                        except Exception:
-                            img_key = None
+                        img_key = _upload_image(minio_client, msg.submissionId, ev_counter, img.image_bytes)
                         evidence_blocks.append(EvidenceBlock(
                             evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
                             kind="ocr", page=page.page_num,
@@ -138,20 +147,25 @@ def process_submission(self, task_message_json: str):
                             image_key=img_key,
                             bbox=img.bbox,
                         ))
+                    else:
+                        # Keep image evidence even if OCR/VLM both weak to avoid total evidence loss.
+                        ev_counter += 1
+                        img_key = _upload_image(minio_client, msg.submissionId, ev_counter, img.image_bytes)
+                        evidence_blocks.append(EvidenceBlock(
+                            evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
+                            kind="image",
+                            page=page.page_num,
+                            content="图片证据（OCR未提取到可用文字）",
+                            confidence=ocr_conf,
+                            image_key=img_key,
+                            bbox=img.bbox,
+                            metadata={"image_kind": str(kind), "ocr_empty": True},
+                        ))
                 else:
                     # CODE_SCREENSHOT, TERMINAL_LOG, OTHER: use OCR
                     if ocr_text:
                         ev_counter += 1
-                        img_key = f"grading/{msg.submissionId}/img-{ev_counter}.png"
-                        try:
-                            import io
-                            minio_client.put_object(MINIO_BUCKET, img_key,
-                                                     io.BytesIO(img.image_bytes),
-                                                     len(img.image_bytes),
-                                                     content_type="image/png")
-                        except Exception:
-                            img_key = None
-
+                        img_key = _upload_image(minio_client, msg.submissionId, ev_counter, img.image_bytes)
                         evidence_blocks.append(EvidenceBlock(
                             evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
                             kind="ocr", page=page.page_num,
@@ -159,6 +173,19 @@ def process_submission(self, task_message_json: str):
                             confidence=ocr_conf,
                             image_key=img_key,
                             bbox=img.bbox,
+                        ))
+                    else:
+                        ev_counter += 1
+                        img_key = _upload_image(minio_client, msg.submissionId, ev_counter, img.image_bytes)
+                        evidence_blocks.append(EvidenceBlock(
+                            evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
+                            kind="image",
+                            page=page.page_num,
+                            content="图片证据（OCR未提取到可用文字）",
+                            confidence=ocr_conf,
+                            image_key=img_key,
+                            bbox=img.bbox,
+                            metadata={"image_kind": str(kind), "ocr_empty": True},
                         ))
 
         # 4. Save evidence blocks to DB
@@ -197,30 +224,58 @@ def process_submission(self, task_message_json: str):
             packs = build_evidence_packs(evidence_blocks, dimensions)
 
         # 7. Score each dimension
-        score_dicts = []
-        for dim in dimensions:
+        def _score_one_dim(dim):
             dim_id = dim["id"]
             pack = packs.get(dim_id)
             if not pack or not pack.blocks:
-                # No evidence for this dimension
-                sr_data = {
-                    "score": None, "max_score": dim["max_score"],
-                    "weight": dim["weight"], "status": "NEED_MORE_EVIDENCE",
-                    "comment": "无可用证据", "evidence_ids": [],
-                }
-            else:
-                with trace_step(msg.submissionId, f"score_dim_{dim_id}") as info:
-                    sr, trace_info = score_dimension(pack, dim, custom_prompt=msg.customPrompt)
-                    info["model_used"] = trace_info.get("model_used")
-                    info["input_tokens"] = trace_info.get("input_tokens")
-                    info["output_tokens"] = trace_info.get("output_tokens")
-                sr_data = {
-                    "score": sr.score, "max_score": sr.max_score,
-                    "weight": dim["weight"], "status": sr.status,
-                    "comment": sr.comment, "evidence_ids": sr.evidence_ids,
+                return dim_id, {
+                    "score": None,
+                    "max_score": dim["max_score"],
+                    "weight": dim["weight"],
+                    "status": "NEED_MORE_EVIDENCE",
+                    "comment": "无可用证据",
+                    "evidence_ids": [],
                 }
 
-            # Save score item
+            with trace_step(msg.submissionId, f"score_dim_{dim_id}") as info:
+                sr, trace_info = score_dimension(pack, dim, custom_prompt=msg.customPrompt)
+                info["model_used"] = trace_info.get("model_used")
+                info["input_tokens"] = trace_info.get("input_tokens")
+                info["output_tokens"] = trace_info.get("output_tokens")
+            return dim_id, {
+                "score": sr.score,
+                "max_score": sr.max_score,
+                "weight": dim["weight"],
+                "status": sr.status,
+                "comment": sr.comment,
+                "evidence_ids": sr.evidence_ids,
+            }
+
+        score_by_dim = {}
+        score_workers = max(1, min(DIMENSION_SCORE_CONCURRENCY, len(dimensions)))
+        if score_workers == 1:
+            for dim in dimensions:
+                dim_id, sr_data = _score_one_dim(dim)
+                score_by_dim[dim_id] = sr_data
+        else:
+            with ThreadPoolExecutor(max_workers=score_workers) as pool:
+                futures = [pool.submit(_score_one_dim, dim) for dim in dimensions]
+                for future in as_completed(futures):
+                    dim_id, sr_data = future.result()
+                    score_by_dim[dim_id] = sr_data
+
+        score_dicts = []
+        for dim in dimensions:
+            dim_id = dim["id"]
+            sr_data = score_by_dim.get(dim_id, {
+                "score": None,
+                "max_score": dim["max_score"],
+                "weight": dim["weight"],
+                "status": "NEED_MORE_EVIDENCE",
+                "comment": "评分未返回结果",
+                "evidence_ids": [],
+            })
+
             db_si = ScoreItem(
                 submission_id=msg.submissionId,
                 dimension_id=dim_id,
@@ -238,10 +293,11 @@ def process_submission(self, task_message_json: str):
 
         # 8. Calculate total score
         total = calculate_weighted_total(score_dicts)
-        has_need_more = any(s["status"] == "NEED_MORE_EVIDENCE" for s in score_dicts)
+        need_more_count = sum(1 for s in score_dicts if s["status"] == "NEED_MORE_EVIDENCE")
 
         sub.total_score = Decimal(str(total))
-        sub.status = "NEED_MORE_EVIDENCE" if has_need_more else "SCORED"
+        # Mark submission NEED_MORE_EVIDENCE only when all dimensions lack evidence.
+        sub.status = "NEED_MORE_EVIDENCE" if need_more_count == len(score_dicts) else "SCORED"
         session.commit()
 
         # 9. Generate PDF report

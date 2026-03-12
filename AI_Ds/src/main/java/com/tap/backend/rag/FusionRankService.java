@@ -11,13 +11,7 @@ import java.util.stream.Collectors;
 public class FusionRankService {
 
     private static final Logger log = LoggerFactory.getLogger(FusionRankService.class);
-
-    // Default fusion weights
-    private static final double DEFAULT_ALPHA = 0.5;
-    private static final double DEFAULT_BETA = 0.3;
-    private static final double DEFAULT_GAMMA = 0.1;
-    private static final double DEFAULT_DELTA = 0.1;
-    private static final double DEFAULT_MMR_LAMBDA = 0.7;
+    private final RagProperties ragProps;
 
     // Doc priority map
     private static final Map<String, Double> DEFAULT_DOC_PRIORITY = Map.of(
@@ -27,6 +21,10 @@ public class FusionRankService {
             "ppt", 0.4,
             "other", 0.3
     );
+
+    public FusionRankService(RagProperties ragProps) {
+        this.ragProps = ragProps;
+    }
 
     public record RankedParent(long parentId, long docId, double finalScore,
                                 String chapterPath, String pageRange, String docType) {}
@@ -43,6 +41,12 @@ public class FusionRankService {
                                     Map<Long, String> chunkAnnotations,
                                     Map<Long, String> docTypeMap,
                                     int topN) {
+        double alpha = ragProps.fusion() != null ? ragProps.fusion().alpha() : 0.5;
+        double beta = ragProps.fusion() != null ? ragProps.fusion().beta() : 0.3;
+        double gamma = ragProps.fusion() != null ? ragProps.fusion().gamma() : 0.1;
+        double delta = ragProps.fusion() != null ? ragProps.fusion().delta() : 0.1;
+        double mmrLambda = ragProps.mmr() != null ? ragProps.mmr().lambda() : 0.7;
+
         // 1. Build candidate pool keyed by parentId
         Map<Long, FusionCandidate> pool = new LinkedHashMap<>();
 
@@ -85,10 +89,10 @@ public class FusionRankService {
         for (FusionCandidate c : pool.values()) {
             double docPriority = DEFAULT_DOC_PRIORITY.getOrDefault(c.docType(), 0.3);
             double teacherBoost = c.hasAnnotation() ? 1.0 : 0.0;
-            double finalScore = DEFAULT_ALPHA * c.vecScore()
-                    + DEFAULT_BETA * c.bm25Score()
-                    + DEFAULT_GAMMA * docPriority
-                    + DEFAULT_DELTA * teacherBoost;
+            double finalScore = alpha * c.vecScore()
+                    + beta * c.bm25Score()
+                    + gamma * docPriority
+                    + delta * teacherBoost;
             scored.add(new ScoredCandidate(c, finalScore));
         }
 
@@ -96,7 +100,7 @@ public class FusionRankService {
         scored.sort((a, b) -> Double.compare(b.score, a.score));
 
         // 3. MMR de-duplication
-        List<ScoredCandidate> selected = mmrSelect(scored, topN, DEFAULT_MMR_LAMBDA);
+        List<ScoredCandidate> selected = mmrSelect(scored, topN, mmrLambda);
 
         return selected.stream()
                 .map(sc -> new RankedParent(
@@ -110,12 +114,16 @@ public class FusionRankService {
      */
     public double computeFusionScore(double vecScore, double bm25Score,
                                       String docType, boolean hasAnnotation) {
+        double alpha = ragProps.fusion() != null ? ragProps.fusion().alpha() : 0.5;
+        double beta = ragProps.fusion() != null ? ragProps.fusion().beta() : 0.3;
+        double gamma = ragProps.fusion() != null ? ragProps.fusion().gamma() : 0.1;
+        double delta = ragProps.fusion() != null ? ragProps.fusion().delta() : 0.1;
         double docPriority = DEFAULT_DOC_PRIORITY.getOrDefault(docType, 0.3);
         double teacherBoost = hasAnnotation ? 1.0 : 0.0;
-        return DEFAULT_ALPHA * vecScore
-                + DEFAULT_BETA * bm25Score
-                + DEFAULT_GAMMA * docPriority
-                + DEFAULT_DELTA * teacherBoost;
+        return alpha * vecScore
+                + beta * bm25Score
+                + gamma * docPriority
+                + delta * teacherBoost;
     }
 
     /**

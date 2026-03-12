@@ -806,7 +806,8 @@ const loadSubmissionDetail = async () => {
       initCharts()
     })
   } catch (error) {
-    // ...existing code...
+    console.error('加载提交详情失败:', error)
+    ElMessage.error(error?.message || '加载提交详情失败')
   } finally {
     loading.value = false
   }

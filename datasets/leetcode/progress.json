@@ -1,0 +1,624 @@
+{
+  "current_index": 123,
+  "success_count": 123,
+  "skip_count": 0,
+  "fail_count": 0,
+  "last_update": "2025-10-28 18:24:11",
+  "processed_urls": [
+    {
+      "index": 0,
+      "title": "2528. 最大化城市的最小电量 - 最大化城市的最小电量",
+      "url": "https://leetcode.cn/problems/maximize-the-minimum-powered-city/solution/zui-da-hua-cheng-shi-de-zui-xiao-dian-li-94lq/"
+    },
+    {
+      "index": 1,
+      "title": "3217. 从链表中移除在数组中存在的节点 - 从链表中移除在数组中存在的节点",
+      "url": "https://leetcode.cn/problems/delete-nodes-from-linked-list-present-in-array/solution/cong-lian-biao-zhong-yi-chu-zai-shu-zu-z-d25m/"
+    },
+    {
+      "index": 2,
+      "title": "3370. 仅含置位位的最小整数 - 仅含置位位的最小整数",
+      "url": "https://leetcode.cn/problems/smallest-number-with-all-set-bits/solution/jin-han-zhi-wei-wei-de-zui-xiao-zheng-sh-hgu5/"
+    },
+    {
+      "index": 3,
+      "title": "3354. 使数组元素等于零 - 使数组元素等于零",
+      "url": "https://leetcode.cn/problems/make-array-elements-equal-to-zero/solution/shi-shu-zu-yuan-su-deng-yu-ling-by-leetc-0cvo/"
+    },
+    {
+      "index": 4,
+      "title": "3289. 数字小镇中的捣蛋鬼 - 数字小镇中的捣蛋鬼",
+      "url": "https://leetcode.cn/problems/the-two-sneaky-numbers-of-digitville/solution/shu-zi-xiao-zhen-zhong-de-dao-dan-gui-by-yivz/"
+    },
+    {
+      "index": 5,
+      "title": "3347. 执行操作后元素的最高频率 II - 执行操作后元素的最高频率 II",
+      "url": "https://leetcode.cn/problems/maximum-frequency-of-an-element-after-performing-operations-ii/solution/zhi-xing-cao-zuo-hou-yuan-su-de-zui-gao-n4uko/"
+    },
+    {
+      "index": 6,
+      "title": "3346. 执行操作后元素的最高频率 I - 执行操作后元素的最高频率 I",
+      "url": "https://leetcode.cn/problems/maximum-frequency-of-an-element-after-performing-operations-i/solution/zhi-xing-cao-zuo-hou-yuan-su-de-zui-gao-lk58w/"
+    },
+    {
+      "index": 7,
+      "title": "3461. 判断操作后字符串中的数字是否相等 I - 判断操作后字符串中的数字是否相等 I",
+      "url": "https://leetcode.cn/problems/check-if-digits-are-equal-in-string-after-operations-i/solution/pan-duan-cao-zuo-hou-zi-fu-chuan-zhong-d-fc9u/"
+    },
+    {
+      "index": 8,
+      "title": "3397. 执行操作后不同元素的最大数量 - 执行操作后不同元素的最大数量",
+      "url": "https://leetcode.cn/problems/maximum-number-of-distinct-elements-after-operations/solution/zhi-xing-cao-zuo-hou-bu-tong-yuan-su-de-fmhzv/"
+    },
+    {
+      "index": 9,
+      "title": "3350. 检测相邻递增子数组 II - 检测相邻递增子数组 II",
+      "url": "https://leetcode.cn/problems/adjacent-increasing-subarrays-detection-ii/solution/jian-ce-xiang-lin-di-zeng-zi-shu-zu-ii-b-0gen/"
+    },
+    {
+      "index": 10,
+      "title": "3349. 检测相邻递增子数组 I - 检测相邻递增子数组 I",
+      "url": "https://leetcode.cn/problems/adjacent-increasing-subarrays-detection-i/solution/jian-ce-xiang-lin-di-zeng-zi-shu-zu-i-by-njbb/"
+    },
+    {
+      "index": 11,
+      "title": "2598. 执行操作后的最大 MEX - 执行操作后的最大 MEX",
+      "url": "https://leetcode.cn/problems/smallest-missing-non-negative-integer-after-operations/solution/zhi-xing-cao-zuo-hou-de-zui-da-mex-by-le-dvbj/"
+    },
+    {
+      "index": 12,
+      "title": "3186. 施咒的最大总伤害 - 施咒的最大总伤害",
+      "url": "https://leetcode.cn/problems/maximum-total-damage-with-spell-casting/solution/shi-zhou-de-zui-da-zong-shang-hai-by-lee-e2kq/"
+    },
+    {
+      "index": 13,
+      "title": "3539. 魔法序列的数组乘积之和 - 魔法序列的数组乘积之和",
+      "url": "https://leetcode.cn/problems/find-sum-of-array-product-of-magical-sequences/solution/mo-fa-xu-lie-de-shu-zu-cheng-ji-zhi-he-b-54vt/"
+    },
+    {
+      "index": 14,
+      "title": "3494. 酿造药水需要的最少总时间 - 酿造药水需要的最少总时间",
+      "url": "https://leetcode.cn/problems/find-the-minimum-amount-of-time-to-brew-potions/solution/niang-zao-yao-shui-xu-yao-de-zui-shao-zo-ojii/"
+    },
+    {
+      "index": 15,
+      "title": "3003. 执行操作后的最大分割数量 - 执行操作后的最大分割数量",
+      "url": "https://leetcode.cn/problems/maximize-the-number-of-partitions-after-operations/solution/zhi-xing-cao-zuo-hou-de-zui-da-fen-ge-sh-fwni/"
+    },
+    {
+      "index": 16,
+      "title": "3147. 从魔法师身上吸取的最大能量 - 从魔法师身上吸取的最大能量",
+      "url": "https://leetcode.cn/problems/taking-maximum-energy-from-the-mystic-dungeon/solution/cong-mo-fa-shi-shen-shang-xi-qu-de-zui-d-xkjs/"
+    },
+    {
+      "index": 17,
+      "title": "422. 有效的单词方块 - 有效的单词方块",
+      "url": "https://leetcode.cn/problems/valid-word-square/solution/you-xiao-de-dan-ci-fang-kuai-by-leetcode-xfmf/"
+    },
+    {
+      "index": 18,
+      "title": "286. 墙与门 - 墙与门",
+      "url": "https://leetcode.cn/problems/walls-and-gates/solution/qiang-yu-men-by-leetcode-solution-07pi/"
+    },
+    {
+      "index": 19,
+      "title": "3100. 换水问题 II - 换水问题 II",
+      "url": "https://leetcode.cn/problems/water-bottles-ii/solution/huan-shui-wen-ti-ii-by-leetcode-solution-9eiq/"
+    },
+    {
+      "index": 20,
+      "title": "358. K 距离间隔重排字符串 - K 距离间隔重排字符串",
+      "url": "https://leetcode.cn/problems/rearrange-string-k-distance-apart/solution/k-ju-chi-jian-ge-zhong-pai-zi-fu-chuan-b-a9w8/"
+    },
+    {
+      "index": 21,
+      "title": "362. 敲击计数器 - 敲击计数器",
+      "url": "https://leetcode.cn/problems/design-hit-counter/solution/qiao-ji-ji-shu-qi-by-leetcode-solution-zya8/"
+    },
+    {
+      "index": 22,
+      "title": "3005. 最大频率元素计数 - 最大频率元素计数",
+      "url": "https://leetcode.cn/problems/count-elements-with-maximum-frequency/solution/zui-da-pin-lu-yuan-su-ji-shu-by-leetcode-4fhx/"
+    },
+    {
+      "index": 23,
+      "title": "3408. 设计任务管理器 - 设计任务管理器",
+      "url": "https://leetcode.cn/problems/design-task-manager/solution/she-ji-ren-wu-guan-li-qi-by-leetcode-sol-wibx/"
+    },
+    {
+      "index": 24,
+      "title": "3508. 设计路由器 - 设计路由器",
+      "url": "https://leetcode.cn/problems/implement-router/solution/she-ji-lu-you-qi-by-leetcode-solution-hgxc/"
+    },
+    {
+      "index": 25,
+      "title": "3484. 设计电子表格 - 设计电子表格",
+      "url": "https://leetcode.cn/problems/design-spreadsheet/solution/she-ji-dian-zi-biao-ge-by-leetcode-solut-pz39/"
+    },
+    {
+      "index": 26,
+      "title": "2327. 知道秘密的人数 - 二的幂数组中查询范围内的乘积",
+      "url": "https://leetcode.cn/problems/number-of-people-aware-of-a-secret/solution/er-de-mi-shu-zu-zhong-cha-xun-fan-wei-ne-kbs4/"
+    },
+    {
+      "index": 27,
+      "title": "499. 迷宫 III - 迷宫 III",
+      "url": "https://leetcode.cn/problems/the-maze-iii/solution/mi-gong-iii-by-leetcode-solution-31d9/"
+    },
+    {
+      "index": 28,
+      "title": "490. 迷宫 - 迷宫",
+      "url": "https://leetcode.cn/problems/the-maze/solution/mi-gong-by-leetcode-solution-c0u1/"
+    },
+    {
+      "index": 29,
+      "title": "2349. 设计数字容器系统 - 设计数字容器系统",
+      "url": "https://leetcode.cn/problems/design-a-number-container-system/solution/she-ji-shu-zi-rong-qi-xi-tong-by-leetcod-zsgc/"
+    },
+    {
+      "index": 30,
+      "title": "966. 元音拼写检查器 - 元音拼写检查器",
+      "url": "https://leetcode.cn/problems/vowel-spellchecker/solution/yuan-yin-pin-xie-jian-cha-qi-by-leetcode-wnfb/"
+    },
+    {
+      "index": 31,
+      "title": "3227. 字符串元音游戏 - 字符串元音游戏",
+      "url": "https://leetcode.cn/problems/vowels-game-in-a-string/solution/zi-fu-chuan-yuan-yin-you-xi-by-leetcode-szex1/"
+    },
+    {
+      "index": 32,
+      "title": "1733. 需要教语言的最少人数 - 需要教语言的最少人数",
+      "url": "https://leetcode.cn/problems/minimum-number-of-people-to-teach/solution/xu-yao-jiao-yu-yan-de-zui-shao-ren-shu-b-jaf9/"
+    },
+    {
+      "index": 33,
+      "title": "2785. 将字符串中的元音字母排序 - 将字符串中的元音字母排序",
+      "url": "https://leetcode.cn/problems/sort-vowels-in-a-string/solution/jiang-zi-fu-chuan-zhong-de-yuan-yin-zi-m-qllf/"
+    },
+    {
+      "index": 34,
+      "title": "3541. 找到频率最高的元音和辅音 - 找到频率最高的元音和辅音",
+      "url": "https://leetcode.cn/problems/find-most-frequent-vowel-and-consonant/solution/zhao-dao-pin-lu-zui-gao-de-yuan-yin-he-f-3z68/"
+    },
+    {
+      "index": 35,
+      "title": "3495. 使数组元素都变为零的最少操作次数 - 使数组元素都变为零的最少操作次数",
+      "url": "https://leetcode.cn/problems/minimum-operations-to-make-array-elements-zero/solution/shi-shu-zu-yuan-su-du-bian-wei-ling-de-z-11m3/"
+    },
+    {
+      "index": 36,
+      "title": "2749. 得到整数零需要执行的最少操作数 - 得到整数零需要执行的最少操作数",
+      "url": "https://leetcode.cn/problems/minimum-operations-to-make-the-integer-zero/solution/de-dao-zheng-shu-ling-xu-yao-zhi-xing-de-wztd/"
+    },
+    {
+      "index": 37,
+      "title": "3027. 人员站位的方案数 II - 人员站位的方案数 II",
+      "url": "https://leetcode.cn/problems/find-the-number-of-ways-to-place-people-ii/solution/ren-yuan-zhan-wei-de-fang-an-shu-ii-by-l-5ors/"
+    },
+    {
+      "index": 38,
+      "title": "3025. 人员站位的方案数 I - 人员站位的方案数 I",
+      "url": "https://leetcode.cn/problems/find-the-number-of-ways-to-place-people-i/solution/ren-yuan-zhan-wei-de-fang-an-shu-i-by-le-k2er/"
+    },
+    {
+      "index": 39,
+      "title": "3516. 找到最近的人 - 找到最近的人",
+      "url": "https://leetcode.cn/problems/find-closest-person/solution/zhao-dao-zui-jin-de-ren-by-leetcode-solu-sq71/"
+    },
+    {
+      "index": 40,
+      "title": "2348. 全 0 子数组的数目 - 全 0 子数组的数目",
+      "url": "https://leetcode.cn/problems/number-of-zero-filled-subarrays/solution/quan-0-zi-shu-zu-de-shu-mu-by-leetcode-s-ipsy/"
+    },
+    {
+      "index": 41,
+      "title": "3446. 按对角线进行矩阵排序 - 按对角线进行矩阵排序",
+      "url": "https://leetcode.cn/problems/sort-matrix-by-diagonals/solution/an-dui-jiao-xian-jin-xing-ju-zhen-pai-xu-86ki/"
+    },
+    {
+      "index": 42,
+      "title": "3459. 最长 V 形对角线段的长度 - 最长 V 形对角线段的长度",
+      "url": "https://leetcode.cn/problems/length-of-longest-v-shaped-diagonal-segment/solution/zui-chang-v-xing-dui-jiao-xian-duan-de-c-3pul/"
+    },
+    {
+      "index": 43,
+      "title": "3000. 对角线最长的矩形的面积 - 对角线最长的矩形的面积",
+      "url": "https://leetcode.cn/problems/maximum-area-of-longest-diagonal-rectangle/solution/dui-jiao-xian-zui-chang-de-ju-xing-de-mi-t0ux/"
+    },
+    {
+      "index": 44,
+      "title": "3197. 包含所有 1 的最小矩形面积 II - 包含所有 1 的最小矩形面积 II",
+      "url": "https://leetcode.cn/problems/find-the-minimum-area-to-cover-all-ones-ii/solution/bao-han-suo-you-1-de-zui-xiao-ju-xing-mi-ioth/"
+    },
+    {
+      "index": 45,
+      "title": "3021. Alice 和 Bob 玩鲜花游戏 - Alice 和 Bob 玩鲜花游戏",
+      "url": "https://leetcode.cn/problems/alice-and-bob-playing-flower-game/solution/alice-he-bob-wan-xian-hua-you-xi-by-leet-pkhl/"
+    },
+    {
+      "index": 46,
+      "title": "3195. 包含所有 1 的最小矩形面积 I - 包含所有 1 的最小矩形面积 I",
+      "url": "https://leetcode.cn/problems/find-the-minimum-area-to-cover-all-ones-i/solution/bao-han-suo-you-1-de-zui-xiao-ju-xing-mi-zty7/"
+    },
+    {
+      "index": 47,
+      "title": "2787. 将一个数字表示成幂的和的方案数 - 将一个数字表示成幂的和的方案数",
+      "url": "https://leetcode.cn/problems/ways-to-express-an-integer-as-sum-of-powers/solution/jiang-yi-ge-shu-zi-biao-shi-cheng-mi-de-bb9ip/"
+    },
+    {
+      "index": 48,
+      "title": "2438. 二的幂数组中查询范围内的乘积 - 二的幂数组中查询范围内的乘积",
+      "url": "https://leetcode.cn/problems/range-product-queries-of-powers/solution/er-de-mi-shu-zu-zhong-cha-xun-fan-wei-ne-ygou/"
+    },
+    {
+      "index": 49,
+      "title": "3363. 最多可收集的水果数目 - 最多可收集的水果数目",
+      "url": "https://leetcode.cn/problems/find-the-maximum-number-of-fruits-collected/solution/zui-duo-ke-shou-ji-de-shui-guo-shu-mu-by-zybm/"
+    },
+    {
+      "index": 50,
+      "title": "3479. 水果成篮 III - 水果成篮 III",
+      "url": "https://leetcode.cn/problems/fruits-into-baskets-iii/solution/shui-guo-cheng-lan-iii-by-leetcode-solut-zlvd/"
+    },
+    {
+      "index": 51,
+      "title": "3477. 水果成篮 II - 水果成篮 II",
+      "url": "https://leetcode.cn/problems/fruits-into-baskets-ii/solution/shui-guo-cheng-lan-ii-by-leetcode-soluti-f92n/"
+    },
+    {
+      "index": 52,
+      "title": "1717. 删除子字符串的最大得分 - 删除子字符串的最大得分",
+      "url": "https://leetcode.cn/problems/maximum-score-from-removing-substrings/solution/shan-chu-zi-zi-fu-chuan-de-zui-da-de-fen-0x3m/"
+    },
+    {
+      "index": 53,
+      "title": "2411. 按位或最大的最小子数组长度 - 按位或最大的最小子数组长度",
+      "url": "https://leetcode.cn/problems/smallest-subarrays-with-maximum-bitwise-or/solution/an-wei-huo-zui-da-de-zui-xiao-zi-shu-zu-v5dt7/"
+    },
+    {
+      "index": 54,
+      "title": "3480. 删除一个冲突对后最大子数组数目 - 删除一个冲突对后最大子数组数目",
+      "url": "https://leetcode.cn/problems/maximize-subarrays-after-removing-one-conflicting-pair/solution/shan-chu-yi-ge-chong-tu-dui-hou-zui-da-z-lquv/"
+    },
+    {
+      "index": 55,
+      "title": "2561. 重排水果 - 重排水果",
+      "url": "https://leetcode.cn/problems/rearranging-fruits/solution/zhong-pai-shui-guo-by-leetcode-solution-9z2g/"
+    },
+    {
+      "index": 56,
+      "title": "2419. 按位与最大的最长子数组 - 按位与最大的最长子数组",
+      "url": "https://leetcode.cn/problems/longest-subarray-with-maximum-bitwise-and/solution/an-wei-yu-zui-da-de-zui-chang-zi-shu-zu-w0t3f/"
+    },
+    {
+      "index": 57,
+      "title": "2322. 从树中删除边的最小分数 - 从树中删除边的最小分数",
+      "url": "https://leetcode.cn/problems/minimum-score-after-removals-on-a-tree/solution/cong-shu-zhong-shan-chu-bian-de-zui-xiao-mrrc/"
+    },
+    {
+      "index": 58,
+      "title": "3487. 删除后的最大子数组元素和 - 删除后的最大子数组元素和",
+      "url": "https://leetcode.cn/problems/maximum-unique-subarray-sum-after-deletion/solution/shan-chu-hou-de-zui-da-zi-shu-zu-yuan-su-b7l6/"
+    },
+    {
+      "index": 59,
+      "title": "1695. 删除子数组的最大得分 - 删除子数组的最大得分",
+      "url": "https://leetcode.cn/problems/maximum-erasure-value/solution/shan-chu-zi-shu-zu-de-zui-da-de-fen-by-l-jp9y/"
+    },
+    {
+      "index": 60,
+      "title": "3202. 找出有效子序列的最大长度 II - 找出有效子序列的最大长度 II",
+      "url": "https://leetcode.cn/problems/find-the-maximum-length-of-valid-subsequence-ii/solution/zhao-chu-you-xiao-zi-xu-lie-de-zui-da-ch-6s7c/"
+    },
+    {
+      "index": 61,
+      "title": "3201. 找出有效子序列的最大长度 I - 找出有效子序列的最大长度 I",
+      "url": "https://leetcode.cn/problems/find-the-maximum-length-of-valid-subsequence-i/solution/zhao-chu-you-xiao-zi-xu-lie-de-zui-da-ch-1n3j/"
+    },
+    {
+      "index": 62,
+      "title": "3136. 有效单词 - 有效单词",
+      "url": "https://leetcode.cn/problems/valid-word/solution/you-xiao-dan-ci-by-leetcode-solution-qege/"
+    },
+    {
+      "index": 63,
+      "title": "3169. 无需开会的工作日 - 无需开会的工作日",
+      "url": "https://leetcode.cn/problems/count-days-without-meetings/solution/wu-xu-kai-hui-de-gong-zuo-ri-by-leetcode-6c3i/"
+    },
+    {
+      "index": 64,
+      "title": "3440. 重新安排会议得到最多空余时间 II - 重新安排会议得到最多空余时间 II",
+      "url": "https://leetcode.cn/problems/reschedule-meetings-for-maximum-free-time-ii/solution/zhong-xin-an-pai-hui-yi-de-dao-zui-duo-k-tx57/"
+    },
+    {
+      "index": 65,
+      "title": "3439. 重新安排会议得到最多空余时间 I - 重新安排会议得到最多空余时间 I",
+      "url": "https://leetcode.cn/problems/reschedule-meetings-for-maximum-free-time-i/solution/zhong-xin-an-pai-hui-yi-de-dao-zui-duo-k-wm8c/"
+    },
+    {
+      "index": 66,
+      "title": "3307. 找出第 K 个字符 II - 找出第 K 个字符 II",
+      "url": "https://leetcode.cn/problems/find-the-k-th-character-in-string-game-ii/solution/zhao-chu-di-k-ge-zi-fu-ii-by-leetcode-so-kx1d/"
+    },
+    {
+      "index": 67,
+      "title": "3304. 找出第 K 个字符 I - 找出第 K 个字符 I",
+      "url": "https://leetcode.cn/problems/find-the-k-th-character-in-string-game-i/solution/zhao-chu-di-k-ge-zi-fu-i-by-leetcode-sol-9epa/"
+    },
+    {
+      "index": 68,
+      "title": "3333. 找到初始输入字符串 II - 找到初始输入字符串 II",
+      "url": "https://leetcode.cn/problems/find-the-original-typed-string-ii/solution/zhao-dao-chu-shi-shu-ru-zi-fu-chuan-ii-b-ldyv/"
+    },
+    {
+      "index": 69,
+      "title": "3330. 找到初始输入字符串 I - 找到初始输入字符串 I",
+      "url": "https://leetcode.cn/problems/find-the-original-typed-string-i/solution/zhao-dao-chu-shi-shu-ru-zi-fu-chuan-i-by-y2ve/"
+    },
+    {
+      "index": 70,
+      "title": "2294. 划分数组使最大差为 K - 划分数组使最大差为 K",
+      "url": "https://leetcode.cn/problems/partition-array-such-that-maximum-difference-is-k/solution/hua-fen-shu-zu-shi-zui-da-chai-wei-k-by-z4vb2/"
+    },
+    {
+      "index": 71,
+      "title": "1751. 最多可以参加的会议数目 II - 最多可以参加的会议数目 II",
+      "url": "https://leetcode.cn/problems/maximum-number-of-events-that-can-be-attended-ii/solution/zui-duo-ke-yi-can-jia-de-hui-yi-shu-mu-i-icul/"
+    },
+    {
+      "index": 72,
+      "title": "2311. 小于等于 K 的最长二进制子序列 - 小于等于 K 的最长二进制子序列",
+      "url": "https://leetcode.cn/problems/longest-binary-subsequence-less-than-or-equal-to-k/solution/xiao-yu-deng-yu-k-de-zui-chang-er-jin-zh-7vk8/"
+    },
+    {
+      "index": 73,
+      "title": "3085. 成为 K 特殊字符串需要删除的最少字符数 - 成为 K 特殊字符串需要删除的最少字符数",
+      "url": "https://leetcode.cn/problems/minimum-deletions-to-make-string-k-special/solution/cheng-wei-k-te-shu-zi-fu-chuan-xu-yao-sh-erdq/"
+    },
+    {
+      "index": 74,
+      "title": "2040. 两个有序数组的第 K 小乘积 - 两个有序数组的第 K 小乘积",
+      "url": "https://leetcode.cn/problems/kth-smallest-product-of-two-sorted-arrays/solution/liang-ge-you-xu-shu-zu-de-di-k-xiao-chen-5qt9/"
+    },
+    {
+      "index": 75,
+      "title": "3445. 奇偶频次间的最大差值 II - 奇偶频次间的最大差值 II",
+      "url": "https://leetcode.cn/problems/maximum-difference-between-even-and-odd-frequency-ii/solution/qi-ou-pin-ci-jian-de-zui-da-chai-zhi-ii-vnz1n/"
+    },
+    {
+      "index": 76,
+      "title": "3405. 统计恰好有 K 个相等相邻元素的数组数目 - 统计恰好有 K 个相等相邻元素的数组数目",
+      "url": "https://leetcode.cn/problems/count-the-number-of-arrays-with-k-matching-adjacent-elements/solution/tong-ji-qia-hao-you-k-ge-xiang-deng-xian-uxt4/"
+    },
+    {
+      "index": 77,
+      "title": "3423. 循环数组中相邻元素的最大差值 - 循环数组中相邻元素的最大差值",
+      "url": "https://leetcode.cn/problems/maximum-difference-between-adjacent-elements-in-a-circular-array/solution/xun-huan-shu-zu-zhong-xiang-lin-yuan-su-q5nq3/"
+    },
+    {
+      "index": 78,
+      "title": "3442. 奇偶频次间的最大差值 I - 奇偶频次间的最大差值 I",
+      "url": "https://leetcode.cn/problems/maximum-difference-between-even-and-odd-frequency-i/solution/qi-ou-pin-ci-jian-de-zui-da-chai-zhi-i-b-wy8k/"
+    },
+    {
+      "index": 79,
+      "title": "2616. 最小化数对的最大差值 - 最小化数对的最大差值",
+      "url": "https://leetcode.cn/problems/minimize-the-maximum-difference-of-pairs/solution/zui-xiao-hua-shu-dui-de-zui-da-chai-zhi-yletl/"
+    },
+    {
+      "index": 80,
+      "title": "2566. 替换一个数字后的最大差值 - 替换一个数字后的最大差值",
+      "url": "https://leetcode.cn/problems/maximum-difference-by-remapping-a-digit/solution/ti-huan-yi-ge-shu-zi-hou-de-zui-da-chai-3oyg4/"
+    },
+    {
+      "index": 81,
+      "title": "3443. K 次修改后的最大曼哈顿距离 - K 次修改后的最大曼哈顿距离",
+      "url": "https://leetcode.cn/problems/maximum-manhattan-distance-after-k-changes/solution/kci-xiu-gai-hou-de-zui-da-man-ha-dun-ju-q5twm/"
+    },
+    {
+      "index": 82,
+      "title": "3170. 删除星号以后字典序最小的字符串 - 删除星号以后字典序最小的字符串",
+      "url": "https://leetcode.cn/problems/lexicographically-minimum-string-after-removing-stars/solution/shan-chu-xing-hao-yi-hou-zi-dian-xu-zui-u847n/"
+    },
+    {
+      "index": 83,
+      "title": "1061. 按字典序排列最小的等效字符串 - 按字典序排列最小的等效字符串",
+      "url": "https://leetcode.cn/problems/lexicographically-smallest-equivalent-string/solution/an-zi-dian-xu-pai-lie-zui-xiao-de-deng-x-rfy2/"
+    },
+    {
+      "index": 84,
+      "title": "2434. 使用机器人打印字典序最小的字符串 - 使用机器人打印字典序最小的字符串",
+      "url": "https://leetcode.cn/problems/using-a-robot-to-print-the-lexicographically-smallest-string/solution/shi-yong-ji-qi-ren-da-yin-zi-dian-xu-zui-hwvo/"
+    },
+    {
+      "index": 85,
+      "title": "2966. 划分数组并满足最大差限制 - 划分数组并满足最大差限制",
+      "url": "https://leetcode.cn/problems/divide-array-into-arrays-with-max-difference/solution/hua-fen-shu-zu-bing-man-zu-zui-da-chai-x-3iet/"
+    },
+    {
+      "index": 86,
+      "title": "3403. 从盒子中找出字典序最大的字符串 I - 从盒子中找出字典序最大的字符串 I",
+      "url": "https://leetcode.cn/problems/find-the-lexicographically-largest-string-from-the-box-i/solution/cong-he-zi-zhong-zhao-chu-zi-dian-xu-zui-eg0v/"
+    },
+    {
+      "index": 87,
+      "title": "2359. 找到离给定两个节点最近的节点 - 找到离给定两个节点最近的节点",
+      "url": "https://leetcode.cn/problems/find-closest-node-to-given-two-nodes/solution/zhao-dao-chi-gei-ding-liang-ge-jie-dian-8f8gp/"
+    },
+    {
+      "index": 88,
+      "title": "3373. 连接两棵树后最大目标节点数目 II - 连接两棵树后最大目标节点数目 II",
+      "url": "https://leetcode.cn/problems/maximize-the-number-of-target-nodes-after-connecting-trees-ii/solution/lian-jie-liang-ke-shu-hou-zui-da-mu-biao-0qy7/"
+    },
+    {
+      "index": 89,
+      "title": "3372. 连接两棵树后最大目标节点数目 I - 连接两棵树后最大目标节点数目 I",
+      "url": "https://leetcode.cn/problems/maximize-the-number-of-target-nodes-after-connecting-trees-i/solution/lian-jie-liang-ke-shu-hou-zui-da-mu-biao-730m/"
+    },
+    {
+      "index": 90,
+      "title": "2894. 分类求和并作差 - 分类求和并作差",
+      "url": "https://leetcode.cn/problems/divisible-and-non-divisible-sums-difference/solution/fen-lei-qiu-he-bing-zuo-chai-by-leetcode-xok4/"
+    },
+    {
+      "index": 91,
+      "title": "3068. 最大节点价值之和 - 最大节点价值之和",
+      "url": "https://leetcode.cn/problems/find-the-maximum-sum-of-node-values/solution/zui-da-jie-dian-jie-zhi-zhi-he-by-leetco-7fmo/"
+    },
+    {
+      "index": 92,
+      "title": "3362. 零数组变换 III - 零数组变换 III",
+      "url": "https://leetcode.cn/problems/zero-array-transformation-iii/solution/ling-shu-zu-bian-huan-iii-by-leetcode-so-ptvl/"
+    },
+    {
+      "index": 93,
+      "title": "2942. 查找包含给定字符的单词 - 查找包含给定字符的单词",
+      "url": "https://leetcode.cn/problems/find-words-containing-character/solution/cha-zhao-bao-han-gei-ding-zi-fu-de-dan-c-ee7m/"
+    },
+    {
+      "index": 94,
+      "title": "3355. 零数组变换 I - 零数组变换 I",
+      "url": "https://leetcode.cn/problems/zero-array-transformation-i/solution/ling-shu-zu-bian-huan-i-by-leetcode-solu-7q94/"
+    },
+    {
+      "index": 95,
+      "title": "3337. 字符串转换后的长度 II - 字符串转换后的长度 II",
+      "url": "https://leetcode.cn/problems/total-characters-in-string-after-transformations-ii/solution/zi-fu-chuan-zhuan-huan-hou-de-chang-du-i-ytl5/"
+    },
+    {
+      "index": 96,
+      "title": "3335. 字符串转换后的长度 I - 字符串转换后的长度 I",
+      "url": "https://leetcode.cn/problems/total-characters-in-string-after-transformations-i/solution/zi-fu-chuan-zhuan-huan-hou-de-chang-du-i-rw3x/"
+    },
+    {
+      "index": 97,
+      "title": "3356. 零数组变换 II - 零数组变换 II",
+      "url": "https://leetcode.cn/problems/zero-array-transformation-ii/solution/ling-shu-zu-bian-huan-ii-by-leetcode-sol-04r9/"
+    },
+    {
+      "index": 98,
+      "title": "3343. 统计平衡排列的数目 - 统计平衡排列的数目",
+      "url": "https://leetcode.cn/problems/count-number-of-balanced-permutations/solution/tong-ji-ping-heng-pai-lie-de-shu-mu-by-l-ki3d/"
+    },
+    {
+      "index": 99,
+      "title": "3024. 三角形类型 - 三角形类型",
+      "url": "https://leetcode.cn/problems/type-of-triangle/solution/san-jiao-xing-lei-xing-by-leetcode-solut-we7x/"
+    },
+    {
+      "index": 100,
+      "title": "2901. 最长相邻不相等子序列 II - 最长相邻不相等子序列 II",
+      "url": "https://leetcode.cn/problems/longest-unequal-adjacent-groups-subsequence-ii/solution/zui-chang-xiang-lin-bu-xiang-deng-zi-xu-zh7yv/"
+    },
+    {
+      "index": 101,
+      "title": "2900. 最长相邻不相等子序列 I - 最长相邻不相等子序列 I",
+      "url": "https://leetcode.cn/problems/longest-unequal-adjacent-groups-subsequence-i/solution/zui-chang-xiang-lin-bu-xiang-deng-zi-xu-8vlf3/"
+    },
+    {
+      "index": 102,
+      "title": "3342. 到达最后一个房间的最少时间 II - 到达最后一个房间的最少时间 II",
+      "url": "https://leetcode.cn/problems/find-minimum-time-to-reach-last-room-ii/solution/dao-da-zui-hou-yi-ge-fang-jian-de-zui-sh-dj3j/"
+    },
+    {
+      "index": 103,
+      "title": "3341. 到达最后一个房间的最少时间 I - 到达最后一个房间的最少时间 I",
+      "url": "https://leetcode.cn/problems/find-minimum-time-to-reach-last-room-i/solution/dao-da-zui-hou-yi-ge-fang-jian-de-zui-sh-i9zw/"
+    },
+    {
+      "index": 104,
+      "title": "2918. 数组的最小相等和 - 数组的最小相等和",
+      "url": "https://leetcode.cn/problems/minimum-equal-sum-of-two-arrays-after-replacing-zeros/solution/shu-zu-de-zui-xiao-xiang-deng-he-by-leet-5cam/"
+    },
+    {
+      "index": 105,
+      "title": "2962. 统计最大元素出现至少 K 次的子数组 - 统计最大元素出现至少 K 次的子数组",
+      "url": "https://leetcode.cn/problems/count-subarrays-where-max-element-appears-at-least-k-times/solution/tong-ji-zui-da-yuan-su-chu-xian-zhi-shao-348l/"
+    },
+    {
+      "index": 106,
+      "title": "3392. 统计符合条件长度为 3 的子数组数目 - 统计符合条件长度为 3 的子数组数目",
+      "url": "https://leetcode.cn/problems/count-subarrays-of-length-three-with-a-condition/solution/tong-ji-fu-he-tiao-jian-chang-du-wei-3-d-t7rt/"
+    },
+    {
+      "index": 107,
+      "title": "2444. 统计定界子数组的数目 - 统计定界子数组的数目",
+      "url": "https://leetcode.cn/problems/count-subarrays-with-fixed-bounds/solution/tong-ji-ding-jie-zi-shu-zu-de-shu-mu-by-q60k7/"
+    },
+    {
+      "index": 108,
+      "title": "2338. 统计理想数组的数目 - 统计理想数组的数目",
+      "url": "https://leetcode.cn/problems/count-the-number-of-ideal-arrays/solution/tong-ji-li-xiang-shu-zu-de-shu-mu-by-lee-usvr/"
+    },
+    {
+      "index": 109,
+      "title": "2179. 统计数组中好三元组数目 - 统计数组中好三元组数目",
+      "url": "https://leetcode.cn/problems/count-good-triplets-in-an-array/solution/tong-ji-shu-zu-zhong-hao-san-yuan-zu-shu-u13d/"
+    },
+    {
+      "index": 110,
+      "title": "2799. 统计完全子数组的数目 - 统计完全子数组的数目",
+      "url": "https://leetcode.cn/problems/count-complete-subarrays-in-an-array/solution/tong-ji-wan-quan-zi-shu-zu-de-shu-mu-by-ysvhb/"
+    },
+    {
+      "index": 111,
+      "title": "2845. 统计趣味子数组的数目 - 统计趣味子数组的数目",
+      "url": "https://leetcode.cn/problems/count-of-interesting-subarrays/solution/tong-ji-qu-wei-zi-shu-zu-de-shu-mu-by-le-968z/"
+    },
+    {
+      "index": 112,
+      "title": "2302. 统计得分小于 K 的子数组数目 - 统计得分小于 K 的子数组数目",
+      "url": "https://leetcode.cn/problems/count-subarrays-with-score-less-than-k/solution/tong-ji-de-fen-xiao-yu-k-de-zi-shu-zu-sh-guvj/"
+    },
+    {
+      "index": 113,
+      "title": "2563. 统计公平数对的数目 - 统计公平数对的数目",
+      "url": "https://leetcode.cn/problems/count-the-number-of-fair-pairs/solution/tong-ji-gong-ping-shu-dui-de-shu-mu-by-l-hbgf/"
+    },
+    {
+      "index": 114,
+      "title": "2537. 统计好子数组的数目 - 统计好子数组的数目",
+      "url": "https://leetcode.cn/problems/count-the-number-of-good-subarrays/solution/tong-ji-hao-zi-shu-zu-de-shu-mu-by-leetc-uvcm/"
+    },
+    {
+      "index": 115,
+      "title": "2364. 统计坏数对的数目 - 统计坏数对的数目",
+      "url": "https://leetcode.cn/problems/count-number-of-bad-pairs/solution/tong-ji-pi-shu-dui-de-shu-mu-by-leetcode-04ya/"
+    },
+    {
+      "index": 116,
+      "title": "3272. 统计好整数的数目 - 统计好整数的数目",
+      "url": "https://leetcode.cn/problems/find-the-count-of-good-integers/solution/tong-ji-hao-zheng-shu-de-shu-mu-by-leetc-m5l4/"
+    },
+    {
+      "index": 117,
+      "title": "3375. 使数组的值全部为 K 的最少操作次数 - 使数组的值全部为 K 的最少操作次数",
+      "url": "https://leetcode.cn/problems/minimum-operations-to-make-array-values-equal-to-k/solution/shi-shu-zu-de-zhi-quan-bu-wei-k-de-zui-s-bhcw/"
+    },
+    {
+      "index": 118,
+      "title": "2843. 统计对称整数的数目 - 统计对称整数的数目",
+      "url": "https://leetcode.cn/problems/count-symmetric-integers/solution/tong-ji-dui-cheng-zheng-shu-de-shu-mu-by-layo/"
+    },
+    {
+      "index": 119,
+      "title": "2999. 统计强大整数的数目 - 统计强大整数的数目",
+      "url": "https://leetcode.cn/problems/count-the-number-of-powerful-integers/solution/tong-ji-qiang-da-zheng-shu-de-shu-mu-by-pozr1/"
+    },
+    {
+      "index": 120,
+      "title": "3396. 使数组元素互不相同所需的最少操作次数 - 使数组元素互不相同所需的最少操作次数",
+      "url": "https://leetcode.cn/problems/minimum-number-of-operations-to-make-elements-in-array-distinct/solution/shi-shu-zu-yuan-su-hu-bu-xiang-tong-suo-cay1s/"
+    },
+    {
+      "index": 121,
+      "title": "2360. 图中的最长环 - 图中的最长环",
+      "url": "https://leetcode.cn/problems/longest-cycle-in-a-graph/solution/tu-zhong-de-zui-chang-huan-by-leetcode-s-3iq1/"
+    },
+    {
+      "index": 122,
+      "title": "2712. 使所有字符相等的最小成本 - 使所有字符相等的最小成本",
+      "url": "https://leetcode.cn/problems/minimum-cost-to-make-all-characters-equal/solution/shi-suo-you-zi-fu-xiang-deng-de-zui-xiao-367q/"
+    }
+  ]
+}

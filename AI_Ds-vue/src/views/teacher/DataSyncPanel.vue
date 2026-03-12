@@ -212,7 +212,7 @@ import { getPtaCookieStatus, submitPtaCookie } from '../../api/tap'
 import { useUserStore } from '../../store'
 import axios from 'axios'
 
-const SPIDER_URL = 'http://localhost:8100'
+const SPIDER_URL = 'http://127.0.0.1:8100'
 const userStore = useUserStore()
 
 const currentKeyword = computed(() => userStore.selectedClass?.ptaKeyword || userStore.selectedClass?.name || '')
@@ -251,19 +251,23 @@ const taskStatusText = computed(() => {
 const modeCn = (m) => ({ incremental:'增量', submissions:'提交', refresh:'刷新', full:'全量' }[m] || m)
 const modeTagType = (m) => ({ full:'danger', refresh:'warning', submissions:'success', incremental:'primary' }[m] || '')
 
+async function probeSpiderHealth() {
+  try {
+    const r = await axios.get(`${SPIDER_URL}/health`, { timeout: 3000 })
+    spiderAlive.value = r.status === 200
+  } catch {
+    spiderAlive.value = false
+  }
+}
+
 async function loadCookieStatus() {
   try {
     const res = await getPtaCookieStatus()
     const d = res?.data || res
     cookieStatus.value = d?.status || 'UNKNOWN'
     lastSync.value = d?.lastUpdated || d?.updated_at || ''
-    spiderAlive.value = true
-  } catch {
-    try {
-      const r = await axios.get(`${SPIDER_URL}/health`, { timeout: 3000 })
-      spiderAlive.value = r.status === 200
-    } catch { spiderAlive.value = false }
-  }
+  } catch { /* ignore */ }
+  await probeSpiderHealth()
 }
 
 async function loadCooldown() {
@@ -283,6 +287,15 @@ async function loadTaskHistory() {
 
 async function triggerSync(mode) {
   const keyword = userStore.selectedClass?.ptaKeyword || userStore.selectedClass?.name || '数据结构'
+  if (!keyword || !String(keyword).trim()) {
+    ElMessage.warning('请先在班级管理中配置 PTA 同步关键词')
+    return
+  }
+  await probeSpiderHealth()
+  if (!spiderAlive.value) {
+    ElMessage.error('爬虫服务未启动，无法提交同步任务（请先启动 8100 服务）')
+    return
+  }
 
   // 强制模式需二次确认
   if (forceMode.value) {
@@ -296,10 +309,13 @@ async function triggerSync(mode) {
 
   syncLoading.value = mode
   try {
-    const r = await axios.post(`${SPIDER_URL}/crawl`, {
-      keyword, mode, force: forceMode.value,
-      class_id: userStore.selectedClass?.id || null
-    }, { timeout: 10000 })
+    const payload = { keyword: String(keyword).trim(), mode, force: forceMode.value }
+    const maybeClassId = Number(userStore.selectedClass?.id)
+    if (Number.isInteger(maybeClassId) && maybeClassId > 0) {
+      payload.class_id = maybeClassId
+    }
+
+    const r = await axios.post(`${SPIDER_URL}/crawl`, payload, { timeout: 10000 })
 
     // 冷却拦截
     if (r.data?.blocked) {
@@ -358,7 +374,7 @@ async function submitCookieHandler() {
   }
 }
 
-onMounted(() => { loadCookieStatus(); loadTaskHistory(); loadCooldown() })
+onMounted(() => { loadCookieStatus(); loadTaskHistory(); loadCooldown(); probeSpiderHealth() })
 onBeforeUnmount(() => { if (pollTimer) clearInterval(pollTimer) })
 </script>
 

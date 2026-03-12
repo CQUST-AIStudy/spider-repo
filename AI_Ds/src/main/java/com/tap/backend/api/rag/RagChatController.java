@@ -49,6 +49,7 @@ public class RagChatController {
     private final MilvusSearchService milvusSearch;
     private final LuceneBm25Service luceneBm25;
     private final FusionRankService fusionRank;
+    private final TopRerankService topRerank;
     private final EvidenceCompressService evidenceCompress;
     private final CoverageCalculator coverageCalc;
     private final ModeDecisionService modeDecision;
@@ -73,6 +74,7 @@ public class RagChatController {
                              MilvusSearchService milvusSearch,
                              LuceneBm25Service luceneBm25,
                              FusionRankService fusionRank,
+                             TopRerankService topRerank,
                              EvidenceCompressService evidenceCompress,
                              CoverageCalculator coverageCalc,
                              ModeDecisionService modeDecision,
@@ -90,6 +92,7 @@ public class RagChatController {
         this.milvusSearch = milvusSearch;
         this.luceneBm25 = luceneBm25;
         this.fusionRank = fusionRank;
+        this.topRerank = topRerank;
         this.evidenceCompress = evidenceCompress;
         this.coverageCalc = coverageCalc;
         this.modeDecision = modeDecision;
@@ -205,6 +208,16 @@ public class RagChatController {
                 List<Long> parentIds = ranked.stream().map(FusionRankService.RankedParent::parentId).toList();
                 Map<Long, DocChunkEntity> parentChunks = docChunkRepo.findAllByIdIn(parentIds).stream()
                         .collect(Collectors.toMap(DocChunkEntity::getId, Function.identity()));
+
+                // 6b. Top rerank for multi-route recall stabilization
+                ranked = topRerank.rerank(request.query(), ranked, parentChunks, chunkAnnotations);
+                parentIds = ranked.stream().map(FusionRankService.RankedParent::parentId).toList();
+                Set<Long> rerankedParentIdSet = new HashSet<>(parentIds);
+                parentChunks = parentChunks.entrySet().stream()
+                        .filter(e -> rerankedParentIdSet.contains(e.getKey()))
+                        .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+                final Map<Long, DocChunkEntity> parentChunksFinal = parentChunks;
+
                 Map<Long, String> docNames = documentRepo.findAllById(
                         ranked.stream().map(FusionRankService.RankedParent::docId).collect(Collectors.toSet())
                 ).stream().collect(Collectors.toMap(DocumentEntity::getId, DocumentEntity::getFilename));
@@ -230,7 +243,7 @@ public class RagChatController {
                 boolean hitFaq = ranked.stream().anyMatch(r -> "faq".equals(r.docType()));
                 boolean hitAnnotation = !chunkAnnotations.isEmpty() &&
                         ranked.stream().anyMatch(r -> {
-                            DocChunkEntity c = parentChunks.get(r.parentId());
+                            DocChunkEntity c = parentChunksFinal.get(r.parentId());
                             return c != null && chunkAnnotations.containsKey(c.getId());
                         });
                 coverageScore = coverageCalc.calculate(top1Score, evidenceBlocks.size(), hitFaq, hitAnnotation);

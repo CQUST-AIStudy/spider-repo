@@ -22,6 +22,8 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,6 +32,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -63,6 +66,47 @@ public class AgentJobController {
   }
 
   public record CreateJobRequest(@NotNull Long uploadFolderId) {}
+  public record JobSummary(
+      Long id,
+      Long uploadFolderId,
+      String status,
+      Integer progress,
+      String currentStep,
+      String errorMessage,
+      Boolean hasZip,
+      Instant createdAt,
+      Instant finishedAt
+  ) {}
+
+  @GetMapping
+  @Transactional(readOnly = true)
+  public ApiResponse<Map<String, Object>> list(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @RequestParam(value = "limit", required = false, defaultValue = "20") int limit
+  ) {
+    int safeLimit = Math.max(1, Math.min(30, limit));
+    var resolved = principalResolver.resolve(principal);
+    var user = userService.requireById(resolved.userId());
+
+    List<AgentJobEntity> jobs = agentJobRepository.findTop30ByUser_IdOrderByCreatedAtDesc(user.getId());
+    List<JobSummary> items = new ArrayList<>();
+    for (AgentJobEntity job : jobs) {
+      if (items.size() >= safeLimit) break;
+      items.add(new JobSummary(
+          job.getId(),
+          job.getUploadFolderId(),
+          job.getStatus() == null ? null : job.getStatus().name(),
+          job.getProgress(),
+          job.getCurrentStep(),
+          job.getErrorMessage(),
+          job.getZipObjectKey() != null,
+          job.getCreatedAt(),
+          job.getFinishedAt()
+      ));
+    }
+
+    return ApiResponse.of(Maps.of("items", items, "count", items.size()));
+  }
 
   @PostMapping
   public ApiResponse<Map<String, Object>> submit(

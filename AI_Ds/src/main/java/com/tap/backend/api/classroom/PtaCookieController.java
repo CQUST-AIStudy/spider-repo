@@ -24,7 +24,7 @@ public class PtaCookieController {
     private static final Logger log = LoggerFactory.getLogger(PtaCookieController.class);
     private final RestTemplate rest = new RestTemplate();
 
-    @Value("${pta.spider-url:http://localhost:8100}")
+    @Value("${pta.spider-url:http://127.0.0.1:8100}")
     private String spiderUrl;
 
     // 内存缓存（重启后由爬虫下次运行时重新上报）

@@ -8,6 +8,7 @@ public record RagProperties(
     Milvus milvus,
     Retrieval retrieval,
     Fusion fusion,
+    Rerank rerank,
     Mmr mmr,
     Coverage coverage,
     Evidence evidence,
@@ -50,6 +51,32 @@ public record RagProperties(
     ) {
         public Mmr {
             if (lambda == 0) lambda = 0.7;
+        }
+    }
+
+    public record Rerank(
+        boolean enabled,
+        String provider,
+        String endpoint,
+        int timeoutMs,
+        double crossEncoderWeight,
+        int topN,
+        double baseWeight,
+        double overlapWeight,
+        double phraseWeight,
+        double annotationWeight
+    ) {
+        public Rerank {
+            if (provider == null || provider.isBlank()) provider = "heuristic";
+            if (timeoutMs == 0) timeoutMs = 2000;
+            if (crossEncoderWeight == 0) crossEncoderWeight = 0.7;
+            if (topN == 0) topN = 5;
+            if (baseWeight == 0 && overlapWeight == 0 && phraseWeight == 0 && annotationWeight == 0) {
+                baseWeight = 0.45;
+                overlapWeight = 0.4;
+                phraseWeight = 0.1;
+                annotationWeight = 0.05;
+            }
         }
     }
 

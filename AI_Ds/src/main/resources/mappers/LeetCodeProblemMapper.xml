@@ -1,51 +1,80 @@
-<?xml version="1.0" encoding="UTF-8" ?>
+<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.cqust.ai_server.dao.LeetCodeProblemDao">
 
     <!-- 结果映射 -->
-    <resultMap id="leetCodeProblemResultMap" type="com.cqust.ai_server.entity.LeetCodeProblem">
-        <id property="id" column="id"/>
-        <result property="sourceKey" column="source_key"/>
-        <result property="problemCode" column="problem_code"/>
-        <result property="numericId" column="numeric_id"/>
-        <result property="titleMain" column="title_main"/>
-        <result property="titleAlt" column="title_alt"/>
-        <result property="problemText" column="problem_text"/>
-        <result property="solutionText" column="solution_text"/>
-        <result property="sourceUrl" column="source_url"/>
-        <result property="difficulty" column="difficulty"/>
-        <result property="estimatedMinutes" column="estimated_minutes"/>
-        <result property="qualityScore" column="quality_score"/>
-        <result property="createdAt" column="created_at"/>
-        <result property="updatedAt" column="updated_at"/>
+    <resultMap id="LeetCodeProblemResultMap" type="com.cqust.ai_server.entity.LeetCodeProblem">
+        <id column="id" property="id"/>
+        <result column="source_key" property="sourceKey"/>
+        <result column="problem_code" property="problemCode"/>
+        <result column="numeric_id" property="numericId"/>
+        <result column="title_main" property="titleMain"/>
+        <result column="title_alt" property="titleAlt"/>
+        <result column="problem_text" property="problemText"/>
+        <result column="solution_text" property="solutionText"/>
+        <result column="source_url" property="sourceUrl"/>
+        <result column="difficulty" property="difficulty"/>
+        <result column="estimated_minutes" property="estimatedMinutes"/>
+        <result column="quality_score" property="qualityScore"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
     </resultMap>
 
-    <!-- 根据ID查询 -->
-    <select id="findById" resultMap="leetCodeProblemResultMap">
+    <!-- 根据ID查找题目 -->
+    <select id="findById" resultMap="LeetCodeProblemResultMap">
         SELECT * FROM leetcode_problem_bank WHERE id = #{id}
     </select>
 
-    <!-- 根据sourceKey查询 -->
-    <select id="findBySourceKey" resultMap="leetCodeProblemResultMap">
-        SELECT * FROM leetcode_problem_bank WHERE source_key = #{sourceKey}
+    <!-- 根据题目代码查找题目 -->
+    <select id="findByProblemCode" resultMap="LeetCodeProblemResultMap">
+        SELECT * FROM leetcode_problem_bank WHERE problem_code = #{problemCode}
     </select>
 
-    <!-- 查询所有题目 -->
-    <select id="findAll" resultMap="leetCodeProblemResultMap">
-        SELECT * FROM leetcode_problem_bank ORDER BY id
+    <!-- 获取所有题目 -->
+    <select id="findAll" resultMap="LeetCodeProblemResultMap">
+        SELECT * FROM leetcode_problem_bank ORDER BY numeric_id ASC, id ASC
     </select>
 
-    <!-- 根据难度查询 -->
-    <select id="findByDifficulty" resultMap="leetCodeProblemResultMap">
-        SELECT * FROM leetcode_problem_bank WHERE difficulty = #{difficulty} ORDER BY quality_score DESC
-    </select>
-
-    <!-- 根据质量分数范围查询 -->
-    <select id="findByQualityRange" resultMap="leetCodeProblemResultMap">
+    <!-- 根据难度查找题目 -->
+    <select id="findByDifficulty" resultMap="LeetCodeProblemResultMap">
         SELECT * FROM leetcode_problem_bank 
-        WHERE quality_score BETWEEN #{minQuality} AND #{maxQuality}
-        ORDER BY quality_score DESC
+        WHERE difficulty = #{difficulty}
+        ORDER BY numeric_id ASC, id ASC
     </select>
+
+    <!-- 批量根据ID查找题目 -->
+    <select id="findByIds" resultMap="LeetCodeProblemResultMap">
+        SELECT * FROM leetcode_problem_bank
+        WHERE id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </select>
+
+    <!-- 分页查询题目 -->
+    <select id="findByPage" resultMap="LeetCodeProblemResultMap">
+        SELECT * FROM leetcode_problem_bank 
+        ORDER BY numeric_id ASC, id ASC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <!-- 统计题目总数 -->
+    <select id="count" resultType="int">
+        SELECT COUNT(*) FROM leetcode_problem_bank
+    </select>
+
+    <!-- 插入题目 -->
+    <insert id="insert" parameterType="com.cqust.ai_server.entity.LeetCodeProblem" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO leetcode_problem_bank (
+            source_key, problem_code, numeric_id, title_main, title_alt,
+            problem_text, solution_text, source_url, difficulty, 
+            estimated_minutes, quality_score
+        ) VALUES (
+            #{sourceKey}, #{problemCode}, #{numericId}, #{titleMain}, #{titleAlt},
+            #{problemText}, #{solutionText}, #{sourceUrl}, #{difficulty},
+            #{estimatedMinutes}, #{qualityScore}
+        )
+    </insert>
 
     <!-- 插入或更新题目 -->
     <insert id="insertOrUpdate" parameterType="com.cqust.ai_server.entity.LeetCodeProblem" useGeneratedKeys="true" keyProperty="id">
@@ -58,8 +87,6 @@
             #{problemText}, #{solutionText}, #{sourceUrl}, #{difficulty},
             #{estimatedMinutes}, #{qualityScore}
         ) ON DUPLICATE KEY UPDATE
-            problem_code = VALUES(problem_code),
-            numeric_id = VALUES(numeric_id),
             title_main = VALUES(title_main),
             title_alt = VALUES(title_alt),
             problem_text = VALUES(problem_text),
@@ -70,29 +97,11 @@
             quality_score = VALUES(quality_score),
             updated_at = CURRENT_TIMESTAMP
     </insert>
-    <!-- 批量插入题目 -->
-    <insert id="batchInsert" parameterType="java.util.List">
-        INSERT INTO leetcode_problem_bank (
-            source_key, problem_code, numeric_id, title_main, title_alt,
-            problem_text, solution_text, source_url, difficulty, 
-            estimated_minutes, quality_score
-        ) VALUES
-        <foreach collection="problems" item="problem" separator=",">
-            (#{problem.sourceKey}, #{problem.problemCode}, #{problem.numericId}, 
-             #{problem.titleMain}, #{problem.titleAlt}, #{problem.problemText}, 
-             #{problem.solutionText}, #{problem.sourceUrl}, #{problem.difficulty},
-             #{problem.estimatedMinutes}, #{problem.qualityScore})
-        </foreach>
-        ON DUPLICATE KEY UPDATE
-            title_main = VALUES(title_main),
-            problem_text = VALUES(problem_text),
-            solution_text = VALUES(solution_text),
-            updated_at = CURRENT_TIMESTAMP
-    </insert>
 
     <!-- 更新题目 -->
     <update id="update" parameterType="com.cqust.ai_server.entity.LeetCodeProblem">
         UPDATE leetcode_problem_bank SET
+            source_key = #{sourceKey},
             problem_code = #{problemCode},
             numeric_id = #{numericId},
             title_main = #{titleMain},
@@ -111,33 +120,5 @@
     <delete id="deleteById">
         DELETE FROM leetcode_problem_bank WHERE id = #{id}
     </delete>
-
-    <!-- 统计题目总数 -->
-    <select id="count" resultType="int">
-        SELECT COUNT(*) FROM leetcode_problem_bank
-    </select>
-
-    <!-- 根据标签查询题目 -->
-    <select id="findByTag" resultMap="leetCodeProblemResultMap">
-        SELECT p.* FROM leetcode_problem_bank p
-        INNER JOIN leetcode_problem_tag t ON p.id = t.problem_id
-        WHERE t.tag_name = #{tagName}
-        ORDER BY p.quality_score DESC
-    </select>
-
-    <!-- 根据多个标签查询题目（交集） -->
-    <select id="findByTags" resultMap="leetCodeProblemResultMap">
-        SELECT p.* FROM leetcode_problem_bank p
-        WHERE p.id IN (
-            SELECT problem_id FROM leetcode_problem_tag
-            WHERE tag_name IN
-            <foreach collection="tagNames" item="tagName" open="(" separator="," close=")">
-                #{tagName}
-            </foreach>
-            GROUP BY problem_id
-            HAVING COUNT(DISTINCT tag_name) = #{tagNames.size}
-        )
-        ORDER BY p.quality_score DESC
-    </select>
 
 </mapper>

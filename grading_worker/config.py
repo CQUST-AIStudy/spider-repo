@@ -25,7 +25,7 @@ MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "sk-a61d8a8deb854cc59581734b4fc35bc3")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-DEEPSEEK_RATE_LIMIT = int(os.getenv("DEEPSEEK_RATE_LIMIT", "10"))  # requests per minute
+DEEPSEEK_RATE_LIMIT = int(os.getenv("DEEPSEEK_RATE_LIMIT", "30"))  # requests per minute
 
 # VLM API
 VLM_API_URL = os.getenv("VLM_API_URL", "")
@@ -34,6 +34,10 @@ VLM_RATE_LIMIT = int(os.getenv("VLM_RATE_LIMIT", "5"))  # requests per minute
 
 # Celery
 CELERY_CONCURRENCY = int(os.getenv("CELERY_CONCURRENCY", "4"))
+CELERY_POOL = os.getenv("CELERY_POOL", "threads" if os.name == "nt" else "prefork")
+
+# Scoring concurrency inside each submission
+DIMENSION_SCORE_CONCURRENCY = int(os.getenv("DIMENSION_SCORE_CONCURRENCY", "2"))
 
 # Queue keys
 TASK_QUEUE_KEY = "grading:tasks"

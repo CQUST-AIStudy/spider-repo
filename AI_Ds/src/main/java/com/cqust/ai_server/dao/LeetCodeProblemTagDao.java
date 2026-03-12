@@ -11,44 +11,44 @@ import java.util.List;
  */
 @Mapper
 public interface LeetCodeProblemTagDao {
-
+    
     /**
-     * 根据题目ID查询标签
+     * 根据题目ID查找标签
      */
     List<LeetCodeProblemTag> findByProblemId(@Param("problemId") Long problemId);
-
+    
     /**
-     * 根据标签名查询题目标签
+     * 根据标签类型和值查找题目ID
      */
-    List<LeetCodeProblemTag> findByTagName(@Param("tagName") String tagName);
-
+    List<Long> findProblemIdsByTag(@Param("tagType") String tagType, @Param("tagValue") String tagValue);
+    
     /**
-     * 插入标签（支持重复键更新）
+     * 根据多个标签查找题目ID
      */
-    int insertOrUpdate(LeetCodeProblemTag tag);
-
+    List<Long> findProblemIdsByTags(@Param("tagType") String tagType, @Param("tagValues") List<String> tagValues);
+    
+    /**
+     * 获取所有标签类型
+     */
+    List<String> findAllTagTypes();
+    
+    /**
+     * 根据标签类型获取所有标签值
+     */
+    List<String> findTagValuesByType(@Param("tagType") String tagType);
+    
+    /**
+     * 插入标签
+     */
+    void insert(LeetCodeProblemTag tag);
+    
     /**
      * 批量插入标签
      */
-    int batchInsert(@Param("tags") List<LeetCodeProblemTag> tags);
-
+    void batchInsert(@Param("tags") List<LeetCodeProblemTag> tags);
+    
     /**
      * 删除题目的所有标签
      */
-    int deleteByProblemId(@Param("problemId") Long problemId);
-
-    /**
-     * 删除特定标签
-     */
-    int deleteByProblemIdAndTag(@Param("problemId") Long problemId, @Param("tagName") String tagName);
-
-    /**
-     * 获取所有标签名称
-     */
-    List<String> getAllTagNames();
-
-    /**
-     * 统计标签使用次数
-     */
-    List<Object> getTagUsageStats();
+    void deleteByProblemId(@Param("problemId") Long problemId);
 }

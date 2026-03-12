@@ -1,0 +1,113 @@
+{
+  "input_files": [
+    "solutions.json",
+    "solutions.json.backup_20251028_222030",
+    "solutions.json.backup_20251028_222714",
+    "solutions.json.backup_20251028_223002",
+    "solutions.json.backup_20251028_225218",
+    "solutions.json.backup_20251028_230627",
+    "solutions.json.backup_20251028_231332",
+    "solutions.json.backup_20251028_231602",
+    "solutions.json.backup_20251028_231720",
+    "solutions.json.backup_20251028_235132",
+    "solutions.json.backup_20251028_235224",
+    "solutions.json.backup_20251028_235252",
+    "solutions.json.backup_20251029_000054",
+    "solutions.json.backup_20251029_001440",
+    "solutions.json.backup_20251029_002405",
+    "solutions.json.backup_20251029_002733",
+    "solutions.json.backup_20251029_003210",
+    "solutions.json.backup_20251029_003245",
+    "solutions.json.backup_20251029_003802",
+    "solutions.json.backup_20251029_004135",
+    "solutions.json.backup_20251029_004201",
+    "solutions.json.backup_repair",
+    "solutions_sorted.json"
+  ],
+  "parse_failures": [],
+  "file_row_counts": {
+    "solutions.json": 4,
+    "solutions.json.backup_20251028_222030": 277,
+    "solutions.json.backup_20251028_222714": 277,
+    "solutions.json.backup_20251028_223002": 277,
+    "solutions.json.backup_20251028_225218": 273,
+    "solutions.json.backup_20251028_230627": 359,
+    "solutions.json.backup_20251028_231332": 382,
+    "solutions.json.backup_20251028_231602": 386,
+    "solutions.json.backup_20251028_231720": 386,
+    "solutions.json.backup_20251028_235132": 536,
+    "solutions.json.backup_20251028_235224": 536,
+    "solutions.json.backup_20251028_235252": 536,
+    "solutions.json.backup_20251029_000054": 535,
+    "solutions.json.backup_20251029_001440": 583,
+    "solutions.json.backup_20251029_002405": 714,
+    "solutions.json.backup_20251029_002733": 739,
+    "solutions.json.backup_20251029_003210": 776,
+    "solutions.json.backup_20251029_003245": 776,
+    "solutions.json.backup_20251029_003802": 791,
+    "solutions.json.backup_20251029_004135": 816,
+    "solutions.json.backup_20251029_004201": 816,
+    "solutions.json.backup_repair": 816,
+    "solutions_sorted.json": 791
+  },
+  "merged_total_rows": 864,
+  "cleaned_total_rows": 506,
+  "dropped_counts": {
+    "empty_output": 352,
+    "known_failure_output": 6
+  },
+  "source_contribution_non_empty_top20": [
+    [
+      "solutions.json.backup_20251028_222030",
+      228
+    ],
+    [
+      "solutions.json.backup_20251028_230627",
+      56
+    ],
+    [
+      "solutions.json.backup_20251029_002405",
+      56
+    ],
+    [
+      "solutions.json.backup_20251028_225218",
+      32
+    ],
+    [
+      "solutions.json.backup_20251028_235132",
+      29
+    ],
+    [
+      "solutions.json.backup_20251029_003210",
+      23
+    ],
+    [
+      "solutions.json.backup_20251029_002733",
+      21
+    ],
+    [
+      "solutions.json.backup_20251028_231332",
+      19
+    ],
+    [
+      "solutions.json.backup_20251029_004135",
+      19
+    ],
+    [
+      "solutions.json.backup_20251029_003802",
+      10
+    ],
+    [
+      "solutions.json.backup_20251029_001440",
+      5
+    ],
+    [
+      "solutions.json",
+      4
+    ],
+    [
+      "solutions.json.backup_20251028_231602",
+      4
+    ]
+  ]
+}

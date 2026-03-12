@@ -7,6 +7,7 @@
         <result property="username" column="username"/>
         <result property="real_name" column="real_name"/>
         <result property="experiment_id" column="experiment_id"/>
+        <result property="num" column="num"/>
         <result property="score" column="score"/>
         <result property="submit_time" column="submit_time"/>
         <result property="plagiarism_rate" column="plagiarism_rate"/>
@@ -22,8 +23,8 @@
 
     <!-- 保存成绩信息 -->
     <insert id="saveScore" parameterType="com.cqust.ai_server.entity.Score" useGeneratedKeys="true" keyProperty="score_id">
-        INSERT INTO score (username, experiment_id, score, submit_time, plagiarism_rate, status)
-        VALUES (#{username}, #{experiment_id}, #{score}, #{submit_time}, #{plagiarism_rate}, #{status})
+        INSERT INTO score (username, real_name, experiment_id, num, score, submit_time, plagiarism_rate, status)
+        VALUES (#{username}, #{real_name}, #{experiment_id}, #{num}, #{score}, #{submit_time}, #{plagiarism_rate}, #{status})
     </insert>
 
     <!-- 更新成绩信息 -->

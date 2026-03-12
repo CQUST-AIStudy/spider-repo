@@ -134,8 +134,8 @@ public class LeetCodeSyncServiceImpl implements LeetCodeSyncService {
             problem.setQualityScore(new BigDecimal("0.8000")); // 默认质量分数
 
             // 保存题目
-            int result = leetCodeProblemDao.insertOrUpdate(problem);
-            if (result > 0 && problem.getId() != null) {
+            leetCodeProblemDao.insertOrUpdate(problem);
+            if (problem.getId() != null) {
                 // 提取并保存标签
                 extractAndSaveTags(problem.getId(), input, output);
                 return true;
@@ -177,7 +177,10 @@ public class LeetCodeSyncServiceImpl implements LeetCodeSyncService {
                 String tagCategory = getTagCategory(tagName);
                 boolean isPrimary = index == 0; // 第一个标签设为主标签
                 
-                LeetCodeProblemTag tag = new LeetCodeProblemTag(problemId, tagName, tagCategory, isPrimary);
+                LeetCodeProblemTag tag = new LeetCodeProblemTag(problemId, tagCategory, tagName);
+                if (isPrimary) {
+                    tag.setConfidence(new BigDecimal("0.95")); // 主标签置信度更高
+                }
                 tags.add(tag);
                 index++;
             }
