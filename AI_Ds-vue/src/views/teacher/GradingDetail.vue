@@ -58,7 +58,7 @@
           <el-table-column label="总分" width="100">
             <template #default="{row}">
               <span class="score-cell" :class="scoreClass(row.totalScore)">
-                {{ row.totalScore != null ? row.totalScore : '-' }}
+                {{ formatScore(row.totalScore) }}
               </span>
             </template>
           </el-table-column>
@@ -92,7 +92,7 @@
               <el-checkbox :label="sub.submissionId">
                 {{ sub.studentName || '未知' }}
                 <span style="color:#9aa0a6;margin-left:8px">{{ sub.className || '' }}</span>
-                <span style="color:#5f6368;margin-left:8px">{{ sub.totalScore != null ? sub.totalScore + '分' : '-' }}</span>
+                <span style="color:#5f6368;margin-left:8px">{{ sub.totalScore != null ? formatScore(sub.totalScore) + '分' : '-' }}</span>
               </el-checkbox>
             </div>
           </el-checkbox-group>
@@ -140,9 +140,14 @@ function statusText(s) {
 }
 function scoreClass(s) {
   if (s == null) return ''
-  if (s >= 0.8) return 'score-good'
-  if (s >= 0.6) return 'score-ok'
+  if (s >= 80) return 'score-good'
+  if (s >= 60) return 'score-ok'
   return 'score-low'
+}
+function formatScore(s) {
+  if (s == null || s === '') return '-'
+  const n = Number(s)
+  return Number.isFinite(n) ? n.toFixed(1).replace(/\.0$/, '') : s
 }
 
 const filteredSubs = computed(() => {

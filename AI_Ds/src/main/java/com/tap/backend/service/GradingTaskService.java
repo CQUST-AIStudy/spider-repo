@@ -56,9 +56,13 @@ public class GradingTaskService {
                                            Long rubricId, java.math.BigDecimal scoreRangeMin,
                                            java.math.BigDecimal scoreRangeMax,
                                            MultipartFile[] files) {
+        if (files == null || files.length == 0) {
+            throw new IllegalArgumentException("At least one PDF file is required");
+        }
         if (files.length > MAX_BATCH_SIZE) {
             throw new IllegalArgumentException("Batch size exceeds maximum of " + MAX_BATCH_SIZE);
         }
+        validateScoreRange(scoreRangeMin, scoreRangeMax);
 
         UserEntity teacher = userRepo.findById(teacherId)
                 .orElseThrow(() -> new IllegalArgumentException("Teacher not found"));
@@ -302,6 +306,10 @@ public class GradingTaskService {
 
             List<GradingSubmissionEntity> pending = submissionRepo
                     .findAllByTaskIdAndStatus(taskId, SubmissionStatus.PENDING);
+            if (!pending.isEmpty() && task.getStatus() == GradingTaskStatus.PENDING) {
+                task.setStatus(GradingTaskStatus.PROCESSING);
+                taskRepo.save(task);
+            }
             for (GradingSubmissionEntity sub : pending) {
                 Map<String, Object> msg = new LinkedHashMap<>();
                 msg.put("taskId", taskId);
@@ -344,5 +352,21 @@ public class GradingTaskService {
         if (filename == null) return null;
         // Remove .pdf extension and use as student name
         return filename.replaceAll("\\.[pP][dD][fF]$", "");
+    }
+
+    private void validateScoreRange(java.math.BigDecimal scoreRangeMin, java.math.BigDecimal scoreRangeMax) {
+        if (scoreRangeMin == null && scoreRangeMax == null) {
+            return;
+        }
+        if (scoreRangeMin == null || scoreRangeMax == null) {
+            throw new IllegalArgumentException("Both scoreRangeMin and scoreRangeMax are required");
+        }
+        if (scoreRangeMin.compareTo(java.math.BigDecimal.ZERO) < 0
+                || scoreRangeMax.compareTo(new java.math.BigDecimal("100")) > 0) {
+            throw new IllegalArgumentException("Score range must be between 0 and 100");
+        }
+        if (scoreRangeMin.compareTo(scoreRangeMax) > 0) {
+            throw new IllegalArgumentException("scoreRangeMin must be less than or equal to scoreRangeMax");
+        }
     }
 }

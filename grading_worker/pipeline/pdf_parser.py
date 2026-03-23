@@ -2,6 +2,10 @@
 import fitz  # PyMuPDF
 from models.pipeline_models import ParsedDocument, ParsedPage, ImageInfo
 
+SCAN_RENDER_DPI = 260
+LOW_TEXT_THRESHOLD = 40
+FULL_PAGE_IMAGE_COVERAGE = 0.6
+
 
 def parse_pdf(pdf_bytes: bytes) -> ParsedDocument:
     """Parse a PDF and extract text + images per page."""
@@ -15,8 +19,10 @@ def parse_pdf(pdf_bytes: bytes) -> ParsedDocument:
         for page_num in range(len(doc)):
             page = doc[page_num]
             text = page.get_text("text") or ""
+            page_area = max(float(page.rect.width * page.rect.height), 1.0)
 
             images = []
+            max_image_coverage = 0.0
             for img_index, img in enumerate(page.get_images(full=True)):
                 xref = img[0]
                 try:
@@ -28,6 +34,8 @@ def parse_pdf(pdf_bytes: bytes) -> ParsedDocument:
                         if img_rects:
                             r = img_rects[0]
                             bbox = [r.x0, r.y0, r.x1, r.y1]
+                            coverage = abs((r.x1 - r.x0) * (r.y1 - r.y0)) / page_area
+                            max_image_coverage = max(max_image_coverage, coverage)
 
                         images.append(ImageInfo(
                             page=page_num + 1,
@@ -37,11 +45,11 @@ def parse_pdf(pdf_bytes: bytes) -> ParsedDocument:
                 except Exception:
                     continue
 
-            # Fallback for scanned/image-only pages:
-            # render whole page to PNG so OCR can still run.
-            if len(images) == 0 and len(text.strip()) < 20:
+            # Fallback for scanned/image-heavy pages:
+            # render whole page to PNG so OCR can still run on unified page content.
+            if len(text.strip()) < LOW_TEXT_THRESHOLD and max_image_coverage < FULL_PAGE_IMAGE_COVERAGE:
                 try:
-                    pix = page.get_pixmap(dpi=180, alpha=False)
+                    pix = page.get_pixmap(dpi=SCAN_RENDER_DPI, alpha=False)
                     page_png = pix.tobytes("png")
                     images.append(ImageInfo(
                         page=page_num + 1,

@@ -18,6 +18,8 @@ from models.pipeline_models import EvidencePack, ScoreResult
 
 MAX_SCHEMA_RETRIES = 3
 _redis_client = None
+MAX_EVIDENCE_BLOCKS_PER_DIM = 4
+MAX_EVIDENCE_CHARS_PER_BLOCK = 600
 
 
 def _get_redis():
@@ -72,6 +74,35 @@ def _extract_json_object(content: str) -> dict:
     return json.loads(match.group(0))
 
 
+def _post_chat_json(prompt: str, max_tokens: int) -> tuple[dict, dict]:
+    """Call DeepSeek chat completion and parse the first JSON object in the reply."""
+    resp = httpx.post(
+        f"{DEEPSEEK_BASE_URL}/chat/completions",
+        json={
+            "model": DEEPSEEK_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1,
+            "max_tokens": max_tokens,
+        },
+        headers={
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        timeout=90.0,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    usage = data.get("usage", {})
+    content = data["choices"][0]["message"]["content"]
+    parsed = _extract_json_object(content)
+    trace_info = {
+        "model_used": DEEPSEEK_MODEL,
+        "input_tokens": usage.get("prompt_tokens", 0),
+        "output_tokens": usage.get("completion_tokens", 0),
+    }
+    return parsed, trace_info
+
+
 def _to_float(value, default=None):
     if value is None:
         return default
@@ -79,6 +110,13 @@ def _to_float(value, default=None):
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _clip_text(text: str, max_len: int) -> str:
+    s = (text or "").strip()
+    if len(s) <= max_len:
+        return s
+    return s[: max_len - 3].rstrip() + "..."
 
 
 def _has_substantial_evidence(evidence_pack: EvidencePack) -> bool:
@@ -140,6 +178,111 @@ def _normalize_result(parsed: dict, evidence_pack: EvidencePack, dimension: dict
     )
 
 
+def score_dimensions_batch(
+    evidence_packs: dict[int, EvidencePack],
+    dimensions: list[dict],
+    custom_prompt: str = None,
+    score_range_min: float = None,
+    score_range_max: float = None,
+) -> tuple[dict[int, ScoreResult], dict]:
+    """Score all rubric dimensions for one submission in a single model call."""
+    _rate_limit_wait()
+
+    custom_section = ""
+    if custom_prompt and custom_prompt.strip():
+        custom_section = (
+            "\nTeacher custom requirements:\n"
+            f"{custom_prompt.strip()}\n"
+        )
+
+    range_section = ""
+    if score_range_min is not None and score_range_max is not None:
+        range_section = (
+            "\nOverall score calibration:\n"
+            f"- The teacher expects most submissions in this batch to fall around {score_range_min:.0f}-{score_range_max:.0f} / 100.\n"
+            "- Use this only as a calibration hint. Do not force every student into that range.\n"
+        )
+
+    request_payload = []
+    for dim in dimensions:
+        pack = evidence_packs.get(dim["id"])
+        blocks = []
+        for eb in (pack.blocks if pack else [])[:MAX_EVIDENCE_BLOCKS_PER_DIM]:
+            blocks.append({
+                "evidence_id": eb.evidence_id,
+                "kind": eb.kind,
+                "page": eb.page,
+                "confidence": eb.confidence,
+                "content": _clip_text(eb.content, MAX_EVIDENCE_CHARS_PER_BLOCK),
+            })
+        request_payload.append({
+            "dimension_id": dim["id"],
+            "name": dim["name"],
+            "description": dim.get("description", ""),
+            "max_score": dim["max_score"],
+            "weight": dim["weight"],
+            "evidence_blocks": blocks,
+        })
+
+    prompt = (
+        "You are a strict lab report grading assistant.\n"
+        "Grade every rubric dimension below based only on the provided evidence.\n"
+        "Comments must be in Chinese.\n"
+        f"{custom_section}"
+        f"{range_section}"
+        "\nRules:\n"
+        "1. If a dimension has some relevant evidence, return status=SCORED and give a conservative score.\n"
+        "2. Use status=NEED_MORE_EVIDENCE only when all provided evidence is irrelevant or missing for that dimension.\n"
+        "3. score must be between 0 and max_score.\n"
+        "4. evidence_ids must only use IDs that appear in that dimension's evidence_blocks.\n"
+        "5. Return JSON only. No markdown.\n"
+        "\nReturn this schema exactly:\n"
+        "{\n"
+        '  "results": [\n'
+        "    {\n"
+        '      "dimension_id": 1,\n'
+        '      "score": 0,\n'
+        '      "max_score": 10,\n'
+        '      "comment": "中文评分理由",\n'
+        '      "evidence_ids": ["ev-1"],\n'
+        '      "status": "SCORED"\n'
+        "    }\n"
+        "  ]\n"
+        "}\n"
+        "\nInput JSON:\n"
+        f"{json.dumps(request_payload, ensure_ascii=False)}"
+    )
+
+    start = time.time()
+    for attempt in range(MAX_SCHEMA_RETRIES):
+        try:
+            parsed, trace_info = _post_chat_json(prompt, max_tokens=1600)
+            raw_results = parsed.get("results")
+            if not isinstance(raw_results, list):
+                raise ValueError("results must be a list")
+
+            raw_by_dim = {}
+            for item in raw_results:
+                if isinstance(item, dict) and item.get("dimension_id") is not None:
+                    raw_by_dim[int(item["dimension_id"])] = item
+
+            normalized = {}
+            for dim in dimensions:
+                dim_id = int(dim["id"])
+                if dim_id not in raw_by_dim:
+                    raise ValueError(f"missing result for dimension {dim_id}")
+                pack = evidence_packs.get(dim_id) or EvidencePack(dimension_id=dim_id, blocks=[])
+                normalized[dim_id] = _normalize_result(raw_by_dim[dim_id], pack, dim)
+
+            trace_info["duration_ms"] = int((time.time() - start) * 1000)
+            trace_info["mode"] = "batch"
+            return normalized, trace_info
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+            if attempt == MAX_SCHEMA_RETRIES - 1:
+                raise ValueError(f"batch scoring returned invalid json: {e}") from e
+            continue
+
+
 def score_dimension(
     evidence_pack: EvidencePack,
     dimension: dict,  # {id, name, description, max_score, weight}
@@ -186,34 +329,14 @@ def score_dimension(
   "status": "SCORED"
 }}"""
 
-    trace_info = {"model_used": DEEPSEEK_MODEL, "input_tokens": 0, "output_tokens": 0}
+    trace_info = {"model_used": DEEPSEEK_MODEL, "input_tokens": 0, "output_tokens": 0, "mode": "single"}
     start = time.time()
 
     for attempt in range(MAX_SCHEMA_RETRIES):
         try:
-            resp = httpx.post(
-                f"{DEEPSEEK_BASE_URL}/chat/completions",
-                json={
-                    "model": DEEPSEEK_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.1,
-                    "max_tokens": 500,
-                },
-                headers={
-                    "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                timeout=60.0,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-
-            usage = data.get("usage", {})
-            trace_info["input_tokens"] = usage.get("prompt_tokens", 0)
-            trace_info["output_tokens"] = usage.get("completion_tokens", 0)
-
-            content = data["choices"][0]["message"]["content"]
-            parsed = _extract_json_object(content)
+            parsed, call_trace = _post_chat_json(prompt, max_tokens=500)
+            trace_info["input_tokens"] = call_trace["input_tokens"]
+            trace_info["output_tokens"] = call_trace["output_tokens"]
             result = _normalize_result(parsed, evidence_pack, dimension)
             trace_info["duration_ms"] = int((time.time() - start) * 1000)
             return result, trace_info

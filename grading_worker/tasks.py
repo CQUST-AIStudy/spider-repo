@@ -14,14 +14,14 @@ from models.pipeline_models import (
 )
 from models.db_models import (
     get_session, GradingSubmission, GradingRubric,
-    EvidenceBlock as EvidenceBlockDB, ScoreItem,
+    EvidenceBlock as EvidenceBlockDB, ScoreItem, ReportFile,
 )
 from pipeline.pdf_parser import parse_pdf
 from pipeline.image_classifier import classify_image
 from pipeline.ocr_processor import run_ocr
 from pipeline.vlm_client import call_vlm
 from pipeline.evidence_builder import build_evidence_packs
-from pipeline.scorer import score_dimension
+from pipeline.scorer import score_dimension, score_dimensions_batch
 from pipeline.score_calculator import calculate_weighted_total
 from pipeline.trace_logger import trace_step
 
@@ -52,6 +52,14 @@ def _upload_image(minio_client, submission_id: int, ev_counter: int, image_bytes
         return None
 
 
+def _reset_submission_artifacts(session, submission_id: int):
+    """Clear stale grading rows before retrying or rescoring a submission."""
+    session.query(ReportFile).filter(ReportFile.submission_id == submission_id).delete(synchronize_session=False)
+    session.query(ScoreItem).filter(ScoreItem.submission_id == submission_id).delete(synchronize_session=False)
+    session.query(EvidenceBlockDB).filter(EvidenceBlockDB.submission_id == submission_id).delete(synchronize_session=False)
+    session.commit()
+
+
 @app.task(bind=True, max_retries=3, default_retry_delay=30)
 def process_submission(self, task_message_json: str):
     """Main pipeline task: process a single student submission."""
@@ -60,11 +68,14 @@ def process_submission(self, task_message_json: str):
     r = _get_redis()
 
     try:
-        # Update submission status to PROCESSING
+        # Reset stale artifacts so retries do not duplicate evidence/scores/reports.
         sub = session.query(GradingSubmission).get(msg.submissionId)
         if not sub:
             return
+        _reset_submission_artifacts(session, msg.submissionId)
         sub.status = "PROCESSING"
+        sub.total_score = None
+        sub.error_message = None
         session.commit()
 
         # 1. Download PDF from MinIO
@@ -224,6 +235,15 @@ def process_submission(self, task_message_json: str):
             packs = build_evidence_packs(evidence_blocks, dimensions)
 
         # 7. Score each dimension
+        score_guidance = msg.customPrompt
+        if msg.scoreRangeMin is not None and msg.scoreRangeMax is not None:
+            range_hint = (
+                f"Overall score calibration hint: the teacher expects most submissions in this batch "
+                f"to fall around {msg.scoreRangeMin:.0f}-{msg.scoreRangeMax:.0f} / 100. "
+                f"Use this only as a reference and do not force every dimension to match it."
+            )
+            score_guidance = f"{score_guidance}\n\n{range_hint}" if score_guidance else range_hint
+
         def _score_one_dim(dim):
             dim_id = dim["id"]
             pack = packs.get(dim_id)
@@ -238,7 +258,7 @@ def process_submission(self, task_message_json: str):
                 }
 
             with trace_step(msg.submissionId, f"score_dim_{dim_id}") as info:
-                sr, trace_info = score_dimension(pack, dim, custom_prompt=msg.customPrompt)
+                sr, trace_info = score_dimension(pack, dim, custom_prompt=score_guidance)
                 info["model_used"] = trace_info.get("model_used")
                 info["input_tokens"] = trace_info.get("input_tokens")
                 info["output_tokens"] = trace_info.get("output_tokens")
@@ -252,17 +272,42 @@ def process_submission(self, task_message_json: str):
             }
 
         score_by_dim = {}
-        score_workers = max(1, min(DIMENSION_SCORE_CONCURRENCY, len(dimensions)))
-        if score_workers == 1:
+        try:
+            with trace_step(msg.submissionId, "score_batch") as info:
+                batch_results, trace_info = score_dimensions_batch(
+                    packs,
+                    dimensions,
+                    custom_prompt=msg.customPrompt,
+                    score_range_min=msg.scoreRangeMin,
+                    score_range_max=msg.scoreRangeMax,
+                )
+                info["model_used"] = trace_info.get("model_used")
+                info["input_tokens"] = trace_info.get("input_tokens")
+                info["output_tokens"] = trace_info.get("output_tokens")
+                info["mode"] = trace_info.get("mode")
+
             for dim in dimensions:
-                dim_id, sr_data = _score_one_dim(dim)
-                score_by_dim[dim_id] = sr_data
-        else:
-            with ThreadPoolExecutor(max_workers=score_workers) as pool:
-                futures = [pool.submit(_score_one_dim, dim) for dim in dimensions]
-                for future in as_completed(futures):
-                    dim_id, sr_data = future.result()
+                sr = batch_results[int(dim["id"])]
+                score_by_dim[int(dim["id"])] = {
+                    "score": sr.score,
+                    "max_score": sr.max_score,
+                    "weight": dim["weight"],
+                    "status": sr.status,
+                    "comment": sr.comment,
+                    "evidence_ids": sr.evidence_ids,
+                }
+        except Exception:
+            score_workers = max(1, min(DIMENSION_SCORE_CONCURRENCY, len(dimensions)))
+            if score_workers == 1:
+                for dim in dimensions:
+                    dim_id, sr_data = _score_one_dim(dim)
                     score_by_dim[dim_id] = sr_data
+            else:
+                with ThreadPoolExecutor(max_workers=score_workers) as pool:
+                    futures = [pool.submit(_score_one_dim, dim) for dim in dimensions]
+                    for future in as_completed(futures):
+                        dim_id, sr_data = future.result()
+                        score_by_dim[dim_id] = sr_data
 
         score_dicts = []
         for dim in dimensions:
@@ -304,7 +349,6 @@ def process_submission(self, task_message_json: str):
         with trace_step(msg.submissionId, "report_generate") as info:
             try:
                 from pipeline.report_builder import generate_pdf
-                from models.db_models import ReportFile
 
                 # Build score dicts with dimension names for report
                 report_scores = []

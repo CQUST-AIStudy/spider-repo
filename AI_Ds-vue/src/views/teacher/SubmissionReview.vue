@@ -6,7 +6,7 @@
       <!-- 总分卡片 -->
       <div class="score-banner" :class="scoreLevel">
         <div class="score-main">
-          <span class="score-value">{{ detail.totalScore ?? 'N/A' }}</span>
+          <span class="score-value">{{ formatScore(detail.totalScore, 'N/A') }}</span>
           <span class="score-label">总分</span>
         </div>
         <div class="score-info">
@@ -141,10 +141,16 @@ const overrideForm = ref({ dimensionId: null, newScore: 0, maxScore: 0, newComme
 const scoreLevel = computed(() => {
   const s = detail.value?.totalScore
   if (s == null) return ''
-  if (s >= 0.8) return 'level-good'
-  if (s >= 0.6) return 'level-ok'
+  if (s >= 80) return 'level-good'
+  if (s >= 60) return 'level-ok'
   return 'level-low'
 })
+
+function formatScore(s, fallback = '-') {
+  if (s == null || s === '') return fallback
+  const n = Number(s)
+  return Number.isFinite(n) ? n.toFixed(1).replace(/\.0$/, '') : s
+}
 
 function statusTag(s) {
   return { SCORED: 'success', NEED_MORE_EVIDENCE: 'warning', FAILED: 'danger', PENDING: 'info' }[s] || 'info'

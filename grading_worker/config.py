@@ -33,11 +33,12 @@ VLM_API_KEY = os.getenv("VLM_API_KEY", "")
 VLM_RATE_LIMIT = int(os.getenv("VLM_RATE_LIMIT", "5"))  # requests per minute
 
 # Celery
-CELERY_CONCURRENCY = int(os.getenv("CELERY_CONCURRENCY", "4"))
+CELERY_CONCURRENCY = int(os.getenv("CELERY_CONCURRENCY", "6"))
 CELERY_POOL = os.getenv("CELERY_POOL", "threads" if os.name == "nt" else "prefork")
 
-# Scoring concurrency inside each submission
-DIMENSION_SCORE_CONCURRENCY = int(os.getenv("DIMENSION_SCORE_CONCURRENCY", "2"))
+# Fallback scoring concurrency inside each submission.
+# Primary path uses one batch AI call per submission, so keep fallback nested concurrency conservative.
+DIMENSION_SCORE_CONCURRENCY = int(os.getenv("DIMENSION_SCORE_CONCURRENCY", "1"))
 
 # Queue keys
 TASK_QUEUE_KEY = "grading:tasks"
