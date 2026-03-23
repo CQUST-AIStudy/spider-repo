@@ -70,10 +70,13 @@ public class GradingTaskController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<?> detail(@PathVariable Long id) {
+    public ResponseEntity<?> detail(@PathVariable Long id,
+                                    @AuthenticationPrincipal UserDetails principal,
+                                    HttpServletRequest request) {
+        Long teacherId = resolveUserId(principal, request);
         try {
-            GradingTaskEntity task = taskService.getTaskDetail(id);
-            List<GradingSubmissionEntity> subs = taskService.getTaskSubmissions(id);
+            GradingTaskEntity task = taskService.getTaskDetail(id, teacherId);
+            List<GradingSubmissionEntity> subs = taskService.getTaskSubmissions(id, teacherId);
 
             Map<String, Object> dto = new LinkedHashMap<>(toListDto(task));
             dto.put("submissions", subs.stream().map(this::toSubDto).toList());
@@ -84,9 +87,12 @@ public class GradingTaskController {
     }
 
     @PostMapping("/{id}/retry")
-    public ResponseEntity<?> retry(@PathVariable Long id) {
+    public ResponseEntity<?> retry(@PathVariable Long id,
+                                   @AuthenticationPrincipal UserDetails principal,
+                                   HttpServletRequest request) {
+        Long teacherId = resolveUserId(principal, request);
         try {
-            taskService.retryFailed(id);
+            taskService.retryFailed(id, teacherId);
             return ResponseEntity.ok(ApiResponse.of(Map.of("message", "Retry initiated")));
         } catch (IllegalArgumentException | IllegalStateException e) {
             return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
@@ -113,9 +119,12 @@ public class GradingTaskController {
      */
     @PostMapping("/{id}/export-excel")
     public ResponseEntity<?> exportExcel(@PathVariable Long id,
+                                          @AuthenticationPrincipal UserDetails principal,
+                                          HttpServletRequest request,
                                           @RequestBody ExcelExportRequest req) {
+        Long teacherId = resolveUserId(principal, request);
         try {
-            byte[] excel = taskService.exportExcel(id, req.submissionIds(), req.includeComments());
+            byte[] excel = taskService.exportExcel(id, teacherId, req.submissionIds(), req.includeComments());
             return ResponseEntity.ok()
                     .header("Content-Disposition", "attachment; filename=grading-export-" + id + ".xlsx")
                     .header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")

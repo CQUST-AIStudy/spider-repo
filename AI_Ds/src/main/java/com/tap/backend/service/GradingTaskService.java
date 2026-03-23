@@ -115,6 +115,10 @@ public class GradingTaskService {
             }
         }
 
+        if (task.getTotalCount() <= 0) {
+            throw new IllegalArgumentException("All PDF files failed to upload");
+        }
+
         task = taskRepo.save(task);
         final Long taskIdFinal = task.getId();
 
@@ -147,13 +151,13 @@ public class GradingTaskService {
     }
 
     @Transactional(readOnly = true)
-    public GradingTaskEntity getTaskDetail(Long taskId) {
-        return taskRepo.findById(taskId)
-                .orElseThrow(() -> new IllegalArgumentException("Task not found"));
+    public GradingTaskEntity getTaskDetail(Long taskId, Long teacherId) {
+        return requireOwnedTask(taskId, teacherId);
     }
 
     @Transactional(readOnly = true)
-    public List<GradingSubmissionEntity> getTaskSubmissions(Long taskId) {
+    public List<GradingSubmissionEntity> getTaskSubmissions(Long taskId, Long teacherId) {
+        requireOwnedTask(taskId, teacherId);
         return submissionRepo.findAllByTaskId(taskId);
     }
 
@@ -173,9 +177,8 @@ public class GradingTaskService {
     }
 
     @Transactional
-    public void retryFailed(Long taskId) {
-        GradingTaskEntity task = taskRepo.findById(taskId)
-                .orElseThrow(() -> new IllegalArgumentException("Task not found"));
+    public void retryFailed(Long taskId, Long teacherId) {
+        GradingTaskEntity task = requireOwnedTask(taskId, teacherId);
 
         List<GradingSubmissionEntity> failed = submissionRepo
                 .findAllByTaskIdAndStatus(taskId, SubmissionStatus.FAILED);
@@ -190,7 +193,7 @@ public class GradingTaskService {
             submissionRepo.save(sub);
         }
 
-        task.setFailedCount(task.getFailedCount() - failed.size());
+        refreshTaskCounters(task);
         task.setStatus(GradingTaskStatus.PROCESSING);
         taskRepo.save(task);
 
@@ -207,10 +210,14 @@ public class GradingTaskService {
      * 导出 Excel：学号、姓名、班级、成绩，可选评语
      */
     @Transactional(readOnly = true)
-    public byte[] exportExcel(Long taskId, List<Long> submissionIds, boolean includeComments) {
+    public byte[] exportExcel(Long taskId, Long teacherId, List<Long> submissionIds, boolean includeComments) {
+        requireOwnedTask(taskId, teacherId);
         List<GradingSubmissionEntity> subs;
         if (submissionIds != null && !submissionIds.isEmpty()) {
-            subs = submissionRepo.findAllById(submissionIds);
+            subs = submissionRepo.findAllByTaskIdAndIdIn(taskId, submissionIds);
+            if (subs.size() != new HashSet<>(submissionIds).size()) {
+                throw new IllegalArgumentException("Some submissions do not belong to this task");
+            }
         } else {
             subs = submissionRepo.findAllByTaskId(taskId);
         }
@@ -275,17 +282,10 @@ public class GradingTaskService {
         sub.setTotalScore(totalScore);
         submissionRepo.save(sub);
 
-        // Use atomic SQL updates to avoid race conditions under concurrent Redis notifications
         Long taskId = sub.getTaskId();
-        if (subStatus == SubmissionStatus.SCORED || subStatus == SubmissionStatus.NEED_MORE_EVIDENCE) {
-            taskRepo.incrementCompletedCount(taskId);
-        } else if (subStatus == SubmissionStatus.FAILED) {
-            taskRepo.incrementFailedCount(taskId);
-        }
-
-        // Re-read task after atomic update
         GradingTaskEntity task = taskRepo.findById(taskId).orElse(null);
         if (task == null) return;
+        refreshTaskCounters(task);
         int done = task.getCompletedCount() + task.getFailedCount();
         if (done >= task.getTotalCount()) {
             task.setStatus(task.getFailedCount() > 0 ? GradingTaskStatus.FAILED : GradingTaskStatus.COMPLETED);
@@ -368,5 +368,23 @@ public class GradingTaskService {
         if (scoreRangeMin.compareTo(scoreRangeMax) > 0) {
             throw new IllegalArgumentException("scoreRangeMin must be less than or equal to scoreRangeMax");
         }
+    }
+
+    private GradingTaskEntity requireOwnedTask(Long taskId, Long teacherId) {
+        GradingTaskEntity task = taskRepo.findById(taskId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found"));
+        if (!Objects.equals(task.getTeacherId(), teacherId)) {
+            throw new IllegalArgumentException("No permission to access this task");
+        }
+        return task;
+    }
+
+    private void refreshTaskCounters(GradingTaskEntity task) {
+        Long taskId = task.getId();
+        int completedCount = submissionRepo.countByTaskIdAndStatus(taskId, SubmissionStatus.SCORED)
+                + submissionRepo.countByTaskIdAndStatus(taskId, SubmissionStatus.NEED_MORE_EVIDENCE);
+        int failedCount = submissionRepo.countByTaskIdAndStatus(taskId, SubmissionStatus.FAILED);
+        task.setCompletedCount(completedCount);
+        task.setFailedCount(failedCount);
     }
 }
