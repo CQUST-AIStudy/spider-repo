@@ -17,6 +17,7 @@ if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
 
 import httpx
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -27,6 +28,21 @@ app = FastAPI(title="PTA Spider API", version="2.0.0")
 JAVA_BACKEND_URL = os.getenv("JAVA_BACKEND_URL", "http://localhost:8081")
 COOLDOWN_SUBMISSIONS = int(os.getenv("COOLDOWN_SUBMISSIONS", str(4 * 3600)))
 COOLDOWN_EXPORTS = int(os.getenv("COOLDOWN_EXPORTS", str(24 * 3600)))
+_cors_origins_raw = os.getenv("SPIDER_CORS_ALLOW_ORIGINS", "*").strip()
+if _cors_origins_raw == "*":
+    _cors_origins = ["*"]
+else:
+    _cors_origins = [x.strip() for x in _cors_origins_raw.split(",") if x.strip()]
+
+# Frontend DataSyncPanel calls this service directly from browser.
+# Enable CORS so preflight OPTIONS requests for POST /crawl succeed.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class CooldownManager:

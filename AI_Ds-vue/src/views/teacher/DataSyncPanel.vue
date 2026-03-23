@@ -212,7 +212,50 @@ import { getPtaCookieStatus, submitPtaCookie } from '../../api/tap'
 import { useUserStore } from '../../store'
 import axios from 'axios'
 
-const SPIDER_URL = 'http://127.0.0.1:8100'
+function normalizeUrl(url) {
+  return String(url || '').replace(/\/+$/, '')
+}
+
+function buildDefaultSpiderUrl() {
+  if (typeof window !== 'undefined' && window.location) {
+    const protocol = window.location.protocol || 'http:'
+    const hostname = window.location.hostname || '127.0.0.1'
+    return `${protocol}//${hostname}:8100`
+  }
+  return 'http://127.0.0.1:8100'
+}
+
+const envSpiderUrl = (typeof process !== 'undefined' && process.env && process.env.VUE_APP_SPIDER_URL)
+  ? process.env.VUE_APP_SPIDER_URL
+  : ''
+const spiderUrl = ref(normalizeUrl(envSpiderUrl || '/spider'))
+const spiderHealthError = ref('')
+
+function buildSpiderCandidates() {
+  const candidates = []
+  const push = (u) => {
+    const nu = normalizeUrl(u)
+    if (nu && !candidates.includes(nu)) candidates.push(nu)
+  }
+
+  push(spiderUrl.value)
+  push('/spider')
+  if (envSpiderUrl) push(envSpiderUrl)
+
+  push(buildDefaultSpiderUrl())
+  if (typeof window !== 'undefined' && window.location && window.location.hostname) {
+    const host = window.location.hostname
+    push(`http://${host}:8100`)
+  }
+
+  push('http://localhost:8100')
+  push('http://127.0.0.1:8100')
+  return candidates
+}
+
+function spiderApi(path) {
+  return `${spiderUrl.value}${path}`
+}
 const userStore = useUserStore()
 
 const currentKeyword = computed(() => userStore.selectedClass?.ptaKeyword || userStore.selectedClass?.name || '')
@@ -252,12 +295,21 @@ const modeCn = (m) => ({ incremental:'增量', submissions:'提交', refresh:'�
 const modeTagType = (m) => ({ full:'danger', refresh:'warning', submissions:'success', incremental:'primary' }[m] || '')
 
 async function probeSpiderHealth() {
-  try {
-    const r = await axios.get(`${SPIDER_URL}/health`, { timeout: 3000 })
-    spiderAlive.value = r.status === 200
-  } catch {
-    spiderAlive.value = false
+  spiderHealthError.value = ''
+  for (const base of buildSpiderCandidates()) {
+    try {
+      const r = await axios.get(`${base}/health`, { timeout: 3000 })
+      if (r.status === 200) {
+        spiderAlive.value = true
+        spiderUrl.value = base
+        return true
+      }
+    } catch (e) {
+      spiderHealthError.value = e?.response?.data?.detail || e?.message || 'network error'
+    }
   }
+  spiderAlive.value = false
+  return false
 }
 
 async function loadCookieStatus() {
@@ -273,14 +325,14 @@ async function loadCookieStatus() {
 async function loadCooldown() {
   const keyword = userStore.selectedClass?.ptaKeyword || userStore.selectedClass?.name || '数据结构'
   try {
-    const r = await axios.get(`${SPIDER_URL}/cooldown/${encodeURIComponent(keyword)}`, { timeout: 5000 })
+    const r = await axios.get(spiderApi(`/cooldown/${encodeURIComponent(keyword)}`), { timeout: 5000 })
     cooldownInfo.value = r.data
   } catch { /* spider not running */ }
 }
 
 async function loadTaskHistory() {
   try {
-    const r = await axios.get(`${SPIDER_URL}/tasks`, { timeout: 5000 })
+    const r = await axios.get(spiderApi('/tasks'), { timeout: 5000 })
     taskHistory.value = r.data || []
   } catch { /* spider not running */ }
 }
@@ -291,9 +343,9 @@ async function triggerSync(mode) {
     ElMessage.warning('请先在班级管理中配置 PTA 同步关键词')
     return
   }
-  await probeSpiderHealth()
-  if (!spiderAlive.value) {
-    ElMessage.error('爬虫服务未启动，无法提交同步任务（请先启动 8100 服务）')
+  const alive = await probeSpiderHealth()
+  if (!alive) {
+    ElMessage.error(`爬虫服务不可达: ${spiderUrl.value} (${spiderHealthError.value || 'network error'})`)
     return
   }
 
@@ -315,7 +367,7 @@ async function triggerSync(mode) {
       payload.class_id = maybeClassId
     }
 
-    const r = await axios.post(`${SPIDER_URL}/crawl`, payload, { timeout: 10000 })
+    const r = await axios.post(spiderApi('/crawl'), payload, { timeout: 10000 })
 
     // 冷却拦截
     if (r.data?.blocked) {
@@ -342,7 +394,7 @@ function pollTaskStatus(taskId) {
   if (pollTimer) clearInterval(pollTimer)
   pollTimer = setInterval(async () => {
     try {
-      const r = await axios.get(`${SPIDER_URL}/status/${taskId}`, { timeout: 5000 })
+      const r = await axios.get(spiderApi(`/status/${taskId}`), { timeout: 5000 })
       currentTask.value = r.data
       if (r.data.status === 'SUCCESS' || r.data.status === 'FAILED') {
         clearInterval(pollTimer)
