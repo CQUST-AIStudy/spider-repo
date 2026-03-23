@@ -106,16 +106,19 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick, onBeforeUnmount } from 'vue'
+import { ref, onMounted, nextTick, onBeforeUnmount, computed, watch } from 'vue'
 import * as echarts from 'echarts'
 import axios from 'axios'
+import { useUserStore } from '../../store'
 
 const API_BASE = 'http://localhost:8081'
+const userStore = useUserStore()
 const loading = ref(true)
 const errorMsg = ref('')
 const data = ref({})
 const barChartRef = ref(null)
 let barChartInst = null
+const selectedClassName = computed(() => userStore.selectedClass?.name?.trim() || '')
 
 // 弹窗
 const dialogVisible = ref(false)
@@ -133,7 +136,8 @@ async function fetchData() {
   loading.value = true
   errorMsg.value = ''
   try {
-    const res = await axios.get(`${API_BASE}/api/profile/class`, { withCredentials: true })
+    const params = selectedClassName.value ? { className: selectedClassName.value } : {}
+    const res = await axios.get(`${API_BASE}/api/profile/class`, { params, withCredentials: true })
     const d = res.data || res
     if (d.error) { errorMsg.value = d.error; return }
     data.value = d
@@ -230,6 +234,11 @@ async function viewStudent(studentId) {
 onMounted(() => {
   fetchData()
   window.addEventListener('resize', handleProfileResize)
+})
+
+watch(selectedClassName, (nextClass, prevClass) => {
+  if (!nextClass || nextClass === prevClass) return
+  fetchData()
 })
 
 onBeforeUnmount(() => {

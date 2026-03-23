@@ -46,13 +46,26 @@
             SUM(CASE WHEN ss.situation = 'C' THEN 1 ELSE 0 END) AS ac_count,
             COUNT(DISTINCT ss.serial_number) AS question_count
         FROM submit_situation ss
+        JOIN student s ON s.student_id = ss.student_id
+        <where>
+            <if test="className != null and className != ''">
+                AND (s.class_name = #{className} OR s.class_name LIKE CONCAT(#{className}, '%'))
+            </if>
+        </where>
         GROUP BY ss.student_id, ss.student_name, ss.experiment_id, ss.experiment_name
         ORDER BY ss.student_id, ss.experiment_id
     </select>
 
     <!-- 所有学生列表 -->
     <select id="getAllStudents" resultType="map">
-        SELECT student_id, name, class_name FROM student ORDER BY student_id
+        SELECT student_id, name, class_name
+        FROM student
+        <where>
+            <if test="className != null and className != ''">
+                AND (class_name = #{className} OR class_name LIKE CONCAT(#{className}, '%'))
+            </if>
+        </where>
+        ORDER BY student_id
     </select>
 
     <!-- 学生基本信息 -->

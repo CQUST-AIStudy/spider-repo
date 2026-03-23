@@ -49,8 +49,18 @@ public class ProfileController {
      * 班级画像 - 教师查看
      */
     @GetMapping("/class")
-    public ResponseEntity<Map<String, Object>> getClassProfile() {
-        Map<String, Object> profile = profileService.getClassProfile();
+    public ResponseEntity<Map<String, Object>> getClassProfile(
+            HttpServletRequest request,
+            @RequestParam(required = false) String className) {
+        String scopedClassName = normalizeClassName(className);
+        if (scopedClassName == null) {
+            HttpSession session = request.getSession(false);
+            if (session != null && session.getAttribute("currentUser") != null) {
+                UserEntity user = (UserEntity) session.getAttribute("currentUser");
+                scopedClassName = normalizeClassName(user.getClassname());
+            }
+        }
+        Map<String, Object> profile = profileService.getClassProfile(scopedClassName);
         return ResponseEntity.ok(profile);
     }
 
@@ -88,5 +98,12 @@ public class ProfileController {
         }
         Map<String, Object> result = profileService.refreshFeedback(usernum);
         return ResponseEntity.ok(result);
+    }
+    private String normalizeClassName(String className) {
+        if (className == null) {
+            return null;
+        }
+        String trimmed = className.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 }

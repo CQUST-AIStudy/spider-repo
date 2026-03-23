@@ -698,34 +698,47 @@ public class ProfileService {
 
     // ========== 班级画像 ==========
 
-    @Cacheable(value = "classProfile")
-    public Map<String, Object> getClassProfile() {
-        List<Map<String, Object>> allStats = profileDao.getClassExperimentStats();
-        List<Map<String, Object>> students = profileDao.getAllStudents();
-
-        if (allStats == null || allStats.isEmpty()) {
-            return Map.of("error", "无班级提交数据");
+    @Cacheable(value = "classProfile", key = "#className == null ? 'ALL' : #className")
+    public Map<String, Object> getClassProfile(String className) {
+        List<Map<String, Object>> allStats = profileDao.getClassExperimentStats(className);
+        List<Map<String, Object>> students = profileDao.getAllStudents(className);
+        if (allStats == null) {
+            allStats = new ArrayList<>();
         }
 
         // 按学生分组
         Map<String, List<Map<String, Object>>> byStudent = new LinkedHashMap<>();
+        Map<String, String> studentNames = new LinkedHashMap<>();
+        for (Map<String, Object> student : students) {
+            String sid = String.valueOf(student.get("student_id"));
+            String sname = student.get("name") != null ? String.valueOf(student.get("name")) : sid;
+            studentNames.put(sid, sname);
+            byStudent.putIfAbsent(sid, new ArrayList<>());
+        }
         for (Map<String, Object> row : allStats) {
             String sid = String.valueOf(row.get("student_id"));
             byStudent.computeIfAbsent(sid, k -> new ArrayList<>()).add(row);
+            if (!studentNames.containsKey(sid) || studentNames.get(sid) == null || studentNames.get(sid).isBlank()) {
+                String sname = row.get("student_name") != null ? String.valueOf(row.get("student_name")) : sid;
+                studentNames.put(sid, sname);
+            }
         }
 
         // 计算每个学生每个维度的分数
         Map<String, Map<String, Double>> studentDimScores = new LinkedHashMap<>();
         Map<String, Double> studentOverallScores = new LinkedHashMap<>();
-        Map<String, String> studentNames = new LinkedHashMap<>();
 
         for (var entry : byStudent.entrySet()) {
             String sid = entry.getKey();
             List<Map<String, Object>> rows = entry.getValue();
 
             // 找学生名
-            String sname = rows.get(0).get("student_name") != null ? String.valueOf(rows.get(0).get("student_name")) : sid;
-            studentNames.put(sid, sname);
+            if (!studentNames.containsKey(sid) || studentNames.get(sid) == null || studentNames.get(sid).isBlank()) {
+                String sname = rows.isEmpty() || rows.get(0).get("student_name") == null
+                        ? sid
+                        : String.valueOf(rows.get(0).get("student_name"));
+                studentNames.put(sid, sname);
+            }
 
             // 按实验ID索引
             Map<Integer, Map<String, Object>> expMap = new LinkedHashMap<>();
@@ -821,6 +834,7 @@ public class ProfileService {
         tiers.put("C", Map.of("label", "需关注 (<40)", "count", tierC.size(), "students", tierC));
 
         Map<String, Object> result = new LinkedHashMap<>();
+        result.put("className", className);
         result.put("totalStudents", totalStudents);
         result.put("dimensionAvg", classDimAvg);
         result.put("weakRanking", weakRanking);
