@@ -46,6 +46,11 @@ public class FusionRankService {
         double gamma = ragProps.fusion() != null ? ragProps.fusion().gamma() : 0.1;
         double delta = ragProps.fusion() != null ? ragProps.fusion().delta() : 0.1;
         double mmrLambda = ragProps.mmr() != null ? ragProps.mmr().lambda() : 0.7;
+        double scoreThreshold = ragProps.retrieval() != null ? ragProps.retrieval().scoreThreshold() : 0.0;
+        float maxVecScore = vecHits.stream().map(MilvusSearchService.SearchHit::score).max(Float::compare).orElse(1.0f);
+        float maxBm25Score = bm25Hits.stream().map(LuceneBm25Service.Bm25Hit::score).max(Float::compare).orElse(1.0f);
+        if (maxVecScore <= 0) maxVecScore = 1.0f;
+        if (maxBm25Score <= 0) maxBm25Score = 1.0f;
 
         // 1. Build candidate pool keyed by parentId
         Map<Long, FusionCandidate> pool = new LinkedHashMap<>();
@@ -53,10 +58,10 @@ public class FusionRankService {
         for (MilvusSearchService.SearchHit vh : vecHits) {
             long pid = vh.parentId();
             FusionCandidate existing = pool.get(pid);
-            double score = vh.score();
+            double score = vh.score() / maxVecScore;
             if (existing == null || score > existing.vecScore()) {
                 String docType = docTypeMap.getOrDefault(vh.docId(), "other");
-                boolean hasAnno = chunkAnnotations.containsKey(vh.chunkId());
+                boolean hasAnno = chunkAnnotations.containsKey(vh.parentId()) || chunkAnnotations.containsKey(vh.chunkId());
                 pool.put(pid, new FusionCandidate(pid, vh.docId(),
                         score,
                         existing != null ? existing.bm25Score() : 0.0,
@@ -68,10 +73,10 @@ public class FusionRankService {
         for (LuceneBm25Service.Bm25Hit bh : bm25Hits) {
             long pid = bh.parentId();
             FusionCandidate existing = pool.get(pid);
-            double score = bh.score();
+            double score = bh.score() / maxBm25Score;
             if (existing == null) {
                 String docType = docTypeMap.getOrDefault(bh.docId(), "other");
-                boolean hasAnno = chunkAnnotations.containsKey(bh.chunkId());
+                boolean hasAnno = chunkAnnotations.containsKey(bh.parentId()) || chunkAnnotations.containsKey(bh.chunkId());
                 pool.put(pid, new FusionCandidate(pid, bh.docId(),
                         0.0, score, docType, hasAnno,
                         bh.chapterPath(), bh.pageRange()));
@@ -89,11 +94,15 @@ public class FusionRankService {
         for (FusionCandidate c : pool.values()) {
             double docPriority = DEFAULT_DOC_PRIORITY.getOrDefault(c.docType(), 0.3);
             double teacherBoost = c.hasAnnotation() ? 1.0 : 0.0;
+            double routeBonus = (c.vecScore() > 0.0 && c.bm25Score() > 0.0) ? 0.08 : 0.0;
             double finalScore = alpha * c.vecScore()
                     + beta * c.bm25Score()
                     + gamma * docPriority
-                    + delta * teacherBoost;
-            scored.add(new ScoredCandidate(c, finalScore));
+                    + delta * teacherBoost
+                    + routeBonus;
+            if (finalScore >= scoreThreshold) {
+                scored.add(new ScoredCandidate(c, finalScore));
+            }
         }
 
         // Sort by finalScore descending

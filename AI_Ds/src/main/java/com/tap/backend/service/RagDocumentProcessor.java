@@ -16,7 +16,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Java 端文档处理器 — 当 Python worker 不可用时的降级方案。
@@ -30,6 +32,7 @@ public class RagDocumentProcessor {
     private static final int PARENT_OVERLAP = 100;
     private static final int CHILD_CHUNK_SIZE = 350;
     private static final int CHILD_OVERLAP = 30;
+    private static final int MIN_VISIBLE_CHARS = 120;
 
     private final CourseSpaceDocumentRepository csDocRepo;
     private final DocChunkRepository docChunkRepo;
@@ -86,6 +89,11 @@ public class RagDocumentProcessor {
                 fail(csDoc, "No extracted text available");
                 return;
             }
+            text = normalizeExtractedText(text);
+            if (!isUsableExtractedText(text)) {
+                fail(csDoc, "Extracted text quality is too low. Please upload a text-based PDF/DOCX/TXT, or run OCR before importing.");
+                return;
+            }
 
             // Two-level chunking
             CourseSpaceEntity courseSpace = courseSpaceRepo.findById(csDoc.getCourseSpaceId()).orElse(null);
@@ -93,6 +101,7 @@ public class RagDocumentProcessor {
                 fail(csDoc, "Course space not found");
                 return;
             }
+            clearExistingChunks(courseSpace.getId(), doc.getId());
 
             List<DocChunkEntity> allChildren = new ArrayList<>();
             List<String> parentTexts = splitText(text, PARENT_CHUNK_SIZE, PARENT_OVERLAP);
@@ -161,6 +170,22 @@ public class RagDocumentProcessor {
         log.error("[RAG-Java] FAILED csd={}: {}", csDoc.getId(), error);
     }
 
+    private void clearExistingChunks(Long courseSpaceId, Long documentId) {
+        List<DocChunkEntity> children =
+                docChunkRepo.findAllByCourseSpaceIdAndDocumentIdAndChunkType(courseSpaceId, documentId, "child");
+        if (!children.isEmpty()) {
+            docChunkRepo.deleteAllInBatch(children);
+        }
+        List<DocChunkEntity> parents =
+                docChunkRepo.findAllByCourseSpaceIdAndDocumentIdAndChunkType(courseSpaceId, documentId, "parent");
+        if (!parents.isEmpty()) {
+            docChunkRepo.deleteAllInBatch(parents);
+        }
+        if (!children.isEmpty() || !parents.isEmpty()) {
+            log.info("[RAG-Java] cleared existing chunks for courseSpaceId={}, documentId={}", courseSpaceId, documentId);
+        }
+    }
+
     private List<String> splitText(String text, int chunkSize, int overlap) {
         List<String> chunks = new ArrayList<>();
         if (text == null || text.isBlank()) return chunks;
@@ -205,5 +230,63 @@ public class RagDocumentProcessor {
             if (s.matches("^Chapter\\s+\\d+.*")) return s;
         }
         return "";
+    }
+
+    private String normalizeExtractedText(String text) {
+        if (text == null) return "";
+        String normalized = text.replace("\r\n", "\n").replace('\r', '\n');
+        normalized = normalized.replaceAll("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F]", "");
+        normalized = normalized.replaceAll("\\n{3,}", "\n\n").trim();
+        return normalized;
+    }
+
+    private boolean isUsableExtractedText(String text) {
+        if (text == null || text.isBlank()) {
+            return false;
+        }
+        String visible = text.replaceAll("\\s+", "");
+        if (visible.length() < MIN_VISIBLE_CHARS) {
+            return false;
+        }
+
+        String[] lines = text.split("\n");
+        long nonEmptyLineCount = Arrays.stream(lines)
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .count();
+        if (nonEmptyLineCount == 0) {
+            return false;
+        }
+        long informativeLineCount = Arrays.stream(lines)
+                .map(String::trim)
+                .filter(this::isInformativeLine)
+                .count();
+        long textualCharCount = text.codePoints().filter(this::isTextLikeCodePoint).count();
+        double density = visible.isEmpty() ? 0.0 : (double) textualCharCount / visible.length();
+        double informativeRatio = (double) informativeLineCount / nonEmptyLineCount;
+        return density >= 0.45 && informativeLineCount >= 2 && informativeRatio >= 0.35;
+    }
+
+    private boolean isInformativeLine(String line) {
+        if (line == null) {
+            return false;
+        }
+        String s = line.trim();
+        if (s.length() < 8) {
+            return false;
+        }
+        String lower = s.toLowerCase(Locale.ROOT);
+        if ((lower.startsWith("[") && lower.endsWith("]"))
+                || (s.contains("=") && s.length() < 40)
+                || s.matches("^(封面页|书名页|版权页|前言|目录|目次|索引)$")) {
+            return false;
+        }
+        long textLikeChars = s.codePoints().filter(this::isTextLikeCodePoint).count();
+        return textLikeChars >= 8;
+    }
+
+    private boolean isTextLikeCodePoint(int cp) {
+        Character.UnicodeScript script = Character.UnicodeScript.of(cp);
+        return Character.isLetterOrDigit(cp) || script == Character.UnicodeScript.HAN;
     }
 }

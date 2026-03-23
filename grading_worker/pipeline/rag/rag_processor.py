@@ -31,6 +31,8 @@ from pipeline.rag.milvus_writer import insert_chunks
 
 logger = logging.getLogger(__name__)
 
+_MIN_VISIBLE_CHARS = 120
+
 
 def _get_minio() -> Minio:
     return Minio(
@@ -83,6 +85,16 @@ def process_document(course_space_doc_id: int) -> None:
         if not text:
             _fail(session, csd, "No extracted text available")
             return
+        text = _normalize_text(text)
+        if not _is_usable_text(text):
+            _fail(
+                session,
+                csd,
+                "Extracted text quality is too low. Please upload a text-based PDF/DOCX/TXT, or run OCR before importing.",
+            )
+            return
+
+        _clear_existing_chunks(session, csd.course_space_id, csd.document_id)
 
         # --- 2. Two-level chunking ------------------------------------------
         parents = two_level_chunk(text, doc_id=csd.document_id)
@@ -196,3 +208,51 @@ def _fail(session, csd: CourseSpaceDocument, error_msg: str) -> None:
     csd.error_message = error_msg
     session.commit()
     logger.error("RAG processing FAILED for csd=%d: %s", csd.id, error_msg)
+
+
+def _clear_existing_chunks(session, course_space_id: int, document_id: int) -> None:
+    session.query(DocChunk).filter(
+        DocChunk.course_space_id == course_space_id,
+        DocChunk.document_id == document_id,
+        DocChunk.chunk_type == "child",
+    ).delete(synchronize_session=False)
+    session.query(DocChunk).filter(
+        DocChunk.course_space_id == course_space_id,
+        DocChunk.document_id == document_id,
+        DocChunk.chunk_type == "parent",
+    ).delete(synchronize_session=False)
+    session.commit()
+
+
+def _normalize_text(text: str) -> str:
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = normalized.strip()
+    return normalized
+
+
+def _is_usable_text(text: str) -> bool:
+    visible = "".join(text.split())
+    if len(visible) < _MIN_VISIBLE_CHARS:
+        return False
+
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    if not lines:
+        return False
+
+    informative_lines = [line for line in lines if _is_informative_line(line)]
+    text_like_chars = sum(1 for ch in text if ch.isalnum() or "\u4e00" <= ch <= "\u9fff")
+    density = text_like_chars / max(len(visible), 1)
+    informative_ratio = len(informative_lines) / len(lines)
+    return density >= 0.45 and len(informative_lines) >= 2 and informative_ratio >= 0.35
+
+
+def _is_informative_line(line: str) -> bool:
+    if len(line) < 8:
+        return False
+    lowered = line.lower()
+    if (lowered.startswith("[") and lowered.endswith("]")) or ("=" in line and len(line) < 40):
+        return False
+    if line in {"封面页", "书名页", "版权页", "前言", "目录", "目次", "索引"}:
+        return False
+    text_like_chars = sum(1 for ch in line if ch.isalnum() or "\u4e00" <= ch <= "\u9fff")
+    return text_like_chars >= 8

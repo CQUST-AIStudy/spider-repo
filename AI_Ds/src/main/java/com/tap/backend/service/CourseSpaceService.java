@@ -148,9 +148,6 @@ public class CourseSpaceService {
         csDoc.setChunkCount(0);
         csDoc = courseSpaceDocRepo.save(csDoc);
 
-        // Push Redis message for Python Worker (if available)
-        pushRagTask(csDoc.getId(), courseSpaceId, sd.id());
-
         log.info("Uploaded document {} to course space {}, csDocId={}", sd.id(), courseSpaceId, csDoc.getId());
         return csDoc;
     }

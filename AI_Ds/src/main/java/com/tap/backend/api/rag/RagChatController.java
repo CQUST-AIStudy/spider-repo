@@ -246,7 +246,9 @@ public class RagChatController {
                             DocChunkEntity c = parentChunksFinal.get(r.parentId());
                             return c != null && chunkAnnotations.containsKey(c.getId());
                         });
-                coverageScore = coverageCalc.calculate(top1Score, evidenceBlocks.size(), hitFaq, hitAnnotation);
+                double querySupportRatio = computeQuerySupportRatio(request.query(), evidenceBlocks);
+                coverageScore = coverageCalc.calculate(
+                        top1Score, evidenceBlocks.size(), hitFaq, hitAnnotation, querySupportRatio);
                 log.debug("[RAG] coverage={}, threshold={}", coverageScore, ragProps.coverage().threshold());
 
                 // 9. Mode decision
@@ -408,21 +410,16 @@ public class RagChatController {
         String queryLower = query.toLowerCase();
         String[] keywords = queryLower.split("[\\s,，。、]+");
 
+        Map<Long, String> docTypeMap = csDocRepo.findAllByCourseSpaceId(courseSpaceId).stream()
+                .collect(Collectors.toMap(
+                        CourseSpaceDocumentEntity::getDocumentId,
+                        d -> d.getDocType() != null ? d.getDocType() : "textbook",
+                        (a, b) -> a));
         List<FusionRankService.RankedParent> results = new ArrayList<>();
         for (DocChunkEntity chunk : parents) {
-            String content = chunk.getContent().toLowerCase();
-            int matchCount = 0;
-            for (String kw : keywords) {
-                if (kw.length() >= 2 && content.contains(kw)) matchCount++;
-            }
-            if (matchCount > 0) {
-                double score = (double) matchCount / keywords.length;
-                // Find docType from course_space_document
-                List<CourseSpaceDocumentEntity> csDocs = csDocRepo.findAllByCourseSpaceId(courseSpaceId);
-                String docType = csDocs.stream()
-                        .filter(d -> d.getDocumentId().equals(chunk.getDocumentId()))
-                        .map(d -> d.getDocType() != null ? d.getDocType() : "textbook")
-                        .findFirst().orElse("textbook");
+            double score = computeFallbackScore(query, chunk);
+            if (score > 0.0) {
+                String docType = docTypeMap.getOrDefault(chunk.getDocumentId(), "textbook");
                 results.add(new FusionRankService.RankedParent(
                         chunk.getId(), chunk.getDocumentId(),
                         score, chunk.getChapterPath(), chunk.getPageRange(),
@@ -463,6 +460,8 @@ public class RagChatController {
         sb.append("1. 回答必须基于上述课程资料，关键结论需标注引用编号如 [1]\n");
         sb.append("2. 如果资料中没有相关内容，明确告知学生\"当前课程资料未覆盖此问题\"\n");
 
+        sb.append("2.1 Never invent facts beyond the provided evidence. If evidence is insufficient, explicitly say the course materials do not cover the question.\n");
+
         // Intent-specific instructions
         if ("debug".equals(intentType)) {
             sb.append("3. 当前为调试类问题，请重点分析代码错误原因，给出修复思路\n");
@@ -483,6 +482,88 @@ public class RagChatController {
     }
 
     // ── Citations JSON ──
+
+    private double computeQuerySupportRatio(String query, List<EvidenceBlock> evidenceBlocks) {
+        if (query == null || query.isBlank() || evidenceBlocks == null || evidenceBlocks.isEmpty()) {
+            return 0.0;
+        }
+        Set<String> terms = extractRetrievalTerms(query);
+        if (terms.isEmpty()) {
+            return 0.0;
+        }
+        String combined = evidenceBlocks.stream()
+                .map(EvidenceBlock::evidenceText)
+                .filter(Objects::nonNull)
+                .collect(Collectors.joining("\n"))
+                .toLowerCase(Locale.ROOT);
+        long hitCount = terms.stream().filter(combined::contains).count();
+        return (double) hitCount / terms.size();
+    }
+
+    private double computeFallbackScore(String query, DocChunkEntity chunk) {
+        if (chunk == null || query == null || query.isBlank()) {
+            return 0.0;
+        }
+        Set<String> terms = extractRetrievalTerms(query);
+        if (terms.isEmpty()) {
+            return 0.0;
+        }
+        String chapter = chunk.getChapterPath() == null ? "" : chunk.getChapterPath().toLowerCase(Locale.ROOT);
+        String content = chunk.getContent() == null ? "" : chunk.getContent().toLowerCase(Locale.ROOT);
+        String wholeQuery = normalizeRetrievalQuery(query);
+        String combined = chapter + "\n" + content;
+        long hitCount = terms.stream().filter(combined::contains).count();
+        if (hitCount == 0 && !combined.contains(wholeQuery)) {
+            return 0.0;
+        }
+        double overlapScore = (double) hitCount / terms.size();
+        double exactScore = combined.contains(wholeQuery) ? 1.0 : 0.0;
+        double chapterScore = chapter.isBlank() ? 0.0
+                : (double) terms.stream().filter(chapter::contains).count() / terms.size();
+        double score = 0.45 * exactScore + 0.40 * overlapScore + 0.15 * chapterScore;
+        return score >= 0.08 ? score : 0.0;
+    }
+
+    private Set<String> extractRetrievalTerms(String text) {
+        if (text == null || text.isBlank()) {
+            return Collections.emptySet();
+        }
+        String normalized = normalizeRetrievalQuery(text);
+        String[] tokens = normalized
+                .split("[\\s\\uFF0C\\u3002\\uFF01\\uFF1F\\u3001\\uFF1B\\uFF1A\\u201C\\u201D\\u2018\\u2019\\uFF08\\uFF09\\u3010\\u3011\\u300A\\u300B\\p{Punct}]+");
+        Set<String> stopTerms = Set.of("什么", "么是", "请问", "如何", "怎么", "为什", "为什么", "一下", "一下子", "介绍");
+        Set<String> terms = new LinkedHashSet<>();
+        for (String token : tokens) {
+            String trimmed = token.trim();
+            if (trimmed.length() < 2) {
+                continue;
+            }
+            if (trimmed.length() <= 6 && !stopTerms.contains(trimmed)) {
+                terms.add(trimmed);
+            }
+            if (trimmed.length() > 2) {
+                for (int i = 0; i < trimmed.length() - 1; i++) {
+                    String gram = trimmed.substring(i, i + 2);
+                    if (!stopTerms.contains(gram)) {
+                        terms.add(gram);
+                    }
+                }
+            }
+        }
+        return terms;
+    }
+
+    private String normalizeRetrievalQuery(String text) {
+        String normalized = text == null ? "" : text.trim().toLowerCase(Locale.ROOT);
+        String[] prefixes = {"什么是", "什么叫", "什么叫做", "请问", "请解释", "解释一下", "介绍一下", "如何", "怎么", "为什么", "说说"};
+        for (String prefix : prefixes) {
+            if (normalized.startsWith(prefix)) {
+                normalized = normalized.substring(prefix.length()).trim();
+                break;
+            }
+        }
+        return normalized;
+    }
 
     private String buildCitationsJson(List<CitationInfo> citations) {
         JsonArray arr = new JsonArray();

@@ -227,7 +227,7 @@ tap:
     mmr:
       lambda: 0.7
     coverage:
-      threshold: 0.15
+      threshold: 0.30
     evidence:
       max-sentences: 8
       token-ratio-min: 0.25

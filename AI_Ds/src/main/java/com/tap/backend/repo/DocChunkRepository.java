@@ -10,6 +10,9 @@ public interface DocChunkRepository extends JpaRepository<DocChunkEntity, Long> 
 
     List<DocChunkEntity> findAllByCourseSpaceIdAndChunkType(Long courseSpaceId, String chunkType);
 
+    List<DocChunkEntity> findAllByCourseSpaceIdAndDocumentIdAndChunkType(
+            Long courseSpaceId, Long documentId, String chunkType);
+
     List<DocChunkEntity> findAllByIdIn(Collection<Long> ids);
 
     List<DocChunkEntity> findAllByChunkType(String chunkType);

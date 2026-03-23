@@ -103,6 +103,11 @@ public class TopRerankService {
             String x = t.trim();
             if (x.length() >= 2) {
                 terms.add(x);
+                if (x.length() > 2) {
+                    for (int i = 0; i < x.length() - 1; i++) {
+                        terms.add(x.substring(i, i + 2));
+                    }
+                }
             }
         }
         return terms;
