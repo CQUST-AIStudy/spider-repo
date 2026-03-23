@@ -36,4 +36,28 @@ public class UserDailyQuotaUsageEntity {
   void onCreate() {
     if (updatedAt == null) updatedAt = Instant.now();
   }
+
+  public Long getId() {
+    return id;
+  }
+
+  public Long getUserId() {
+    return userId;
+  }
+
+  public LocalDate getUsageDate() {
+    return usageDate;
+  }
+
+  public long getTranslationChars() {
+    return translationChars;
+  }
+
+  public long getAiRequests() {
+    return aiRequests;
+  }
+
+  public Instant getUpdatedAt() {
+    return updatedAt;
+  }
 }

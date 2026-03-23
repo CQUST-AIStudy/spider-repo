@@ -123,6 +123,14 @@ export default {
     return apiClient.get('/api/admin/info')
   },
 
+  async getAdminDashboardOverview() {
+    return apiClient.get('/api/admin-dashboard/overview')
+  },
+
+  async triggerAdminClassSync(classId, payload = {}) {
+    return apiClient.post(`/api/admin-dashboard/classes/${classId}/sync`, payload)
+  },
+
   // 登录
   async login(username, password, teacherLevel) {
     if (

@@ -7,6 +7,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface UserDailyQuotaUsageRepository extends JpaRepository<UserDailyQuotaUsageEntity, Long> {
+  java.util.List<UserDailyQuotaUsageEntity> findAllByUsageDate(LocalDate usageDate);
+
   @Modifying
   @Query(value = """
       insert into user_daily_quota_usage(user_id, usage_date, translation_chars, ai_requests, updated_at)
