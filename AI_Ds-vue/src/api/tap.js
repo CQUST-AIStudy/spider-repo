@@ -67,6 +67,37 @@ export function getTapUser() {
   } catch { return null }
 }
 
+function extractProblemMessage(payload) {
+  if (!payload) return ''
+  if (typeof payload === 'string') return payload
+  return payload.message || payload.detail || payload.error_description || payload.error || payload.title || ''
+}
+
+async function parseFetchPayload(res) {
+  const contentType = res.headers.get('content-type') || ''
+  try {
+    if (contentType.includes('application/json')) {
+      return await res.json()
+    }
+    const text = await res.text()
+    if (!text) return null
+    try {
+      return JSON.parse(text)
+    } catch {
+      return { message: text }
+    }
+  } catch {
+    return null
+  }
+}
+
+function resolveFetchErrorMessage(res, payload, fallbackMessage) {
+  if (res.status === 413) {
+    return extractProblemMessage(payload) || '上传文件过大，请压缩后重试或分批上传'
+  }
+  return extractProblemMessage(payload) || fallbackMessage
+}
+
 // ========== Documents ==========
 export function getDocuments() {
   return tapClient.get('/api/documents')
@@ -97,9 +128,9 @@ export async function uploadFiles(folderId, files, relativePaths = null) {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: fd
   })
-  const json = await res.json()
-  if (!res.ok) throw new Error(json?.message || '上传失败')
-  return json
+  const payload = await parseFetchPayload(res)
+  if (!res.ok) throw new Error(resolveFetchErrorMessage(res, payload, '文件上传失败'))
+  return payload
 }
 
 export async function uploadZipFolder(folderName, file) {
@@ -112,9 +143,9 @@ export async function uploadZipFolder(folderName, file) {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: fd
   })
-  const json = await res.json()
-  if (!res.ok) throw new Error(json?.message || 'ZIP upload failed')
-  return json
+  const payload = await parseFetchPayload(res)
+  if (!res.ok) throw new Error(resolveFetchErrorMessage(res, payload, 'ZIP 上传失败'))
+  return payload
 }
 
 // ========== Translation ==========

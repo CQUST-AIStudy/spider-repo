@@ -30,7 +30,7 @@ public class AgentJobRunner {
   private static final long MAX_TOTAL_BYTES = 500L * 1024 * 1024; // 500MB
   private static final long MAX_SINGLE_BYTES = 100L * 1024 * 1024; // 100MB
   private static final Set<String> BLOCKED_EXT = Set.of("exe","bat","cmd","sh","ps1","dll","so","msi","com");
-  private static final Pattern UNSAFE_CHARS = Pattern.compile("[<>:\"|?*\\x00-\\x1f]");
+  private static final Pattern UNSAFE_CHARS = Pattern.compile("[\\\\/<>:\"|?*\\x00-\\x1f]");
   private static final int AI_TEXT_LIMIT = 4000; // chars sent to AI per file
 
   private final AgentJobRepository jobRepo;
@@ -365,7 +365,7 @@ public class AgentJobRunner {
           new FileClassifyResult("other","",List.of(),List.of(),"",null,0,""));
 
       // Determine target folder from placement rules
-      String targetFolder = matchPlacementRule(cr, ruleMap, folderResult.folderSchema());
+      String targetFolder = sanitizeFolderPath(matchPlacementRule(cr, ruleMap, folderResult.folderSchema()));
 
       // Determine new filename from naming rule
       String newFilename = applyNamingRule(namingRule, cr, jf);
@@ -377,7 +377,7 @@ public class AgentJobRunner {
         String existing = sha256Groups.get(jf.getSha256());
         if (existing != null) {
           dupGroupId = "dup_" + jf.getSha256().substring(0, 8);
-          targetFolder = "重复文件";
+          targetFolder = sanitizeFolderPath("重复文件");
         } else {
           sha256Groups.put(jf.getSha256(), jf.getFilename());
         }
@@ -390,20 +390,20 @@ public class AgentJobRunner {
       if (cr.docKind() == null || "other".equals(cr.docKind())) {
         if (!reviewFlag) { reviewFlag = true; reviewReason = "无法确定文档类型"; }
       }
-      if (reviewFlag && dupGroupId == null) targetFolder = "待确认";
+      if (reviewFlag && dupGroupId == null) targetFolder = sanitizeFolderPath("待确认");
 
       // Conflict resolution: append sequence number if path already used
-      String fullPath = targetFolder + "/" + newFilename;
+      String fullPath = buildRelativePath(targetFolder, newFilename);
       int count = usedPaths.getOrDefault(fullPath, 0);
       if (count > 0) {
         String base = newFilename.contains(".") ? newFilename.substring(0, newFilename.lastIndexOf('.')) : newFilename;
         String ext = newFilename.contains(".") ? newFilename.substring(newFilename.lastIndexOf('.')) : "";
         newFilename = base + "_" + count + ext;
-        fullPath = targetFolder + "/" + newFilename;
+        fullPath = buildRelativePath(targetFolder, newFilename);
       }
       usedPaths.put(fullPath, count + 1);
 
-      String targetKey = prefix + targetFolder + "/" + newFilename;
+      String targetKey = prefix + buildRelativePath(targetFolder, newFilename);
 
       AgentOrganizePlanEntity plan = new AgentOrganizePlanEntity();
       plan.setJob(job);
@@ -552,16 +552,18 @@ public class AgentJobRunner {
       zos.closeEntry();
 
       // Add organized files (concurrent prefetch + single-thread zip write).
-      record ZipReadTask(Long planId, String objectKey, String zipPath) {}
+      // If the organized object copy failed, fall back to the source object so the delivery ZIP stays complete.
+      record ZipReadTask(Long planId, String targetObjectKey, String sourceObjectKey, String zipPath, boolean preferTarget) {}
       record ZipReadResult(Long planId, String zipPath, byte[] data, String objectKey, String errorMessage) {}
 
       List<ZipReadTask> zipTasks = new ArrayList<>();
       for (AgentOrganizePlanEntity p : plans) {
-        if (!p.isApplied()) continue;
         zipTasks.add(new ZipReadTask(
             p.getId(),
             p.getTargetObjectKey(),
-            p.getTargetFolder() + "/" + p.getNewFilename()
+            p.getSourceObjectKey(),
+            buildRelativePath(p.getTargetFolder(), p.getNewFilename()),
+            p.isApplied()
         ));
       }
 
@@ -569,10 +571,19 @@ public class AgentJobRunner {
       for (ZipReadTask t : zipTasks) {
         zipCs.submit(() -> {
           try {
-            byte[] data = storage.getBytes(t.objectKey());
-            return new ZipReadResult(t.planId(), t.zipPath(), data, t.objectKey(), null);
+            if (t.preferTarget()) {
+              try {
+                byte[] data = storage.getBytes(t.targetObjectKey());
+                return new ZipReadResult(t.planId(), t.zipPath(), data, t.targetObjectKey(), null);
+              } catch (Exception ignored) {
+                // Fall through to the original source object.
+              }
+            }
+            byte[] data = storage.getBytes(t.sourceObjectKey());
+            return new ZipReadResult(t.planId(), t.zipPath(), data, t.sourceObjectKey(), null);
           } catch (Exception e) {
-            return new ZipReadResult(t.planId(), t.zipPath(), null, t.objectKey(), e.getMessage());
+            String failedKey = t.preferTarget() ? t.targetObjectKey() : t.sourceObjectKey();
+            return new ZipReadResult(t.planId(), t.zipPath(), null, failedKey, e.getMessage());
           }
         });
       }
@@ -643,18 +654,21 @@ public class AgentJobRunner {
   }
 
   private String matchPlacementRule(FileClassifyResult cr, Map<String, String> rules, List<String> schema) {
+    String docKind = cr.docKind() == null || cr.docKind().isBlank() ? "other" : cr.docKind();
     // Simple rule matching: check if condition contains docKind or topic match
     for (var entry : rules.entrySet()) {
+      if (entry.getKey() == null || entry.getValue() == null || entry.getValue().isBlank()) continue;
       String cond = entry.getKey().toLowerCase(Locale.ROOT);
-      if (cond.contains("dockind==" + cr.docKind().toLowerCase(Locale.ROOT))) return entry.getValue();
+      if (cond.contains("dockind==" + docKind.toLowerCase(Locale.ROOT))) return entry.getValue();
       if (cr.topic() != null && !cr.topic().isBlank() && cond.contains("topic==" + cr.topic().toLowerCase(Locale.ROOT)))
         return entry.getValue();
     }
     // Fallback: use first schema entry that loosely matches docKind
     if (schema != null) {
       for (String dir : schema) {
+        if (dir == null || dir.isBlank()) continue;
         String dl = dir.toLowerCase(Locale.ROOT);
-        if (dl.contains(cr.docKind().toLowerCase(Locale.ROOT))) return dir;
+        if (dl.contains(docKind.toLowerCase(Locale.ROOT))) return dir;
       }
     }
     return "其他";
@@ -677,13 +691,43 @@ public class AgentJobRunner {
   }
 
   private String sanitizeFilename(String name) {
-    String s = UNSAFE_CHARS.matcher(name).replaceAll("_");
+    String s = name == null ? "" : name;
+    s = UNSAFE_CHARS.matcher(s).replaceAll("_");
     s = s.replaceAll("\\.\\.+", "_");
+    s = s.replaceAll("\\s+", " ").trim();
+    s = s.replaceAll("^[\\.\\s]+|[\\.\\s]+$", "");
     if (s.length() > 200) {
       String ext = s.contains(".") ? s.substring(s.lastIndexOf('.')) : "";
       s = s.substring(0, 200 - ext.length()) + ext;
     }
     return s.isBlank() ? "unnamed" : s;
+  }
+
+  private String sanitizeFolderPath(String path) {
+    if (path == null || path.isBlank()) return "其他";
+    String normalized = path.replace('\\', '/');
+    List<String> parts = new ArrayList<>();
+    for (String raw : normalized.split("/+")) {
+      String part = sanitizePathPart(raw);
+      if (part != null) parts.add(part);
+    }
+    return parts.isEmpty() ? "其他" : String.join("/", parts);
+  }
+
+  private String sanitizePathPart(String part) {
+    if (part == null) return null;
+    String s = UNSAFE_CHARS.matcher(part).replaceAll("_");
+    s = s.replaceAll("\\.\\.+", "_");
+    s = s.replaceAll("\\s+", " ").trim();
+    s = s.replaceAll("^[\\.\\s]+|[\\.\\s]+$", "");
+    if (s.isBlank() || ".".equals(s) || "..".equals(s)) return null;
+    return s.length() > 80 ? s.substring(0, 80) : s;
+  }
+
+  private String buildRelativePath(String folder, String filename) {
+    String cleanFolder = sanitizeFolderPath(folder);
+    String cleanFilename = sanitizeFilename(filename);
+    return cleanFolder + "/" + cleanFilename;
   }
 
   private static String extractExt(String filename) {
