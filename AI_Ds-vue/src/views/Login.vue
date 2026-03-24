@@ -103,6 +103,7 @@ const registerFormRef = ref(null)
 const loading = ref(false)
 const isRegister = ref(false)
 const selectedRole = ref('teacher')
+const isDevelopment = process.env.NODE_ENV === 'development'
 
 const roles = [
   { value: 'teacher', label: '教师', icon: markRaw(Reading) },
@@ -115,15 +116,21 @@ const roleButtonText = computed(() => {
   return map[selectedRole.value] || '登录'
 })
 
-const defaultAccounts = {
+const defaultAccounts = isDevelopment ? {
   teacher: { username: 'teacher1', password: 'password123' },
   student: { username: 'student1', password: 'password123' },
   admin: { username: 'admin1', password: 'password123' }
-}
-const loginForm = reactive({ username: 'teacher1', password: 'password123' })
+} : {}
+const loginForm = reactive({
+  username: defaultAccounts.teacher?.username || '',
+  password: defaultAccounts.teacher?.password || ''
+})
 
 // 切换角色时自动填充默认账号
 watch(selectedRole, (role) => {
+  if (!isDevelopment) {
+    return
+  }
   const acc = defaultAccounts[role]
   if (acc) {
     loginForm.username = acc.username
