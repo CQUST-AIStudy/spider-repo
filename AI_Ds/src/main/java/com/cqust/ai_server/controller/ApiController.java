@@ -507,9 +507,20 @@ public class ApiController {
     }
 
     @GetMapping("/student/{username}/experiments")
-    public ResponseEntity<List<Map<String, Object>>> getStudentExperiments(@PathVariable String username) {
+    public ResponseEntity<List<Map<String, Object>>> getStudentExperiments(
+            @PathVariable String username,
+            HttpServletRequest request
+    ) {
         try {
-            List<Map<String, Object>> experiments = experimentService.findExperimentsByUsername(username);
+            UserEntity currentUser = studentSessionResolver.requireStudent(request);
+            String currentUsername = currentUser.getUsername();
+            if (currentUsername == null || currentUsername.isBlank()) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(null);
+            }
+            if (!currentUsername.equals(username)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(null);
+            }
+            List<Map<String, Object>> experiments = experimentService.findExperimentsByUsername(currentUsername);
             return ResponseEntity.ok(experiments);
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(null);
@@ -519,16 +530,29 @@ public class ApiController {
     @PostMapping("/experiments/{id}/submit")
     public ResponseEntity<Map<String, Object>> submitExperiment(
             @PathVariable int id,
-            @RequestParam String username,
-            @RequestBody Map<String, String> submission) {
+            @RequestParam(required = false) String username,
+            @RequestBody Map<String, String> submission,
+            HttpServletRequest request) {
 
         Map<String, Object> response = new HashMap<>();
 
         try {
+            UserEntity currentUser = studentSessionResolver.requireStudent(request);
+            String currentUsername = currentUser.getUsername();
+            if (currentUsername == null || currentUsername.isBlank()) {
+                response.put("status", "error");
+                response.put("message", "用户未登录");
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(response);
+            }
+            if (username != null && !username.isBlank() && !currentUsername.equals(username)) {
+                response.put("status", "error");
+                response.put("message", "无权提交其他用户的实验");
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(response);
+            }
             String code = submission.get("code");
             String report = submission.get("report");
 
-            boolean success = experimentService.submitExperiment(id, username, code, report);
+            boolean success = experimentService.submitExperiment(id, currentUsername, code, report);
 
             if (success) {
                 response.put("status", "success");
