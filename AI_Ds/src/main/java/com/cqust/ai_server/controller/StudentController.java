@@ -6,6 +6,7 @@ import com.cqust.ai_server.security.LegacySessionAccessResolver;
 import com.cqust.ai_server.service.AIRemarksService;
 import com.cqust.ai_server.service.StudentService;
 import jakarta.servlet.http.HttpServletRequest;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -86,7 +87,7 @@ public class StudentController {
             Student student = studentService.findByUsername(username);
             if (student != null) {
                 response.put("success", true);
-                response.put("student", student);
+                response.put("student", sanitizeStudent(student));
                 return ResponseEntity.ok(response);
             }
 
@@ -118,7 +119,7 @@ public class StudentController {
             Student student = studentService.findByStudentId(studentId);
             if (student != null) {
                 response.put("success", true);
-                response.put("student", student);
+                response.put("student", sanitizeStudent(student));
                 return ResponseEntity.ok(response);
             }
 
@@ -147,7 +148,7 @@ public class StudentController {
             List<Student> students = studentService.findAllStudents();
             if (students != null && !students.isEmpty()) {
                 response.put("success", true);
-                response.put("students", students);
+                response.put("students", sanitizeStudents(students));
                 return ResponseEntity.ok(response);
             }
 
@@ -264,5 +265,26 @@ public class StudentController {
             response.put("message", "failed to delete ai remark: " + e.getMessage());
             return ResponseEntity.status(500).body(response);
         }
+    }
+
+    private List<Student> sanitizeStudents(List<Student> students) {
+        List<Student> sanitized = new ArrayList<>();
+        for (Student student : students) {
+            sanitized.add(sanitizeStudent(student));
+        }
+        return sanitized;
+    }
+
+    private Student sanitizeStudent(Student student) {
+        if (student == null) {
+            return null;
+        }
+        Student sanitized = new Student();
+        sanitized.setStudent_id(student.getStudent_id());
+        sanitized.setUsername(student.getUsername());
+        sanitized.setName(student.getName());
+        sanitized.setClass_name(student.getClass_name());
+        sanitized.setCreatedAt(student.getCreatedAt());
+        return sanitized;
     }
 }

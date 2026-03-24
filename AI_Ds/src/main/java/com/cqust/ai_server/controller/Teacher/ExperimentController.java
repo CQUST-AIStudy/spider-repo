@@ -211,7 +211,7 @@ public class ExperimentController {
     public ResponseEntity<Map<String, Object>> getStudentList(HttpServletRequest request) {
         try {
             Teacher teacher = requireCurrentTeacher(request);
-            List<Student> students = studentDao.getStudentsByTeacherId(teacher.getTeacher_id());
+            List<Student> students = sanitizeStudents(studentDao.getStudentsByTeacherId(teacher.getTeacher_id()));
             Map<String, Object> response = new HashMap<>();
             response.put("students", students == null ? new ArrayList<>() : students);
             response.put("teacherId", teacher.getTeacher_id());
@@ -261,5 +261,29 @@ public class ExperimentController {
 
     private String safeString(String value) {
         return value == null ? "" : value;
+    }
+
+    private List<Student> sanitizeStudents(List<Student> students) {
+        if (students == null) {
+            return null;
+        }
+        List<Student> sanitized = new ArrayList<>();
+        for (Student student : students) {
+            sanitized.add(sanitizeStudent(student));
+        }
+        return sanitized;
+    }
+
+    private Student sanitizeStudent(Student student) {
+        if (student == null) {
+            return null;
+        }
+        Student sanitized = new Student();
+        sanitized.setStudent_id(student.getStudent_id());
+        sanitized.setUsername(student.getUsername());
+        sanitized.setName(student.getName());
+        sanitized.setClass_name(student.getClass_name());
+        sanitized.setCreatedAt(student.getCreatedAt());
+        return sanitized;
     }
 }
