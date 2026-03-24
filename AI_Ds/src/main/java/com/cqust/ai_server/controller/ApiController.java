@@ -220,21 +220,8 @@ public class ApiController {
                     .collect(Collectors.toMap(Score::getExperiment_id, score -> score, (existing, replacement) -> existing));
             System.out.println("userScoresByExperimentId:" + userScoresByExperimentId);
 
-            // 调用 StudentController 的方法获取学生ID
             StudentController studentController = applicationContext.getBean(StudentController.class);
-            ResponseEntity<Map<String, Object>> studentIdResponse = studentController.findStudentIdByUsername(currentUsername);
-            Map<String, Object> studentIdData = studentIdResponse.getBody();
-
-            Integer studentId = null;
-            if (studentIdData != null && (Boolean) studentIdData.getOrDefault("success", false)) {
-                studentId = (Integer) studentIdData.get("studentId");
-                System.out.println("获取到学生ID: " + studentId);
-            } else {
-                System.out.println("未找到学生ID");
-            }
-
-            // 如果用 username 查不到成绩，尝试用 student_id 查（score表中username可能存的是学号）
-            studentId = Integer.valueOf(currentStudentId);
+            Integer studentId = Integer.valueOf(currentStudentId);
             if (userScoresByExperimentId.isEmpty() && studentId != null) {
                 String studentIdStr = String.valueOf(studentId);
                 userScoresByExperimentId = scoreService.findPerExperimentSumScoresByUsername(studentIdStr)
@@ -745,44 +732,8 @@ public class ApiController {
         Map<String, Object> response = new HashMap<>();
 
         try {
-            if (request != null) {
-                String studentId = studentSessionResolver.requireStudentId(request);
-                return getAllRecommendedPracticesByStudent(Integer.parseInt(studentId));
-            }
-
-            // 从Session中获取当前用户名
-            HttpSession session = request.getSession(false);
-            String currentUsername;
-            if (session != null) {
-                currentUsername = (String) session.getAttribute("username");
-            } else {
-                currentUsername = null;
-            }
-
-            // 如果用户未登录，返回错误信息
-            if (currentUsername == null) {
-                response.put("success", false);
-                response.put("message", "用户未登录或会话已过期");
-                return ResponseEntity.ok(response);
-            }
-
-            // 获取学生ID
-            StudentController studentController = applicationContext.getBean(StudentController.class);
-            ResponseEntity<Map<String, Object>> studentIdResponse = studentController.findStudentIdByUsername(currentUsername);
-            Map<String, Object> studentIdData = studentIdResponse.getBody();
-
-            Integer studentId = null;
-            if (studentIdData != null && (Boolean) studentIdData.getOrDefault("success", false)) {
-                studentId = (Integer) studentIdData.get("studentId");
-                System.out.println("获取到学生ID: " + studentId);
-
-                // 直接调用已有的获取学生推荐练习的方法
-                return getAllRecommendedPracticesByStudent(studentId);
-            } else {
-                response.put("success", false);
-                response.put("message", "未找到学生信息");
-                return ResponseEntity.ok(response);
-            }
+            String studentId = studentSessionResolver.requireStudentId(request);
+            return getAllRecommendedPracticesByStudent(Integer.parseInt(studentId));
 
         } catch (Exception e) {
             e.printStackTrace();
