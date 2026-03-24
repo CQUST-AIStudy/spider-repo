@@ -241,10 +241,7 @@ public class LeetCodeRecommendController {
     }
 
     private void requireAdmin(HttpServletRequest request) {
-        UserEntity user = legacySessionAccessResolver.requireAuthenticated(request);
-        if (!"admin".equals(normalize(user.getRole()))) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "admin role required");
-        }
+        legacySessionAccessResolver.requireAdmin(request);
     }
 
     private Integer parseStudentId(String value) {

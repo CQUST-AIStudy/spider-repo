@@ -65,7 +65,7 @@
           </el-input>
         </el-form-item>
         <el-form-item prop="role">
-          <el-radio-group v-model="registerForm.role">
+          <el-radio-group v-model="registerForm.role" disabled>
             <el-radio label="student">学生</el-radio>
             <el-radio label="teacher">教师</el-radio>
           </el-radio-group>
@@ -178,7 +178,9 @@ const registerRules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }, { min: 6, message: '密码长度不能小于6位', trigger: 'blur' }],
   confirmPassword: [{ required: true, message: '请确认密码', trigger: 'blur' }, { validator: validateConfirmPassword, trigger: 'blur' }],
-  role: [{ required: true, message: '请选择角色', trigger: 'change' }]
+  role: [{ required: true, message: '请选择角色', trigger: 'change' }],
+  usernum: [{ required: true, message: '请输入学号', trigger: 'blur' }],
+  classname: [{ required: true, message: '请输入班级', trigger: 'blur' }]
 }
 
 const handleRegister = () => {
