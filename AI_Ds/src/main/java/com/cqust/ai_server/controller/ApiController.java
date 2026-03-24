@@ -2,6 +2,7 @@ package com.cqust.ai_server.controller;
 
 import com.cqust.ai_server.dao.SubmissionDao;
 import com.cqust.ai_server.entity.*;
+import com.cqust.ai_server.security.LegacySessionAccessResolver;
 import com.cqust.ai_server.security.StudentSessionResolver;
 
 import com.cqust.ai_server.service.*;
@@ -69,6 +70,9 @@ public class ApiController {
 
     @Autowired
     private StudentSessionResolver studentSessionResolver;
+
+    @Autowired
+    private LegacySessionAccessResolver legacySessionAccessResolver;
 
     @Autowired
     @Qualifier("intelligentRecommendationService")
@@ -603,7 +607,14 @@ public class ApiController {
      * @return 响应实体，包含所有推荐练习列表
      */
     @GetMapping("/api/student/{studentId}/recommendedPractices")
-    public ResponseEntity<Map<String, Object>> getAllRecommendedPracticesByStudent(@PathVariable int studentId) {
+    public ResponseEntity<Map<String, Object>> getAllRecommendedPracticesByStudent(
+            @PathVariable int studentId,
+            HttpServletRequest request) {
+        String authorizedStudentId = studentSessionResolver.requireAuthorizedStudentId(String.valueOf(studentId), request);
+        return getAllRecommendedPracticesByStudent(Integer.parseInt(authorizedStudentId));
+    }
+
+    public ResponseEntity<Map<String, Object>> getAllRecommendedPracticesByStudent(int studentId) {
         Map<String, Object> response = new HashMap<>();
 
         try {
@@ -784,11 +795,14 @@ public class ApiController {
     @GetMapping("/api/student/{studentId}/experiment/{experimentId}/recommendedPractices")
     public ResponseEntity<Map<String, Object>> getRecommendedPracticesForExperiment(
             @PathVariable int studentId,
-            @PathVariable int experimentId) {
+            @PathVariable int experimentId,
+            HttpServletRequest request) {
 
         Map<String, Object> response = new HashMap<>();
 
         try {
+            String authorizedStudentId = studentSessionResolver.requireAuthorizedStudentId(String.valueOf(studentId), request);
+            studentId = Integer.parseInt(authorizedStudentId);
             List<Map<String, Object>> recommendedPractices = getRecommendedPracticesByExperiment(studentId, experimentId);
             
             // 对返回的数据进行处理，确保前端能正确显示
@@ -821,10 +835,13 @@ public class ApiController {
      * @return 包含提交详情的响应
      */
     @GetMapping("/api/submissions/{submissionId}")
-    public ResponseEntity<Map<String, Object>> getSubmissionDetail(@PathVariable String submissionId) {
+    public ResponseEntity<Map<String, Object>> getSubmissionDetail(
+            @PathVariable String submissionId,
+            HttpServletRequest request) {
         Map<String, Object> response = new HashMap<>();
 
         try {
+            legacySessionAccessResolver.requireTeacherOrAdmin(request);
             // 解析submissionId (格式: studentId-experimentId)
             String[] parts = submissionId.split("-");
             if (parts.length != 2) {
