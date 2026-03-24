@@ -1,37 +1,40 @@
 package com.tap.backend.api.analytics;
 
-import com.cqust.ai_server.entity.UserEntity;
+import com.cqust.ai_server.security.StudentSessionResolver;
 import com.tap.common.api.ApiResponse;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpSession;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @RequestMapping("/api/analytics/student")
 @CrossOrigin(origins = "*")
 public class StudentAnalyticsController {
 
+    private final StudentSessionResolver studentSessionResolver;
+
     @PersistenceContext
     private EntityManager em;
+
+    public StudentAnalyticsController(StudentSessionResolver studentSessionResolver) {
+        this.studentSessionResolver = studentSessionResolver;
+    }
 
     @GetMapping("/{studentId}/overview")
     public ApiResponse<Map<String, Object>> getStudentOverview(
             @PathVariable String studentId,
             HttpServletRequest request
     ) {
-        String authorizedStudentId = requireAuthorizedStudentId(studentId, request);
+        String authorizedStudentId = studentSessionResolver.requireAuthorizedStudentId(studentId, request);
 
         @SuppressWarnings("unchecked")
         List<Object[]> experimentRows = em.createNativeQuery(
@@ -127,7 +130,7 @@ public class StudentAnalyticsController {
             @PathVariable int experimentId,
             HttpServletRequest request
     ) {
-        String authorizedStudentId = requireAuthorizedStudentId(studentId, request);
+        String authorizedStudentId = studentSessionResolver.requireAuthorizedStudentId(studentId, request);
 
         @SuppressWarnings("unchecked")
         List<Object[]> myRows = em.createNativeQuery(
@@ -195,38 +198,6 @@ public class StudentAnalyticsController {
         result.put("overview", overview);
         result.put("problems", problems);
         return ApiResponse.of(result);
-    }
-
-    private String requireAuthorizedStudentId(String requestedStudentId, HttpServletRequest request) {
-        HttpSession session = request.getSession(false);
-        if (session == null) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "authentication required");
-        }
-
-        Object currentUser = session.getAttribute("currentUser");
-        if (!(currentUser instanceof UserEntity user)) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "authentication required");
-        }
-        if (!"student".equalsIgnoreCase(user.getRole())) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "student role required");
-        }
-
-        String sessionStudentId = normalizeStudentId(user.getUsernum());
-        if (sessionStudentId == null) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "student id missing");
-        }
-        if (!sessionStudentId.equals(normalizeStudentId(requestedStudentId))) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "forbidden");
-        }
-        return sessionStudentId;
-    }
-
-    private String normalizeStudentId(String value) {
-        if (value == null) {
-            return null;
-        }
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private static double round2(double value) {
