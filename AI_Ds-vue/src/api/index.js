@@ -319,7 +319,7 @@ export default {
       const response = await apiClient.post('/api/register', {
         username: formData.username,
         password: formData.password,
-        role: formData.role,
+        role: 'student',
         usernum: formData.usernum || null,
         classname: formData.classname || null
       })

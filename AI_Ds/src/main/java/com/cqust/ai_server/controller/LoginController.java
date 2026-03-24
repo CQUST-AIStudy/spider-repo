@@ -89,13 +89,17 @@ public class LoginController {
         try {
             String username = regData.get("username");
             String password = regData.get("password");
-            String role = regData.getOrDefault("role", "student");
             String usernum = regData.get("usernum");
             String classname = regData.get("classname");
 
             if (isBlank(username) || isBlank(password)) {
                 response.put("success", false);
                 response.put("message", "username and password are required");
+                return ResponseEntity.ok(response);
+            }
+            if (isBlank(usernum) || isBlank(classname)) {
+                response.put("success", false);
+                response.put("message", "student usernum and classname are required");
                 return ResponseEntity.ok(response);
             }
 
@@ -109,7 +113,7 @@ public class LoginController {
             UserEntity user = new UserEntity();
             user.setUsername(username);
             user.setPassword(password);
-            user.setRole(role);
+            user.setRole("student");
             user.setUsernum(usernum);
             user.setClassname(classname);
 
@@ -120,12 +124,10 @@ public class LoginController {
                 return ResponseEntity.ok(response);
             }
 
-            if ("student".equals(role) && !isBlank(usernum)) {
-                try {
-                    userService.bindStudentByUsernum(username, usernum, classname);
-                } catch (Exception e) {
-                    System.out.println("student binding warning: " + e.getMessage());
-                }
+            try {
+                userService.bindStudentByUsernum(username, usernum, classname);
+            } catch (Exception e) {
+                System.out.println("student binding warning: " + e.getMessage());
             }
 
             response.put("success", true);

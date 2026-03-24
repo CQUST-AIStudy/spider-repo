@@ -70,12 +70,12 @@
             <el-radio label="teacher">教师</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item v-if="registerForm.role === 'student'" prop="usernum">
+        <el-form-item prop="usernum">
           <el-input v-model="registerForm.usernum" placeholder="学号（用于绑定PTA数据）" size="large">
             <template #prefix><el-icon><Postcard /></el-icon></template>
           </el-input>
         </el-form-item>
-        <el-form-item v-if="registerForm.role === 'student'" prop="classname">
+        <el-form-item prop="classname">
           <el-input v-model="registerForm.classname" placeholder="班级（如：计科23）" size="large">
             <template #prefix><el-icon><School /></el-icon></template>
           </el-input>
@@ -185,6 +185,7 @@ const handleRegister = () => {
   registerFormRef.value.validate(async (valid) => {
     if (!valid) return
     loading.value = true
+    registerForm.role = 'student'
     try {
       const res = await api.register(registerForm)
       if (res && res.success) {
