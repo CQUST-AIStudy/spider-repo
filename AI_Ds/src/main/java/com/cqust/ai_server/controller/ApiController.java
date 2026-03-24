@@ -2,6 +2,7 @@ package com.cqust.ai_server.controller;
 
 import com.cqust.ai_server.dao.SubmissionDao;
 import com.cqust.ai_server.entity.*;
+import com.cqust.ai_server.security.StudentSessionResolver;
 
 import com.cqust.ai_server.service.*;
 import com.cqust.ai_server.entity.LeetCodeRecommendItem;
@@ -65,6 +66,9 @@ public class ApiController {
 
     @Autowired
     private com.cqust.ai_server.service.ProfileService profileService;
+
+    @Autowired
+    private StudentSessionResolver studentSessionResolver;
 
     @Autowired
     @Qualifier("intelligentRecommendationService")
@@ -924,13 +928,13 @@ public class ApiController {
     public ResponseEntity<?> getLearningAnalysis(HttpServletRequest request) {
         try {
             HttpSession session = request.getSession(false);
-            String username = session != null ? (String) session.getAttribute("username") : null;
+            String username = studentSessionResolver.requireStudentId(request);
             if (username == null) {
                 return ResponseEntity.ok(Map.of("success", false, "message", "用户未登录"));
             }
             // 通过username查找studentId
             StudentController studentController = applicationContext.getBean(StudentController.class);
-            ResponseEntity<Map<String, Object>> sidResp = studentController.findStudentIdByUsername(username);
+            ResponseEntity<Map<String, Object>> sidResp = ResponseEntity.ok(Map.of("success", true, "studentId", username));
             Map<String, Object> sidData = sidResp.getBody();
             String studentId = null;
             if (sidData != null && Boolean.TRUE.equals(sidData.get("success"))) {
@@ -963,7 +967,7 @@ public class ApiController {
         Map<String, Object> response = new HashMap<>();
         try {
             HttpSession session = request.getSession(false);
-            String currentUsername = session != null ? (String) session.getAttribute("username") : null;
+            String currentUsername = studentSessionResolver.requireStudentId(request);
             if (currentUsername == null) {
                 response.put("success", false);
                 response.put("message", "用户未登录");
@@ -972,7 +976,7 @@ public class ApiController {
 
             // 获取studentId
             StudentController studentController = applicationContext.getBean(StudentController.class);
-            ResponseEntity<Map<String, Object>> sidResp = studentController.findStudentIdByUsername(currentUsername);
+            ResponseEntity<Map<String, Object>> sidResp = ResponseEntity.ok(Map.of("success", true, "studentId", Integer.valueOf(currentUsername)));
             Map<String, Object> sidData = sidResp.getBody();
             Integer studentId = null;
             if (sidData != null && Boolean.TRUE.equals(sidData.get("success"))) {
