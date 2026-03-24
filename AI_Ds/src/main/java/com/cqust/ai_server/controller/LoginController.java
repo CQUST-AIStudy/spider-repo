@@ -140,7 +140,7 @@ public class LoginController {
         }
     }
 
-    @PostMapping("/logout")
+    @PostMapping({"/logout", "/api/logout"})
     public ResponseEntity<Map<String, Object>> logout(HttpServletRequest request) {
         Map<String, Object> response = new HashMap<>();
         HttpSession session = request.getSession(false);

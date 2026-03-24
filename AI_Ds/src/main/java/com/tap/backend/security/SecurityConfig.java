@@ -1,5 +1,6 @@
 package com.tap.backend.security;
 
+import com.cqust.ai_server.security.LegacySessionAuthFilter;
 import com.tap.backend.domain.user.UserRole;
 import jakarta.servlet.http.HttpServletResponse;
 import java.util.List;
@@ -90,11 +91,20 @@ public class SecurityConfig {
    */
   @Bean
   @Order(2)
-  public SecurityFilterChain aiDsSecurityFilterChain(HttpSecurity http) throws Exception {
+  public SecurityFilterChain aiDsSecurityFilterChain(HttpSecurity http, LegacySessionAuthFilter legacySessionAuthFilter)
+      throws Exception {
     http.securityMatcher("/**");
     http.csrf(csrf -> csrf.disable());
     http.cors(cors -> {});
-    http.authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
+    http.exceptionHandling(ex -> ex.authenticationEntryPoint((request, response, authException) -> {
+      response.sendError(HttpServletResponse.SC_UNAUTHORIZED);
+    }));
+    http.authorizeHttpRequests(auth -> auth
+        .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+        .requestMatchers(HttpMethod.POST, "/api/login", "/api/register", "/logout", "/api/logout").permitAll()
+        .anyRequest().authenticated()
+    );
+    http.addFilterBefore(legacySessionAuthFilter, UsernamePasswordAuthenticationFilter.class);
     return http.build();
   }
 
