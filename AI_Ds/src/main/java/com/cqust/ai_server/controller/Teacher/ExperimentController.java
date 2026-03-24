@@ -4,13 +4,11 @@ import com.cqust.ai_server.dao.StudentDao;
 import com.cqust.ai_server.entity.Experiment;
 import com.cqust.ai_server.entity.Score;
 import com.cqust.ai_server.entity.Student;
-import com.cqust.ai_server.entity.UserEntity;
 import com.cqust.ai_server.entity.teacher.Teacher;
 import com.cqust.ai_server.entity.teacher.TeacherExperiment;
-import com.cqust.ai_server.security.LegacySessionAccessResolver;
+import com.cqust.ai_server.security.TeacherSessionResolver;
 import com.cqust.ai_server.service.ExperimentService;
 import com.cqust.ai_server.service.ScoreService;
-import com.cqust.ai_server.service.TeacherService;
 import jakarta.servlet.http.HttpServletRequest;
 import java.text.DecimalFormat;
 import java.util.ArrayList;
@@ -38,10 +36,7 @@ public class ExperimentController {
     private StudentDao studentDao;
 
     @Autowired
-    private TeacherService teacherService;
-
-    @Autowired
-    private LegacySessionAccessResolver legacySessionAccessResolver;
+    private TeacherSessionResolver teacherSessionResolver;
 
     @GetMapping("/experiments")
     public ResponseEntity<Map<String, Object>> getTeacherExperimentList(HttpServletRequest request) {
@@ -227,18 +222,7 @@ public class ExperimentController {
     }
 
     private Teacher requireCurrentTeacher(HttpServletRequest request) {
-        UserEntity user = legacySessionAccessResolver.requireAuthenticated(request);
-        String role = normalize(user.getRole());
-        if (!"teacher".equals(role) && !"admin".equals(role)) {
-            throw new IllegalStateException("teacher role required");
-        }
-
-        String username = normalize(user.getUsername());
-        Teacher teacher = username == null ? null : teacherService.findByUsername(username);
-        if (teacher == null) {
-            throw new IllegalStateException("teacher info not found");
-        }
-        return teacher;
+        return teacherSessionResolver.requireCurrentTeacher(request);
     }
 
     private int getStudentCount(Integer teacherId) {
@@ -273,14 +257,6 @@ public class ExperimentController {
         response.put("status", "error");
         response.put("message", message);
         return ResponseEntity.badRequest().body(response);
-    }
-
-    private String normalize(String value) {
-        if (value == null) {
-            return null;
-        }
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private String safeString(String value) {

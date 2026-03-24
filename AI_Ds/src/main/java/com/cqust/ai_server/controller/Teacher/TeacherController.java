@@ -1,10 +1,8 @@
 package com.cqust.ai_server.controller.Teacher;
 
 import com.cqust.ai_server.dao.StudentDao;
-import com.cqust.ai_server.entity.UserEntity;
 import com.cqust.ai_server.entity.teacher.Teacher;
-import com.cqust.ai_server.security.LegacySessionAccessResolver;
-import com.cqust.ai_server.service.TeacherService;
+import com.cqust.ai_server.security.TeacherSessionResolver;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.HashMap;
 import java.util.Map;
@@ -20,13 +18,10 @@ import org.springframework.web.bind.annotation.RestController;
 public class TeacherController {
 
     @Autowired
-    private TeacherService teacherService;
-
-    @Autowired
     private StudentDao studentDao;
 
     @Autowired
-    private LegacySessionAccessResolver legacySessionAccessResolver;
+    private TeacherSessionResolver teacherSessionResolver;
 
     @GetMapping("/info")
     public ResponseEntity<Map<String, Object>> getTeacherInfo(HttpServletRequest request) {
@@ -76,39 +71,11 @@ public class TeacherController {
     }
 
     private Teacher requireCurrentTeacher(HttpServletRequest request) {
-        UserEntity user = legacySessionAccessResolver.requireAuthenticated(request);
-        String role = normalize(user.getRole());
-        if (!"teacher".equals(role) && !"admin".equals(role)) {
-            throw new IllegalStateException("teacher role required");
-        }
-
-        String username = normalize(user.getUsername());
-        Teacher teacher = username == null ? null : teacherService.findByUsername(username);
-        if (teacher == null) {
-            throw new IllegalStateException("teacher info not found");
-        }
-        return teacher;
+        return teacherSessionResolver.requireCurrentTeacher(request);
     }
 
     private Teacher requireTeacherAccess(Integer teacherId, HttpServletRequest request) {
-        UserEntity user = legacySessionAccessResolver.requireAuthenticated(request);
-        String role = normalize(user.getRole());
-        if ("admin".equals(role)) {
-            Teacher teacher = teacherService.findByTeacherId(teacherId);
-            if (teacher == null) {
-                throw new IllegalStateException("teacher info not found");
-            }
-            return teacher;
-        }
-        if (!"teacher".equals(role)) {
-            throw new IllegalStateException("teacher role required");
-        }
-
-        Teacher currentTeacher = requireCurrentTeacher(request);
-        if (!teacherId.equals(currentTeacher.getTeacher_id())) {
-            throw new IllegalStateException("forbidden");
-        }
-        return currentTeacher;
+        return teacherSessionResolver.requireTeacherAccess(teacherId, request);
     }
 
     private ResponseEntity<Map<String, Object>> error(String message) {
@@ -116,13 +83,5 @@ public class TeacherController {
         errorResponse.put("status", "error");
         errorResponse.put("message", message);
         return ResponseEntity.badRequest().body(errorResponse);
-    }
-
-    private String normalize(String value) {
-        if (value == null) {
-            return null;
-        }
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
     }
 }
