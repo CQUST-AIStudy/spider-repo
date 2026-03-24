@@ -35,6 +35,7 @@ public class AdminDashboardService {
   private final UserRepository userRepository;
   private final TeachingClassRepository classRepository;
   private final UserDailyQuotaUsageRepository usageRepository;
+  private final PtaCookieService ptaCookieService;
   private final RestTemplate restTemplate;
 
   @Value("${tap.quota.translation-chars-per-day:200000}")
@@ -83,11 +84,13 @@ public class AdminDashboardService {
       UserRepository userRepository,
       TeachingClassRepository classRepository,
       UserDailyQuotaUsageRepository usageRepository,
+      PtaCookieService ptaCookieService,
       @Value("${pta.connect-timeout-ms:5000}") int connectTimeoutMs,
       @Value("${pta.read-timeout-ms:20000}") int readTimeoutMs) {
     this.userRepository = userRepository;
     this.classRepository = classRepository;
     this.usageRepository = usageRepository;
+    this.ptaCookieService = ptaCookieService;
 
     SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
     requestFactory.setConnectTimeout(Math.max(1000, connectTimeoutMs));
@@ -373,16 +376,10 @@ public class AdminDashboardService {
     result.put("healthy", healthy);
     result.put("baseUrl", spiderUrl);
 
-    try {
-      ResponseEntity<Map> response = restTemplate.getForEntity(spiderUrl + "/cookie/status", Map.class);
-      Map<String, Object> body = response.getBody() == null ? Map.of() : response.getBody();
-      result.put("cookieStatus", body.getOrDefault("status", "UNKNOWN"));
-      result.put("cookieError", body.getOrDefault("error", ""));
-      result.put("cookieLastUpdated", body.get("lastUpdated"));
-    } catch (Exception ex) {
-      result.put("cookieStatus", "UNKNOWN");
-      result.put("cookieError", ex.getMessage());
-    }
+    Map<String, Object> cookie = ptaCookieService.getStatusSnapshot();
+    result.put("cookieStatus", cookie.getOrDefault("status", "UNKNOWN"));
+    result.put("cookieError", cookie.getOrDefault("error", ""));
+    result.put("cookieLastUpdated", cookie.get("lastUpdated"));
 
     try {
       ResponseEntity<List> response = restTemplate.getForEntity(spiderUrl + "/tasks", List.class);
