@@ -68,6 +68,9 @@ public class GradingTaskService {
                 .orElseThrow(() -> new IllegalArgumentException("Teacher not found"));
         GradingRubricEntity rubric = rubricRepo.findById(rubricId)
                 .orElseThrow(() -> new IllegalArgumentException("Rubric not found"));
+        if (!teacherId.equals(rubric.getTeacherId())) {
+            throw new IllegalArgumentException("Rubric not found");
+        }
 
         // Separate valid PDFs from invalid files
         List<MultipartFile> validPdfs = new ArrayList<>();
@@ -204,6 +207,16 @@ public class GradingTaskService {
                 publishTaskToQueue(taskIdFinal);
             }
         });
+    }
+
+    @Transactional
+    public void deleteOwnedTask(Long taskId, Long teacherId) {
+        GradingTaskEntity task = requireOwnedTask(taskId, teacherId);
+        if (task.getStatus() == GradingTaskStatus.PROCESSING) {
+            throw new IllegalStateException("Task is still processing");
+        }
+        taskRepo.delete(task);
+        log.info("Deleted grading task {} by teacher {}", taskId, teacherId);
     }
 
     /**

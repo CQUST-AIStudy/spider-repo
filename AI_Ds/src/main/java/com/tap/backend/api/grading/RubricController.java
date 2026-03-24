@@ -2,41 +2,56 @@ package com.tap.backend.api.grading;
 
 import com.tap.backend.domain.grading.GradingRubricEntity;
 import com.tap.backend.domain.grading.RubricDimensionEntity;
+import com.tap.backend.security.TeacherPrincipalResolver;
+import com.tap.backend.security.UserPrincipal;
 import com.tap.backend.service.RubricService;
 import com.tap.backend.service.RubricService.DimensionInput;
 import com.tap.common.api.ApiResponse;
-import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.core.userdetails.UserDetails;
-import org.springframework.web.bind.annotation.*;
-
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpSession;
 import java.math.BigDecimal;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api/grading/rubrics")
 public class RubricController {
 
     private final RubricService rubricService;
-    private final com.tap.backend.repo.UserRepository userRepo;
+    private final TeacherPrincipalResolver teacherPrincipalResolver;
 
-    public RubricController(RubricService rubricService,
-                            com.tap.backend.repo.UserRepository userRepo) {
+    public RubricController(
+            RubricService rubricService,
+            TeacherPrincipalResolver teacherPrincipalResolver
+    ) {
         this.rubricService = rubricService;
-        this.userRepo = userRepo;
+        this.teacherPrincipalResolver = teacherPrincipalResolver;
     }
 
     @PostMapping
-    public ResponseEntity<?> create(@AuthenticationPrincipal UserDetails principal,
-                                    HttpServletRequest request,
-                                    @RequestBody RubricRequest req) {
-        Long teacherId = resolveUserId(principal, request);
+    public ResponseEntity<?> create(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestBody RubricRequest req
+    ) {
+        Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
         try {
-            var rubric = rubricService.create(teacherId, req.name(), req.subject(),
-                    req.description(), req.customPrompt(), toDimensionInputs(req.dimensions()));
+            var rubric = rubricService.create(
+                    teacherId,
+                    req.name(),
+                    req.subject(),
+                    req.description(),
+                    req.customPrompt(),
+                    toDimensionInputs(req.dimensions())
+            );
             return ResponseEntity.ok(ApiResponse.of(toDto(rubric)));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
@@ -44,19 +59,23 @@ public class RubricController {
     }
 
     @GetMapping
-    public ResponseEntity<?> list(@AuthenticationPrincipal UserDetails principal,
-                                  HttpServletRequest request,
-                                  @RequestParam(required = false) String subject) {
-        Long teacherId = resolveUserId(principal, request);
+    public ResponseEntity<?> list(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestParam(required = false) String subject
+    ) {
+        Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
         var rubrics = rubricService.listByTeacher(teacherId, subject);
-        var dtos = rubrics.stream().map(this::toDto).toList();
-        return ResponseEntity.ok(ApiResponse.of(dtos));
+        return ResponseEntity.ok(ApiResponse.of(rubrics.stream().map(this::toDto).toList()));
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<?> detail(@PathVariable Long id) {
+    public ResponseEntity<?> detail(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserPrincipal principal
+    ) {
+        Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
         try {
-            var rubric = rubricService.getDetail(id);
+            var rubric = rubricService.getDetail(id, teacherId);
             return ResponseEntity.ok(ApiResponse.of(toDto(rubric)));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(404).body(Map.of("message", e.getMessage()));
@@ -64,11 +83,22 @@ public class RubricController {
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<?> update(@PathVariable Long id,
-                                    @RequestBody RubricRequest req) {
+    public ResponseEntity<?> update(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestBody RubricRequest req
+    ) {
+        Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
         try {
-            var rubric = rubricService.update(id, req.name(), req.subject(),
-                    req.description(), req.customPrompt(), toDimensionInputs(req.dimensions()));
+            var rubric = rubricService.update(
+                    id,
+                    teacherId,
+                    req.name(),
+                    req.subject(),
+                    req.description(),
+                    req.customPrompt(),
+                    toDimensionInputs(req.dimensions())
+            );
             return ResponseEntity.ok(ApiResponse.of(toDto(rubric)));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
@@ -77,61 +107,50 @@ public class RubricController {
         }
     }
 
-    private Long resolveUserId(UserDetails principal, HttpServletRequest request) {
-        if (principal != null) {
-            return userRepo.findByUsername(principal.getUsername())
-                    .orElseThrow(() -> new IllegalArgumentException("User not found"))
-                    .getId();
+    private List<DimensionInput> toDimensionInputs(List<DimensionDto> dimensions) {
+        if (dimensions == null) {
+            return List.of();
         }
-        HttpSession session = request.getSession(false);
-        if (session != null) {
-            String username = (String) session.getAttribute("username");
-            if (username != null) {
-                return userRepo.findByUsername(username).orElseGet(() -> {
-                    var u = new com.tap.backend.domain.user.UserEntity();
-                    u.setUsername(username);
-                    u.setDisplayName(username);
-                    u.setRole(com.tap.backend.domain.user.UserRole.TEACHER);
-                    return userRepo.save(u);
-                }).getId();
-            }
-        }
-        throw new IllegalArgumentException("未登录，请先登录");
-    }
-
-    private List<DimensionInput> toDimensionInputs(List<DimensionDto> dims) {
-        if (dims == null) return List.of();
-        return dims.stream()
+        return dimensions.stream()
                 .map(d -> new DimensionInput(d.name(), d.description(), d.maxScore(), d.weight()))
                 .toList();
     }
 
-    private Map<String, Object> toDto(GradingRubricEntity r) {
-        Map<String, Object> m = new java.util.LinkedHashMap<>();
-        m.put("id", r.getId());
-        m.put("name", r.getName());
-        m.put("subject", r.getSubject() != null ? r.getSubject() : "");
-        m.put("description", r.getDescription() != null ? r.getDescription() : "");
-        m.put("customPrompt", r.getCustomPrompt() != null ? r.getCustomPrompt() : "");
-        m.put("createdAt", r.getCreatedAt().toString());
-        m.put("dimensions", r.getDimensions().stream().map(this::dimDto).toList());
-        return m;
+    private Map<String, Object> toDto(GradingRubricEntity rubric) {
+        Map<String, Object> dto = new LinkedHashMap<>();
+        dto.put("id", rubric.getId());
+        dto.put("name", rubric.getName());
+        dto.put("subject", rubric.getSubject() != null ? rubric.getSubject() : "");
+        dto.put("description", rubric.getDescription() != null ? rubric.getDescription() : "");
+        dto.put("customPrompt", rubric.getCustomPrompt() != null ? rubric.getCustomPrompt() : "");
+        dto.put("createdAt", rubric.getCreatedAt().toString());
+        dto.put("dimensions", rubric.getDimensions().stream().map(this::toDimensionDto).toList());
+        return dto;
     }
 
-    private Map<String, Object> dimDto(RubricDimensionEntity d) {
+    private Map<String, Object> toDimensionDto(RubricDimensionEntity dimension) {
         return Map.of(
-                "id", d.getId(),
-                "name", d.getName(),
-                "description", d.getDescription() != null ? d.getDescription() : "",
-                "maxScore", d.getMaxScore(),
-                "weight", d.getWeight(),
-                "sortOrder", d.getSortOrder()
+                "id", dimension.getId(),
+                "name", dimension.getName(),
+                "description", dimension.getDescription() != null ? dimension.getDescription() : "",
+                "maxScore", dimension.getMaxScore(),
+                "weight", dimension.getWeight(),
+                "sortOrder", dimension.getSortOrder()
         );
     }
 
-    public record RubricRequest(String name, String subject, String description,
-                                 String customPrompt, List<DimensionDto> dimensions) {}
+    public record RubricRequest(
+            String name,
+            String subject,
+            String description,
+            String customPrompt,
+            List<DimensionDto> dimensions
+    ) {}
 
-    public record DimensionDto(String name, String description,
-                                BigDecimal maxScore, Integer weight) {}
+    public record DimensionDto(
+            String name,
+            String description,
+            BigDecimal maxScore,
+            Integer weight
+    ) {}
 }

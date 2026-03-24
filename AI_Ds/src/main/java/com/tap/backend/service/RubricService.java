@@ -58,11 +58,10 @@ public class RubricService {
     }
 
     @Transactional
-    public GradingRubricEntity update(Long rubricId, String name, String subject,
+    public GradingRubricEntity update(Long rubricId, Long teacherId, String name, String subject,
                                        String description, String customPrompt,
                                        List<DimensionInput> dimensions) {
-        GradingRubricEntity rubric = rubricRepo.findById(rubricId)
-                .orElseThrow(() -> new IllegalArgumentException("Rubric not found"));
+        GradingRubricEntity rubric = requireOwnedRubric(rubricId, teacherId);
 
         if (taskRepo.existsByRubricIdAndStatus(rubricId, GradingTaskStatus.PROCESSING)) {
             throw new IllegalStateException("Rubric is referenced by active grading tasks");
@@ -105,11 +104,19 @@ public class RubricService {
     }
 
     @Transactional(readOnly = true)
-    public GradingRubricEntity getDetail(Long rubricId) {
-        GradingRubricEntity rubric = rubricRepo.findById(rubricId)
-                .orElseThrow(() -> new IllegalArgumentException("Rubric not found"));
+    public GradingRubricEntity getDetail(Long rubricId, Long teacherId) {
+        GradingRubricEntity rubric = requireOwnedRubric(rubricId, teacherId);
         // force load dimensions
         rubric.getDimensions().size();
+        return rubric;
+    }
+
+    private GradingRubricEntity requireOwnedRubric(Long rubricId, Long teacherId) {
+        GradingRubricEntity rubric = rubricRepo.findById(rubricId)
+                .orElseThrow(() -> new IllegalArgumentException("Rubric not found"));
+        if (!rubric.getTeacherId().equals(teacherId)) {
+            throw new IllegalArgumentException("Rubric not found");
+        }
         return rubric;
     }
 

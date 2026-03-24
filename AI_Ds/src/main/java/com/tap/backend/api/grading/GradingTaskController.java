@@ -1,49 +1,66 @@
 package com.tap.backend.api.grading;
 
+import com.tap.backend.domain.grading.GradingSubmissionEntity;
 import com.tap.backend.domain.grading.GradingTaskEntity;
 import com.tap.backend.domain.grading.GradingTaskStatus;
-import com.tap.backend.domain.grading.GradingSubmissionEntity;
+import com.tap.backend.security.TeacherPrincipalResolver;
+import com.tap.backend.security.UserPrincipal;
 import com.tap.backend.service.GradingTaskService;
 import com.tap.common.api.ApiResponse;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.core.userdetails.UserDetails;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
-
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpSession;
-import java.util.*;
 
 @RestController
 @RequestMapping("/api/grading/tasks")
 public class GradingTaskController {
 
     private final GradingTaskService taskService;
-    private final com.tap.backend.repo.UserRepository userRepo;
+    private final TeacherPrincipalResolver teacherPrincipalResolver;
 
-    public GradingTaskController(GradingTaskService taskService,
-                                  com.tap.backend.repo.UserRepository userRepo) {
+    public GradingTaskController(
+            GradingTaskService taskService,
+            TeacherPrincipalResolver teacherPrincipalResolver
+    ) {
         this.taskService = taskService;
-        this.userRepo = userRepo;
+        this.teacherPrincipalResolver = teacherPrincipalResolver;
     }
 
     @PostMapping
-    public ResponseEntity<?> create(@AuthenticationPrincipal UserDetails principal,
-                                    HttpServletRequest request,
-                                    @RequestParam("files") MultipartFile[] files,
-                                    @RequestParam("rubricId") Long rubricId,
-                                    @RequestParam(value = "experimentId", required = false) Long experimentId,
-                                    @RequestParam(value = "classId", required = false) Long classId,
-                                    @RequestParam(value = "scoreRangeMin", required = false) java.math.BigDecimal scoreRangeMin,
-                                    @RequestParam(value = "scoreRangeMax", required = false) java.math.BigDecimal scoreRangeMax) {
-        Long teacherId = resolveUserId(principal, request);
+    public ResponseEntity<?> create(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestParam("files") MultipartFile[] files,
+            @RequestParam("rubricId") Long rubricId,
+            @RequestParam(value = "experimentId", required = false) Long experimentId,
+            @RequestParam(value = "classId", required = false) Long classId,
+            @RequestParam(value = "scoreRangeMin", required = false) java.math.BigDecimal scoreRangeMin,
+            @RequestParam(value = "scoreRangeMax", required = false) java.math.BigDecimal scoreRangeMax
+    ) {
+        Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
         try {
-            var result = taskService.createTask(teacherId, experimentId, classId, rubricId,
-                    scoreRangeMin, scoreRangeMax, files);
+            var result = taskService.createTask(
+                    teacherId,
+                    experimentId,
+                    classId,
+                    rubricId,
+                    scoreRangeMin,
+                    scoreRangeMax,
+                    files
+            );
             return ResponseEntity.ok(ApiResponse.of(result));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
@@ -51,35 +68,39 @@ public class GradingTaskController {
     }
 
     @GetMapping
-    public ResponseEntity<?> list(@AuthenticationPrincipal UserDetails principal,
-                                  HttpServletRequest request,
-                                  @RequestParam(defaultValue = "0") int page,
-                                  @RequestParam(defaultValue = "20") int size,
-                                  @RequestParam(required = false) String status) {
-        Long teacherId = resolveUserId(principal, request);
+    public ResponseEntity<?> list(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String status
+    ) {
+        Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
         GradingTaskStatus statusEnum = status != null ? GradingTaskStatus.valueOf(status) : null;
-        var pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
-        Page<GradingTaskEntity> tasks = taskService.getTaskList(teacherId, statusEnum, pageable);
+        Page<GradingTaskEntity> tasks = taskService.getTaskList(
+                teacherId,
+                statusEnum,
+                PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"))
+        );
 
-        var content = tasks.getContent().stream().map(this::toListDto).toList();
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("content", content);
+        result.put("content", tasks.getContent().stream().map(this::toListDto).toList());
         result.put("totalElements", tasks.getTotalElements());
         result.put("totalPages", tasks.getTotalPages());
         return ResponseEntity.ok(ApiResponse.of(result));
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<?> detail(@PathVariable Long id,
-                                    @AuthenticationPrincipal UserDetails principal,
-                                    HttpServletRequest request) {
-        Long teacherId = resolveUserId(principal, request);
+    public ResponseEntity<?> detail(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserPrincipal principal
+    ) {
+        Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
         try {
             GradingTaskEntity task = taskService.getTaskDetail(id, teacherId);
-            List<GradingSubmissionEntity> subs = taskService.getTaskSubmissions(id, teacherId);
+            List<GradingSubmissionEntity> submissions = taskService.getTaskSubmissions(id, teacherId);
 
             Map<String, Object> dto = new LinkedHashMap<>(toListDto(task));
-            dto.put("submissions", subs.stream().map(this::toSubDto).toList());
+            dto.put("submissions", submissions.stream().map(this::toSubDto).toList());
             return ResponseEntity.ok(ApiResponse.of(dto));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(404).body(Map.of("message", e.getMessage()));
@@ -87,10 +108,11 @@ public class GradingTaskController {
     }
 
     @PostMapping("/{id}/retry")
-    public ResponseEntity<?> retry(@PathVariable Long id,
-                                   @AuthenticationPrincipal UserDetails principal,
-                                   HttpServletRequest request) {
-        Long teacherId = resolveUserId(principal, request);
+    public ResponseEntity<?> retry(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserPrincipal principal
+    ) {
+        Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
         try {
             taskService.retryFailed(id, teacherId);
             return ResponseEntity.ok(ApiResponse.of(Map.of("message", "Retry initiated")));
@@ -100,13 +122,14 @@ public class GradingTaskController {
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<?> delete(@PathVariable Long id,
-                                     @AuthenticationPrincipal UserDetails principal,
-                                     HttpServletRequest request) {
-        Long teacherId = resolveUserId(principal, request);
+    public ResponseEntity<?> delete(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserPrincipal principal
+    ) {
+        Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
         try {
-            taskService.deleteTask(id, teacherId);
-            return ResponseEntity.ok(ApiResponse.of(Map.of("message", "删除成功")));
+            taskService.deleteOwnedTask(id, teacherId);
+            return ResponseEntity.ok(ApiResponse.of(Map.of("message", "Deleted successfully")));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
         } catch (IllegalStateException e) {
@@ -114,15 +137,13 @@ public class GradingTaskController {
         }
     }
 
-    /**
-     * 导出 Excel：教师选择学生，选择是否包含评语
-     */
     @PostMapping("/{id}/export-excel")
-    public ResponseEntity<?> exportExcel(@PathVariable Long id,
-                                          @AuthenticationPrincipal UserDetails principal,
-                                          HttpServletRequest request,
-                                          @RequestBody ExcelExportRequest req) {
-        Long teacherId = resolveUserId(principal, request);
+    public ResponseEntity<?> exportExcel(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestBody ExcelExportRequest req
+    ) {
+        Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
         try {
             byte[] excel = taskService.exportExcel(id, teacherId, req.submissionIds(), req.includeComments());
             return ResponseEntity.ok()
@@ -136,56 +157,29 @@ public class GradingTaskController {
 
     public record ExcelExportRequest(List<Long> submissionIds, boolean includeComments) {}
 
-    /**
-     * 兼容双认证体系：优先 JWT principal，回退到 HttpSession (AI_Ds 登录)
-     */
-    private Long resolveUserId(UserDetails principal, HttpServletRequest request) {
-        // 1. JWT 认证 (tap 体系)
-        if (principal != null) {
-            return userRepo.findByUsername(principal.getUsername())
-                    .orElseThrow(() -> new IllegalArgumentException("User not found"))
-                    .getId();
-        }
-        // 2. Session 认证 (AI_Ds 体系) — 通过 username 查找或自动创建 tap_user
-        HttpSession session = request.getSession(false);
-        if (session != null) {
-            String username = (String) session.getAttribute("username");
-            if (username != null) {
-                return userRepo.findByUsername(username).orElseGet(() -> {
-                    var u = new com.tap.backend.domain.user.UserEntity();
-                    u.setUsername(username);
-                    u.setDisplayName(username);
-                    u.setRole(com.tap.backend.domain.user.UserRole.TEACHER);
-                    return userRepo.save(u);
-                }).getId();
-            }
-        }
-        throw new IllegalArgumentException("未登录，请先登录");
+    private Map<String, Object> toListDto(GradingTaskEntity task) {
+        Map<String, Object> dto = new LinkedHashMap<>();
+        dto.put("taskId", task.getId());
+        dto.put("status", task.getStatus().name());
+        dto.put("totalCount", task.getTotalCount());
+        dto.put("completedCount", task.getCompletedCount());
+        dto.put("failedCount", task.getFailedCount());
+        dto.put("rubricId", task.getRubricId());
+        dto.put("experimentId", task.getExperimentId());
+        dto.put("createdAt", task.getCreatedAt().toString());
+        return dto;
     }
 
-    private Map<String, Object> toListDto(GradingTaskEntity t) {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("taskId", t.getId());
-        m.put("status", t.getStatus().name());
-        m.put("totalCount", t.getTotalCount());
-        m.put("completedCount", t.getCompletedCount());
-        m.put("failedCount", t.getFailedCount());
-        m.put("rubricId", t.getRubricId());
-        m.put("experimentId", t.getExperimentId());
-        m.put("createdAt", t.getCreatedAt().toString());
-        return m;
-    }
-
-    private Map<String, Object> toSubDto(GradingSubmissionEntity s) {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("submissionId", s.getId());
-        m.put("studentName", s.getStudentName());
-        m.put("className", s.getClassName());
-        m.put("studentNo", s.getStudentNo());
-        m.put("status", s.getStatus().name());
-        m.put("totalScore", s.getTotalScore());
-        m.put("originalFilename", s.getOriginalFilename());
-        m.put("finalReviewComment", s.getFinalReviewComment());
-        return m;
+    private Map<String, Object> toSubDto(GradingSubmissionEntity submission) {
+        Map<String, Object> dto = new LinkedHashMap<>();
+        dto.put("submissionId", submission.getId());
+        dto.put("studentName", submission.getStudentName());
+        dto.put("className", submission.getClassName());
+        dto.put("studentNo", submission.getStudentNo());
+        dto.put("status", submission.getStatus().name());
+        dto.put("totalScore", submission.getTotalScore());
+        dto.put("originalFilename", submission.getOriginalFilename());
+        dto.put("finalReviewComment", submission.getFinalReviewComment());
+        return dto;
     }
 }

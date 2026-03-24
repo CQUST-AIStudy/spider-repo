@@ -41,9 +41,8 @@ public class GradingSubmissionService {
     }
 
     @Transactional(readOnly = true)
-    public Map<String, Object> getDetail(Long submissionId) {
-        GradingSubmissionEntity sub = submissionRepo.findById(submissionId)
-                .orElseThrow(() -> new IllegalArgumentException("Submission not found"));
+    public Map<String, Object> getDetail(Long submissionId, Long teacherId) {
+        GradingSubmissionEntity sub = requireOwnedSubmission(submissionId, teacherId);
 
         List<ScoreItemEntity> scores = scoreItemRepo.findAllBySubmissionId(submissionId);
         List<EvidenceBlockEntity> evidence = evidenceRepo.findAllBySubmissionId(submissionId);
@@ -66,6 +65,7 @@ public class GradingSubmissionService {
     public Map<String, Object> overrideScore(Long submissionId, Long dimensionId,
                                               BigDecimal newScore, String newComment,
                                               String reason, Long teacherId) {
+        requireOwnedSubmission(submissionId, teacherId);
         ScoreItemEntity scoreItem = scoreItemRepo.findBySubmissionIdAndDimensionId(submissionId, dimensionId)
                 .orElseThrow(() -> new IllegalArgumentException("Score item not found"));
 
@@ -94,8 +94,7 @@ public class GradingSubmissionService {
         scoreItemRepo.save(scoreItem);
 
         // Recalculate total score
-        GradingSubmissionEntity sub = submissionRepo.findById(submissionId)
-                .orElseThrow(() -> new IllegalArgumentException("Submission not found"));
+        GradingSubmissionEntity sub = requireOwnedSubmission(submissionId, teacherId);
         BigDecimal total = recalculateTotal(submissionId);
         sub.setTotalScore(total);
         submissionRepo.save(sub);
@@ -130,9 +129,8 @@ public class GradingSubmissionService {
      * 生成 AI 总评（以任课教师口吻）
      */
     @Transactional
-    public String generateFinalReview(Long submissionId) {
-        GradingSubmissionEntity sub = submissionRepo.findById(submissionId)
-                .orElseThrow(() -> new IllegalArgumentException("Submission not found"));
+    public String generateFinalReview(Long submissionId, Long teacherId) {
+        GradingSubmissionEntity sub = requireOwnedSubmission(submissionId, teacherId);
         List<ScoreItemEntity> scores = scoreItemRepo.findAllBySubmissionId(submissionId);
 
         StringBuilder scoreSummary = new StringBuilder();
@@ -175,11 +173,19 @@ public class GradingSubmissionService {
     }
 
     @Transactional
-    public void saveFinalReview(Long submissionId, String review) {
-        GradingSubmissionEntity sub = submissionRepo.findById(submissionId)
-                .orElseThrow(() -> new IllegalArgumentException("Submission not found"));
+    public void saveFinalReview(Long submissionId, String review, Long teacherId) {
+        GradingSubmissionEntity sub = requireOwnedSubmission(submissionId, teacherId);
         sub.setFinalReviewComment(review);
         submissionRepo.save(sub);
+    }
+
+    private GradingSubmissionEntity requireOwnedSubmission(Long submissionId, Long teacherId) {
+        GradingSubmissionEntity sub = submissionRepo.findById(submissionId)
+                .orElseThrow(() -> new IllegalArgumentException("Submission not found"));
+        if (!teacherId.equals(sub.getTask().getTeacherId())) {
+            throw new IllegalArgumentException("Submission not found");
+        }
+        return sub;
     }
 
     private String generateSimpleReview(GradingSubmissionEntity sub, List<ScoreItemEntity> scores) {

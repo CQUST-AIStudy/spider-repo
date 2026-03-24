@@ -74,7 +74,7 @@ public class SecurityConfig {
         .requestMatchers(HttpMethod.PUT, "/api/classes/*/pta-sync/callback").permitAll()
         .requestMatchers(HttpMethod.PUT, "/api/pta-cookie/status").permitAll()
         .requestMatchers("/api/pta-cookie/**").authenticated()
-        .requestMatchers("/api/grading/**").permitAll()
+        .requestMatchers("/api/grading/**").authenticated()
         .requestMatchers("/api/rag/**").permitAll()
         .requestMatchers("/api/classes/**").authenticated()
         .requestMatchers("/api/analytics/**").permitAll()

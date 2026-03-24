@@ -7,19 +7,36 @@ import com.tap.backend.infra.storage.ObjectStorageService;
 import com.tap.backend.repo.GradingSubmissionRepository;
 import com.tap.backend.repo.GradingTaskRepository;
 import com.tap.backend.repo.ReportFileRepository;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
-
+import com.tap.backend.security.TeacherPrincipalResolver;
+import com.tap.backend.security.UserPrincipal;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
-import java.util.*;
-import java.util.concurrent.*;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.CompletionService;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorCompletionService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
-import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @RequestMapping("/api/grading")
@@ -29,6 +46,7 @@ public class GradingExportController {
     private final GradingSubmissionRepository submissionRepo;
     private final ReportFileRepository reportFileRepo;
     private final ObjectStorageService storageService;
+    private final TeacherPrincipalResolver teacherPrincipalResolver;
 
     @Value("${tap.grading.export.max-concurrency:6}")
     private int exportMaxConcurrency;
@@ -36,22 +54,31 @@ public class GradingExportController {
     @Value("${tap.grading.export.submit-interval-ms:30}")
     private long exportSubmitIntervalMs;
 
-    public GradingExportController(GradingTaskRepository taskRepo,
-                                   GradingSubmissionRepository submissionRepo,
-                                   ReportFileRepository reportFileRepo,
-                                   ObjectStorageService storageService) {
+    public GradingExportController(
+            GradingTaskRepository taskRepo,
+            GradingSubmissionRepository submissionRepo,
+            ReportFileRepository reportFileRepo,
+            ObjectStorageService storageService,
+            TeacherPrincipalResolver teacherPrincipalResolver
+    ) {
         this.taskRepo = taskRepo;
         this.submissionRepo = submissionRepo;
         this.reportFileRepo = reportFileRepo;
         this.storageService = storageService;
+        this.teacherPrincipalResolver = teacherPrincipalResolver;
     }
 
     @GetMapping("/reports/{id}")
-    public ResponseEntity<?> downloadReport(@PathVariable Long id) {
+    public ResponseEntity<?> downloadReport(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserPrincipal principal
+    ) {
+        Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
         var reportOpt = reportFileRepo.findBySubmissionIdAndFileType(id, "pdf");
         if (reportOpt.isEmpty()) {
             return ResponseEntity.status(404).body(Map.of("message", "Report not yet generated"));
         }
+        requireOwnedTask(reportOpt.get().getTaskId(), teacherId);
         byte[] bytes = storageService.getBytes(reportOpt.get().getObjectKey());
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_PDF)
@@ -60,35 +87,36 @@ public class GradingExportController {
     }
 
     @PostMapping("/tasks/{id}/export")
-    public ResponseEntity<?> exportBatch(@PathVariable Long id) {
-        GradingTaskEntity task = taskRepo.findById(id).orElse(null);
-        if (task == null) {
-            return ResponseEntity.status(404).body(Map.of("message", "Task not found"));
-        }
+    public ResponseEntity<?> exportBatch(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserPrincipal principal
+    ) {
+        Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
+        GradingTaskEntity task = requireOwnedTask(id, teacherId);
 
-        List<GradingSubmissionEntity> subs = submissionRepo.findAllByTaskId(id);
-        if (subs.isEmpty()) {
+        List<GradingSubmissionEntity> submissions = submissionRepo.findAllByTaskId(id);
+        if (submissions.isEmpty()) {
             return ResponseEntity.status(404).body(Map.of("message", "No submissions found"));
         }
 
         List<ReportFileEntity> reports = reportFileRepo.findAllByTaskIdAndFileType(id, "pdf");
         Map<Long, String> reportKeyBySubId = reports.stream()
-                .filter(r -> r.getSubmission() != null && r.getSubmission().getId() != null)
+                .filter(report -> report.getSubmission() != null && report.getSubmission().getId() != null)
                 .collect(Collectors.toMap(
-                        r -> r.getSubmission().getId(),
+                        report -> report.getSubmission().getId(),
                         ReportFileEntity::getObjectKey,
-                        (a, b) -> a
+                        (left, right) -> left
                 ));
 
-        int concurrency = Math.max(1, Math.min(exportMaxConcurrency, subs.size()));
+        int concurrency = Math.max(1, Math.min(exportMaxConcurrency, submissions.size()));
         ExecutorService pool = Executors.newFixedThreadPool(concurrency);
-        CompletionService<ExportPayload> cs = new ExecutorCompletionService<>(pool);
-        Map<Long, ExportPayload> payloadBySubId = new ConcurrentHashMap<>();
+        CompletionService<ExportPayload> completionService = new ExecutorCompletionService<>(pool);
+        Map<Long, ExportPayload> payloadBySubmissionId = new ConcurrentHashMap<>();
 
         try {
             int submitted = 0;
-            for (GradingSubmissionEntity sub : subs) {
-                cs.submit(() -> loadExportPayload(sub, reportKeyBySubId.get(sub.getId())));
+            for (GradingSubmissionEntity submission : submissions) {
+                completionService.submit(() -> loadExportPayload(submission, reportKeyBySubId.get(submission.getId())));
                 submitted++;
                 if (exportSubmitIntervalMs > 0) {
                     Thread.sleep(exportSubmitIntervalMs);
@@ -96,8 +124,8 @@ public class GradingExportController {
             }
 
             for (int i = 0; i < submitted; i++) {
-                ExportPayload payload = cs.take().get();
-                payloadBySubId.put(payload.submissionId(), payload);
+                ExportPayload payload = completionService.take().get();
+                payloadBySubmissionId.put(payload.submissionId(), payload);
             }
 
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -106,20 +134,25 @@ public class GradingExportController {
             List<String> missingSubmissions = new ArrayList<>();
             Set<String> usedNames = new HashSet<>();
 
-            for (GradingSubmissionEntity sub : subs) {
-                ExportPayload payload = payloadBySubId.get(sub.getId());
-                String baseName = sanitizeFileName((sub.getStudentName() != null && !sub.getStudentName().isBlank())
-                        ? sub.getStudentName()
-                        : "submission_" + sub.getId());
+            for (GradingSubmissionEntity submission : submissions) {
+                ExportPayload payload = payloadBySubmissionId.get(submission.getId());
+                String baseName = sanitizeFileName(
+                        submission.getStudentName() != null && !submission.getStudentName().isBlank()
+                                ? submission.getStudentName()
+                                : "submission_" + submission.getId()
+                );
                 if (payload != null && payload.pdfBytes() != null && payload.pdfBytes().length > 0) {
-                    String filename = uniqueFileName(payload.filename() == null ? (baseName + ".pdf") : payload.filename(), usedNames);
+                    String filename = uniqueFileName(
+                            payload.filename() == null ? baseName + ".pdf" : payload.filename(),
+                            usedNames
+                    );
                     zos.putNextEntry(new ZipEntry(filename));
                     zos.write(payload.pdfBytes());
                     zos.closeEntry();
                     exportedCount++;
                 } else {
                     String reason = payload == null || payload.reason() == null ? "unknown" : payload.reason();
-                    missingSubmissions.add(baseName + " (submissionId=" + sub.getId() + ", reason=" + reason + ")");
+                    missingSubmissions.add(baseName + " (submissionId=" + submission.getId() + ", reason=" + reason + ")");
                 }
             }
 
@@ -145,11 +178,11 @@ public class GradingExportController {
             String zipKey = "grading/exports/task-" + id + ".zip";
             storageService.putBytes(zipKey, zipBytes, "application/zip");
 
-            ReportFileEntity rf = new ReportFileEntity();
-            rf.setTask(task);
-            rf.setFileType("zip");
-            rf.setObjectKey(zipKey);
-            reportFileRepo.save(rf);
+            ReportFileEntity reportFile = new ReportFileEntity();
+            reportFile.setTask(task);
+            reportFile.setFileType("zip");
+            reportFile.setObjectKey(zipKey);
+            reportFileRepo.save(reportFile);
 
             return ResponseEntity.ok()
                     .contentType(MediaType.parseMediaType("application/zip"))
@@ -162,30 +195,41 @@ public class GradingExportController {
         }
     }
 
-    private ExportPayload loadExportPayload(GradingSubmissionEntity sub, String reportObjectKey) {
-        String baseName = sanitizeFileName((sub.getStudentName() != null && !sub.getStudentName().isBlank())
-                ? sub.getStudentName()
-                : "submission_" + sub.getId());
+    private ExportPayload loadExportPayload(GradingSubmissionEntity submission, String reportObjectKey) {
+        String baseName = sanitizeFileName(
+                submission.getStudentName() != null && !submission.getStudentName().isBlank()
+                        ? submission.getStudentName()
+                        : "submission_" + submission.getId()
+        );
         try {
             if (reportObjectKey != null && !reportObjectKey.isBlank()) {
                 byte[] reportBytes = storageService.getBytes(reportObjectKey);
                 if (reportBytes != null && reportBytes.length > 0) {
-                    return new ExportPayload(sub.getId(), baseName + ".pdf", reportBytes, "report");
+                    return new ExportPayload(submission.getId(), baseName + ".pdf", reportBytes, "report");
                 }
             }
         } catch (Exception ignored) {
         }
 
         try {
-            if (sub.getPdfObjectKey() != null && !sub.getPdfObjectKey().isBlank()) {
-                byte[] originBytes = storageService.getBytes(sub.getPdfObjectKey());
+            if (submission.getPdfObjectKey() != null && !submission.getPdfObjectKey().isBlank()) {
+                byte[] originBytes = storageService.getBytes(submission.getPdfObjectKey());
                 if (originBytes != null && originBytes.length > 0) {
-                    return new ExportPayload(sub.getId(), baseName + "-original.pdf", originBytes, "original");
+                    return new ExportPayload(submission.getId(), baseName + "-original.pdf", originBytes, "original");
                 }
             }
         } catch (Exception ignored) {
         }
-        return new ExportPayload(sub.getId(), null, null, "missing");
+        return new ExportPayload(submission.getId(), null, null, "missing");
+    }
+
+    private GradingTaskEntity requireOwnedTask(Long taskId, Long teacherId) {
+        GradingTaskEntity task = taskRepo.findById(taskId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Task not found"));
+        if (!Objects.equals(task.getTeacherId(), teacherId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "forbidden");
+        }
+        return task;
     }
 
     private String sanitizeFileName(String name) {
@@ -209,6 +253,5 @@ public class GradingExportController {
         }
     }
 
-    private record ExportPayload(Long submissionId, String filename, byte[] pdfBytes, String reason) {
-    }
+    private record ExportPayload(Long submissionId, String filename, byte[] pdfBytes, String reason) {}
 }
