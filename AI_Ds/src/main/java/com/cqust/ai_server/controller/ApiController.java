@@ -196,16 +196,13 @@ public class ApiController {
         System.out.println("获取实验列表方法已启动！！！！！");
         try {
             // 从 Session 中获取当前用户名
-            HttpSession session = request.getSession(false);
+            UserEntity currentUser = studentSessionResolver.requireStudent(request);
             String currentUsername;  // 固定用户名用于测试
-            if (session != null) {
-                currentUsername = (String) session.getAttribute("username");
-            } else {
-                currentUsername = null;
-            }
+            currentUsername = currentUser.getUsername();
+            String currentStudentId = studentSessionResolver.requireStudentId(request);
 
             // 如果用户未登录，返回错误信息
-            if (currentUsername == null) {
+            if (currentStudentId == null) {
                 response.put("success", false);
                 response.put("message", "用户未登录或会话已过期");
                 return ResponseEntity.ok(response);
@@ -213,9 +210,12 @@ public class ApiController {
 
             // 获取所有实验
             List<Experiment> experiments = experimentService.findAllExperiments();
+            String scoreLookupUsername = (currentUsername != null && !currentUsername.isBlank())
+                    ? currentUsername
+                    : currentStudentId;
 
             // 获取当前用户的所有成绩记录
-            Map<Integer, Score> userScoresByExperimentId = scoreService.findPerExperimentSumScoresByUsername(currentUsername)
+            Map<Integer, Score> userScoresByExperimentId = scoreService.findPerExperimentSumScoresByUsername(scoreLookupUsername)
                     .stream()
                     .collect(Collectors.toMap(Score::getExperiment_id, score -> score, (existing, replacement) -> existing));
             System.out.println("userScoresByExperimentId:" + userScoresByExperimentId);
@@ -234,6 +234,7 @@ public class ApiController {
             }
 
             // 如果用 username 查不到成绩，尝试用 student_id 查（score表中username可能存的是学号）
+            studentId = Integer.valueOf(currentStudentId);
             if (userScoresByExperimentId.isEmpty() && studentId != null) {
                 String studentIdStr = String.valueOf(studentId);
                 userScoresByExperimentId = scoreService.findPerExperimentSumScoresByUsername(studentIdStr)
@@ -744,6 +745,11 @@ public class ApiController {
         Map<String, Object> response = new HashMap<>();
 
         try {
+            if (request != null) {
+                String studentId = studentSessionResolver.requireStudentId(request);
+                return getAllRecommendedPracticesByStudent(Integer.parseInt(studentId));
+            }
+
             // 从Session中获取当前用户名
             HttpSession session = request.getSession(false);
             String currentUsername;
