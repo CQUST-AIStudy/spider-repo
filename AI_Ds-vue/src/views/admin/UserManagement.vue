@@ -5,8 +5,18 @@
       title="用户管理"
       description="管理系统用户，包括学生、教师和管理员"
     >
-      <el-button type="primary" @click="showAddUserDialog">添加用户</el-button>
+      <el-button type="primary" :disabled="!userManagementReady" @click="showAddUserDialog">添加用户</el-button>
     </page-header>
+
+    <el-alert
+      v-if="!userManagementReady"
+      class="read-only-alert"
+      type="warning"
+      :closable="false"
+      title="当前用户管理页仍是前端样例数据"
+      description="后端还没有 /api/users 这组真实接口，新增、编辑、重置密码、删除和启停状态暂时禁用，避免页面显示成功但数据实际上没有落库。"
+      show-icon
+    />
 
     <el-card class="filter-card">
       <el-form :inline="true" :model="filterForm" class="filter-form">
@@ -63,15 +73,16 @@
               v-model="scope.row.status"
               :active-value="'active'"
               :inactive-value="'inactive'"
+              :disabled="!userManagementReady"
               @change="handleStatusChange(scope.row)"
             />
           </template>
         </el-table-column>
         <el-table-column label="操作" width="180">
           <template #default="scope">
-            <el-button type="primary" link @click="editUser(scope.row)">编辑</el-button>
-            <el-button type="primary" link @click="resetPassword(scope.row)">重置密码</el-button>
-            <el-button type="danger" link @click="deleteUser(scope.row)">删除</el-button>
+            <el-button type="primary" link :disabled="!userManagementReady" @click="editUser(scope.row)">编辑</el-button>
+            <el-button type="primary" link :disabled="!userManagementReady" @click="resetPassword(scope.row)">重置密码</el-button>
+            <el-button type="danger" link :disabled="!userManagementReady" @click="deleteUser(scope.row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -154,7 +165,7 @@
       <template #footer>
         <div class="dialog-footer">
           <el-button @click="userDialogVisible = false">取消</el-button>
-          <el-button type="primary" @click="saveUser">确定</el-button>
+          <el-button type="primary" :disabled="!userManagementReady" @click="saveUser">确定</el-button>
         </div>
       </template>
     </el-dialog>
@@ -174,7 +185,7 @@
       <template #footer>
         <div class="dialog-footer">
           <el-button @click="resetPasswordDialogVisible = false">取消</el-button>
-          <el-button type="primary" @click="confirmResetPassword">确定</el-button>
+          <el-button type="primary" :disabled="!userManagementReady" @click="confirmResetPassword">确定</el-button>
         </div>
       </template>
     </el-dialog>
@@ -186,6 +197,11 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '../../components/PageHeader.vue'
 import api from '../../api'
+
+const userManagementReady = false
+const showReadOnlyNotice = () => {
+  ElMessage.warning('用户管理真实后端尚未接通，当前页面仅保留只读展示。')
+}
 
 // 表格数据
 const users = ref([
@@ -379,12 +395,21 @@ const handleCurrentChange = (page) => {
 
 // 状态更改
 const handleStatusChange = (user) => {
+  if (!userManagementReady) {
+    user.status = user.status === 'active' ? 'inactive' : 'active'
+    showReadOnlyNotice()
+    return
+  }
   const status = user.status === 'active' ? '启用' : '禁用'
   ElMessage.success(`已${status}用户 ${user.name}`)
 }
 
 // 添加用户
 const showAddUserDialog = () => {
+  if (!userManagementReady) {
+    showReadOnlyNotice()
+    return
+  }
   dialogType.value = 'add'
   userForm.id = ''
   userForm.name = ''
@@ -401,6 +426,10 @@ const showAddUserDialog = () => {
 
 // 编辑用户
 const editUser = (user) => {
+  if (!userManagementReady) {
+    showReadOnlyNotice()
+    return
+  }
   dialogType.value = 'edit'
   currentUserId.value = user.id
   userForm.id = user.id
@@ -418,6 +447,10 @@ const editUser = (user) => {
 
 // 保存用户
 const saveUser = () => {
+  if (!userManagementReady) {
+    showReadOnlyNotice()
+    return
+  }
   userFormRef.value.validate((valid) => {
     if (!valid) return
 
@@ -456,6 +489,10 @@ const saveUser = () => {
 
 // 重置密码
 const resetPassword = (user) => {
+  if (!userManagementReady) {
+    showReadOnlyNotice()
+    return
+  }
   resetPasswordForm.userId = user.id
   resetPasswordForm.password = ''
   resetPasswordForm.confirmPassword = ''
@@ -464,6 +501,10 @@ const resetPassword = (user) => {
 
 // 确认重置密码
 const confirmResetPassword = () => {
+  if (!userManagementReady) {
+    showReadOnlyNotice()
+    return
+  }
   if (!resetPasswordForm.password) {
     ElMessage.warning('请输入新密码')
     return
@@ -480,6 +521,10 @@ const confirmResetPassword = () => {
 
 // 删除用户
 const deleteUser = (user) => {
+  if (!userManagementReady) {
+    showReadOnlyNotice()
+    return
+  }
   ElMessageBox.confirm(
     `确定要删除用户 ${user.name} 吗？此操作不可恢复。`,
     '警告',
@@ -511,6 +556,10 @@ onMounted(() => {
 
 .filter-card,
 .table-card {
+  margin-bottom: 20px;
+}
+
+.read-only-alert {
   margin-bottom: 20px;
 }
 
