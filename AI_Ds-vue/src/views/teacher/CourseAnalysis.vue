@@ -1,79 +1,79 @@
-<template>
+﻿<template>
   <div class="course-analysis">
     <page-header
       class="my-page-header"
-      title="课程分析"
-      description="基于真实数据的课程整体分析和AI教学建议"
+      title="璇剧▼鍒嗘瀽"
+      description="鍩轰簬鐪熷疄鏁版嵁鐨勮绋嬫暣浣撳垎鏋愬拰AI鏁欏寤鸿"
     />
 
     <div class="analysis-content" v-loading="pageLoading">
-      <!-- 总体概览 -->
+      <!-- 鎬讳綋姒傝 -->
       <el-card class="overview-card">
         <template #header>
-          <div class="card-header"><span>课程总体情况</span></div>
+          <div class="card-header"><span>璇剧▼鎬讳綋鎯呭喌</span></div>
         </template>
         <el-row :gutter="20">
           <el-col :span="6">
             <div class="statistic-item">
-              <div class="statistic-title">班级数量</div>
+              <div class="statistic-title">鐝骇鏁伴噺</div>
               <div class="statistic-value">{{ overview.classCount }}</div>
-              <div class="statistic-description">共计{{ overview.classCount }}个教学班</div>
+              <div class="statistic-description">鍏辫{{ overview.classCount }}涓暀瀛︾彮</div>
             </div>
           </el-col>
           <el-col :span="6">
             <div class="statistic-item">
-              <div class="statistic-title">学生总数</div>
+              <div class="statistic-title">瀛︾敓鎬绘暟</div>
               <div class="statistic-value">{{ overview.studentCount }}</div>
-              <div class="statistic-description">累计注册学生</div>
+              <div class="statistic-description">绱娉ㄥ唽瀛︾敓</div>
             </div>
           </el-col>
           <el-col :span="6">
             <div class="statistic-item">
-              <div class="statistic-title">实验平均完成率</div>
+              <div class="statistic-title">瀹為獙骞冲潎瀹屾垚鐜?/div>
               <div class="statistic-value">{{ overview.avgCompletionRate }}%</div>
-              <div class="statistic-description">基于全部实验统计</div>
+              <div class="statistic-description">鍩轰簬鍏ㄩ儴瀹為獙缁熻</div>
             </div>
           </el-col>
           <el-col :span="6">
             <div class="statistic-item">
-              <div class="statistic-title">课程平均分</div>
+              <div class="statistic-title">璇剧▼骞冲潎鍒?/div>
               <div class="statistic-value">{{ overview.avgScore }}</div>
-              <div class="statistic-description">已评分学生均分</div>
+              <div class="statistic-description">宸茶瘎鍒嗗鐢熷潎鍒?/div>
             </div>
           </el-col>
         </el-row>
       </el-card>
 
-      <!-- 班级对比 -->
+      <!-- 鐝骇瀵规瘮 -->
       <el-card class="chart-card">
         <template #header>
-          <div class="card-header"><span>实验完成率对比</span></div>
+          <div class="card-header"><span>瀹為獙瀹屾垚鐜囧姣?/span></div>
         </template>
         <div class="chart-container" ref="classComparisonChartRef"></div>
       </el-card>
 
-      <!-- 实验成绩分布 -->
+      <!-- 瀹為獙鎴愮哗鍒嗗竷 -->
       <el-card class="chart-card">
         <template #header>
-          <div class="card-header"><span>各实验成绩分布</span></div>
+          <div class="card-header"><span>鍚勫疄楠屾垚缁╁垎甯?/span></div>
         </template>
         <div class="chart-container" ref="experimentScoreChartRef"></div>
       </el-card>
 
-      <!-- AI教学建议 -->
+      <!-- AI鏁欏寤鸿 -->
       <el-card class="ai-recommendation-card">
         <template #header>
           <div class="card-header">
-            <span>AI教学建议</span>
+            <span>AI鏁欏寤鸿</span>
             <el-button type="primary" size="small" :loading="aiLoading" @click="generateAIRecommendation">
-              {{ aiLoading ? '生成中...' : '生成教学建议' }}
+              {{ aiLoading ? '鐢熸垚涓?..' : '鐢熸垚鏁欏寤鸿' }}
             </el-button>
           </div>
         </template>
         <div class="ai-content">
           <div v-if="aiContent" class="ai-text" v-html="renderedAiContent"></div>
           <div v-else-if="aiLoading"><el-skeleton :rows="8" animated /></div>
-          <el-empty v-else description="点击生成教学建议按钮获取AI分析结果" />
+          <el-empty v-else description="鐐瑰嚮鐢熸垚鏁欏寤鸿鎸夐挳鑾峰彇AI鍒嗘瀽缁撴灉" />
         </div>
       </el-card>
     </div>
@@ -83,6 +83,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, nextTick, onBeforeUnmount } from 'vue'
 import PageHeader from '../../components/PageHeader.vue'
+import { buildApiUrl } from '../../config/runtime'
 import * as echarts from 'echarts'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -101,8 +102,7 @@ const overview = reactive({
   avgScore: 0
 })
 
-// 存储加载的原始数据
-const classesData = ref([])
+// 瀛樺偍鍔犺浇鐨勫師濮嬫暟鎹?const classesData = ref([])
 const experimentsData = ref([])
 const submissionsData = ref([])
 
@@ -111,8 +111,7 @@ const renderedAiContent = computed(() => {
   return DOMPurify.sanitize(marked.parse(aiContent.value))
 })
 
-// 加载所有数据
-const loadAllData = async () => {
+// 鍔犺浇鎵€鏈夋暟鎹?const loadAllData = async () => {
   pageLoading.value = true
   try {
     const [classesRes, experimentsRes, submissionsRes] = await Promise.all([
@@ -121,28 +120,28 @@ const loadAllData = async () => {
       api.getAllStudentExperiments()
     ])
 
-    // 处理班级数据
+    // 澶勭悊鐝骇鏁版嵁
     classesData.value = Array.isArray(classesRes) ? classesRes
       : (classesRes?.data && Array.isArray(classesRes.data) ? classesRes.data : [])
 
-    // 处理实验数据
+    // 澶勭悊瀹為獙鏁版嵁
     let exps = []
     if (experimentsRes?.data && Array.isArray(experimentsRes.data)) exps = experimentsRes.data
     else if (Array.isArray(experimentsRes)) exps = experimentsRes
     experimentsData.value = exps
 
-    // 处理提交数据
+    // 澶勭悊鎻愪氦鏁版嵁
     submissionsData.value = Array.isArray(submissionsRes) ? submissionsRes : []
 
-    // 计算概览
+    // 璁＄畻姒傝
     calculateOverview()
 
-    // 渲染图表
+    // 娓叉煋鍥捐〃
     await nextTick()
     initComparisonChart()
     initExperimentScoreChart()
   } catch (e) {
-    console.error('加载课程分析数据失败:', e)
+    console.error('鍔犺浇璇剧▼鍒嗘瀽鏁版嵁澶辫触:', e)
   } finally {
     pageLoading.value = false
   }
@@ -151,18 +150,16 @@ const loadAllData = async () => {
 const calculateOverview = () => {
   overview.classCount = classesData.value.length
 
-  // 统计学生总数（去重）
+  // 缁熻瀛︾敓鎬绘暟锛堝幓閲嶏級
   const studentIds = new Set(submissionsData.value.map(s => s.studentId))
   overview.studentCount = studentIds.size || classesData.value.reduce((sum, c) => sum + (c.studentCount || 0), 0)
 
-  // 计算平均完成率
-  const totalStudents = overview.studentCount || 1
+  // 璁＄畻骞冲潎瀹屾垚鐜?  const totalStudents = overview.studentCount || 1
   const totalExperiments = experimentsData.value.length || 1
   const completedCount = submissionsData.value.filter(s => s.status === 'completed').length
   overview.avgCompletionRate = Math.round((completedCount / (totalStudents * totalExperiments)) * 100)
 
-  // 计算平均分
-  const scored = submissionsData.value.filter(s => s.score > 0)
+  // 璁＄畻骞冲潎鍒?  const scored = submissionsData.value.filter(s => s.score > 0)
   overview.avgScore = scored.length > 0
     ? Math.round(scored.reduce((sum, s) => sum + s.score, 0) / scored.length * 10) / 10
     : 0
@@ -190,16 +187,16 @@ const initComparisonChart = () => {
 
   chart.setOption({
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    legend: { data: ['完成率(%)', '平均分'] },
+    legend: { data: ['瀹屾垚鐜?%)', '骞冲潎鍒?] },
     grid: { left: '3%', right: '4%', bottom: '15%', containLabel: true },
     xAxis: { type: 'category', data: expNames, axisLabel: { interval: 0, rotate: 30, fontSize: 11 } },
     yAxis: [
-      { type: 'value', name: '百分比', min: 0, max: 100, axisLabel: { formatter: '{value}%' } },
-      { type: 'value', name: '分数', min: 0, max: 100 }
+      { type: 'value', name: '鐧惧垎姣?, min: 0, max: 100, axisLabel: { formatter: '{value}%' } },
+      { type: 'value', name: '鍒嗘暟', min: 0, max: 100 }
     ],
     series: [
-      { name: '完成率(%)', type: 'bar', data: completionRates },
-      { name: '平均分', type: 'line', yAxisIndex: 1, data: avgScores, smooth: true }
+      { name: '瀹屾垚鐜?%)', type: 'bar', data: completionRates },
+      { name: '骞冲潎鍒?, type: 'line', yAxisIndex: 1, data: avgScores, smooth: true }
     ]
   })
 }
@@ -224,7 +221,7 @@ const initExperimentScoreChart = () => {
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
     grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
     xAxis: { type: 'category', data: Object.keys(ranges) },
-    yAxis: { type: 'value', name: '学生人次' },
+    yAxis: { type: 'value', name: '瀛︾敓浜烘' },
     series: [{
       type: 'bar',
       data: Object.entries(ranges).map(([, v], i) => ({
@@ -241,13 +238,13 @@ const handleChartResize = () => {
   scoreChartInstance?.resize()
 }
 
-// AI教学建议 - 流式输出
+// AI鏁欏寤鸿 - 娴佸紡杈撳嚭
 const generateAIRecommendation = async () => {
   if (aiLoading.value) return
   aiLoading.value = true
   aiContent.value = ''
 
-  // 构建课程数据摘要
+  // 鏋勫缓璇剧▼鏁版嵁鎽樿
   const summary = {
     classCount: overview.classCount,
     studentCount: overview.studentCount,
@@ -260,33 +257,31 @@ const generateAIRecommendation = async () => {
     }))
   }
 
-  const prompt = `你是一位资深的数据结构课程教学顾问。请根据以下真实课程数据，给出详细的教学分析和改进建议。
+  const prompt = `浣犳槸涓€浣嶈祫娣辩殑鏁版嵁缁撴瀯璇剧▼鏁欏椤鹃棶銆傝鏍规嵁浠ヤ笅鐪熷疄璇剧▼鏁版嵁锛岀粰鍑鸿缁嗙殑鏁欏鍒嗘瀽鍜屾敼杩涘缓璁€?
+璇剧▼鏁版嵁姒傝锛?- 鐝骇鏁伴噺锛?{summary.classCount}
+- 瀛︾敓鎬绘暟锛?{summary.studentCount}
+- 骞冲潎瀹屾垚鐜囷細${summary.avgCompletionRate}%
+- 璇剧▼骞冲潎鍒嗭細${summary.avgScore}
 
-课程数据概览：
-- 班级数量：${summary.classCount}
-- 学生总数：${summary.studentCount}
-- 平均完成率：${summary.avgCompletionRate}%
-- 课程平均分：${summary.avgScore}
+鍚勫疄楠屾儏鍐碉細
+${summary.experiments.map(e => `- ${e.name}锛氭彁浜?{e.submissionCount}浜猴紝鍧囧垎${e.averageScore}`).join('\n')}
 
-各实验情况：
-${summary.experiments.map(e => `- ${e.name}：提交${e.submissionCount}人，均分${e.averageScore}`).join('\n')}
-
-请从以下几个方面给出分析和建议：
-1. 课程总体评价
-2. 需要重点关注的薄弱环节
-3. 教学方法调整建议
-4. 实验设计优化建议
-5. 针对不同层次学生的差异化教学策略`
+璇蜂粠浠ヤ笅鍑犱釜鏂归潰缁欏嚭鍒嗘瀽鍜屽缓璁細
+1. 璇剧▼鎬讳綋璇勪环
+2. 闇€瑕侀噸鐐瑰叧娉ㄧ殑钖勫急鐜妭
+3. 鏁欏鏂规硶璋冩暣寤鸿
+4. 瀹為獙璁捐浼樺寲寤鸿
+5. 閽堝涓嶅悓灞傛瀛︾敓鐨勫樊寮傚寲鏁欏绛栫暐`
 
   try {
-    const response = await fetch('http://localhost:8081/api/chat', {
+    const response = await fetch(buildApiUrl('/api/chat'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify({ message: prompt, stream: true })
     })
 
-    if (!response.ok) throw new Error('请求失败')
+    if (!response.ok) throw new Error('璇锋眰澶辫触')
 
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
@@ -296,7 +291,7 @@ ${summary.experiments.map(e => `- ${e.name}：提交${e.submissionCount}人，�
       const { done, value } = await reader.read()
       if (done) { reading = false; break }
       const chunk = decoder.decode(value, { stream: true })
-      // 处理SSE格式
+      // 澶勭悊SSE鏍煎紡
       const lines = chunk.split('\n')
       for (const line of lines) {
         if (line.startsWith('data:')) {
@@ -309,8 +304,8 @@ ${summary.experiments.map(e => `- ${e.name}：提交${e.submissionCount}人，�
       }
     }
   } catch (e) {
-    console.error('生成AI建议失败:', e)
-    aiContent.value = '生成AI建议失败，请检查后端服务是否正常运行。'
+    console.error('鐢熸垚AI寤鸿澶辫触:', e)
+    aiContent.value = '鐢熸垚AI寤鸿澶辫触锛岃妫€鏌ュ悗绔湇鍔℃槸鍚︽甯歌繍琛屻€?
   } finally {
     aiLoading.value = false
   }
@@ -347,3 +342,5 @@ onBeforeUnmount(() => {
   box-shadow: 0 1px 3px rgba(0,0,0,0.04);
 }
 </style>
+
+

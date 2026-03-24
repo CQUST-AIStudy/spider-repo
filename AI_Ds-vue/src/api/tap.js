@@ -1,11 +1,18 @@
-/**
- * tap-backend API 客户端 (端口 8080)
- * 独立于 AI_Ds 后端 (端口 8081)，使用 JWT 认证
+﻿/**
+ * TAP 妯″潡 API 瀹㈡埛绔? * 褰撳墠榛樿鎺ュ叆宸茬粡鍚堝苟鍒?AI_Ds 鐨勫悗绔疄渚?(绔彛 8081)
  */
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
+import {
+  clearTapAuth,
+  getTapToken,
+  getTapUser as readTapUser,
+  setTapToken,
+  setTapUser,
+} from '../constants/auth'
+import { API_BASE_URL } from '../config/runtime'
 
-const TAP_BASE = 'http://localhost:8081'
+const TAP_BASE = API_BASE_URL
 
 const tapClient = axios.create({
   baseURL: TAP_BASE,
@@ -14,25 +21,24 @@ const tapClient = axios.create({
   headers: { 'Content-Type': 'application/json' }
 })
 
-// 请求拦截器 - 添加 JWT token
+// 璇锋眰鎷︽埅鍣?- 娣诲姞 JWT token
 tapClient.interceptors.request.use(config => {
-  const token = localStorage.getItem('tap_token')
+  const token = getTapToken()
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
   return config
 })
 
-// 响应拦截器
+// 鍝嶅簲鎷︽埅鍣?
 tapClient.interceptors.response.use(
   response => response.data,
   error => {
     if (error.response?.status === 401) {
-      localStorage.removeItem('tap_token')
-      localStorage.removeItem('tap_user')
-      ElMessage.warning('教辅平台登录已过期，请重新登录')
+      clearTapAuth()
+      ElMessage.warning('鏁欒緟骞冲彴鐧诲綍宸茶繃鏈燂紝璇烽噸鏂扮櫥褰?)
     }
-    const msg = error.response?.data?.message || error.message || '请求失败'
+    const msg = error.response?.data?.message || error.message || '璇锋眰澶辫触'
     return Promise.reject(new Error(msg))
   }
 )
@@ -42,29 +48,26 @@ export async function tapLogin(username, password) {
   const res = await tapClient.post('/api/auth/login', { username, password })
   const data = res?.data ?? res
   if (data?.accessToken) {
-    localStorage.setItem('tap_token', data.accessToken)
-    localStorage.setItem('tap_user', JSON.stringify({
+    setTapToken(data.accessToken)
+    setTapUser({
       userId: data.userId,
       role: data.role,
       username
-    }))
+    })
   }
   return data
 }
 
 export function tapLogout() {
-  localStorage.removeItem('tap_token')
-  localStorage.removeItem('tap_user')
+  clearTapAuth()
 }
 
 export function isTapLoggedIn() {
-  return !!localStorage.getItem('tap_token')
+  return !!getTapToken()
 }
 
 export function getTapUser() {
-  try {
-    return JSON.parse(localStorage.getItem('tap_user') || 'null')
-  } catch { return null }
+  return readTapUser()
 }
 
 function extractProblemMessage(payload) {
@@ -93,7 +96,7 @@ async function parseFetchPayload(res) {
 
 function resolveFetchErrorMessage(res, payload, fallbackMessage) {
   if (res.status === 413) {
-    return extractProblemMessage(payload) || '上传文件过大，请压缩后重试或分批上传'
+    return extractProblemMessage(payload) || '涓婁紶鏂囦欢杩囧ぇ锛岃鍘嬬缉鍚庨噸璇曟垨鍒嗘壒涓婁紶'
   }
   return extractProblemMessage(payload) || fallbackMessage
 }
@@ -122,14 +125,14 @@ export async function uploadFiles(folderId, files, relativePaths = null) {
     paths.push(p)
   })
   fd.append('relativePaths', JSON.stringify(paths))
-  const token = localStorage.getItem('tap_token')
+  const token = getTapToken()
   const res = await fetch(`${TAP_BASE}/api/uploads/folders/${folderId}/files`, {
     method: 'POST',
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: fd
   })
   const payload = await parseFetchPayload(res)
-  if (!res.ok) throw new Error(resolveFetchErrorMessage(res, payload, '文件上传失败'))
+  if (!res.ok) throw new Error(resolveFetchErrorMessage(res, payload, '鏂囦欢涓婁紶澶辫触'))
   return payload
 }
 
@@ -137,14 +140,14 @@ export async function uploadZipFolder(folderName, file) {
   const fd = new FormData()
   if (folderName) fd.append('folderName', folderName)
   fd.append('file', file)
-  const token = localStorage.getItem('tap_token')
+  const token = getTapToken()
   const res = await fetch(`${TAP_BASE}/api/uploads/folders/zip`, {
     method: 'POST',
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: fd
   })
   const payload = await parseFetchPayload(res)
-  if (!res.ok) throw new Error(resolveFetchErrorMessage(res, payload, 'ZIP 上传失败'))
+  if (!res.ok) throw new Error(resolveFetchErrorMessage(res, payload, 'ZIP 涓婁紶澶辫触'))
   return payload
 }
 
@@ -330,10 +333,10 @@ export function submitRagFeedback(qaLogId, feedback) {
 }
 
 // ========== RAG Chat (SSE streaming) ==========
-export const TAP_BASE_URL = tapClient.defaults.baseURL || 'http://localhost:8081'
+export const TAP_BASE_URL = tapClient.defaults.baseURL || API_BASE_URL
 
 export function ragChatStream(courseSpaceId, query, mode = 'strict') {
-  const token = localStorage.getItem('tap_token')
+  const token = getTapToken()
   return fetch(`${TAP_BASE_URL}/api/rag/chat`, {
     method: 'POST',
     headers: {
@@ -376,7 +379,7 @@ export function getResourceGaps(courseSpaceId, coverageThreshold = 0.4, minFrequ
   })
 }
 
-// ========== 班级管理 (Teaching Classes) ==========
+// ========== 鐝骇绠＄悊 (Teaching Classes) ==========
 export function getTeachingClasses() {
   return tapClient.get('/api/classes')
 }
@@ -409,7 +412,7 @@ export function joinClass(data) {
   return tapClient.post('/api/classes/join', data)
 }
 
-// ========== PTA 数据同步 ==========
+// ========== PTA 鏁版嵁鍚屾 ==========
 export function updatePtaSyncConfig(classId, data) {
   return tapClient.put(`/api/classes/${classId}/pta-sync`, data)
 }
@@ -443,7 +446,7 @@ export function getExperimentComparison(classPrefix) {
   return tapClient.get('/api/analytics/comparison', { params })
 }
 
-// ========== Student Analytics (班级对比) ==========
+// ========== Student Analytics (鐝骇瀵规瘮) ==========
 export function getStudentAnalyticsOverview(studentId) {
   return tapClient.get(`/api/analytics/student/${studentId}/overview`)
 }
@@ -452,7 +455,7 @@ export function getStudentExperimentDetail(studentId, experimentId) {
   return tapClient.get(`/api/analytics/student/${studentId}/experiments/${experimentId}`)
 }
 
-// ========== PTA Cookie 管理 ==========
+// ========== PTA Cookie 绠＄悊 ==========
 export function getPtaCookieStatus() {
   return tapClient.get('/api/pta-cookie/status')
 }
@@ -460,3 +463,5 @@ export function getPtaCookieStatus() {
 export function submitPtaCookie(cookieJson) {
   return tapClient.post('/api/pta-cookie/update', { cookies: cookieJson })
 }
+
+

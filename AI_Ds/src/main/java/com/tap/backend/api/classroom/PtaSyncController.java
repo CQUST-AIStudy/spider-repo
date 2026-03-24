@@ -4,8 +4,10 @@ import com.tap.backend.domain.user.UserEntity;
 import com.tap.backend.repo.UserRepository;
 import com.tap.backend.service.PtaSyncService;
 import com.tap.common.api.ApiResponse;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
@@ -25,14 +27,10 @@ public class PtaSyncController {
     private Long resolveUserId(UserDetails principal) {
         if (principal != null) {
             return userRepo.findByUsername(principal.getUsername())
-                    .orElseThrow(() -> new NoSuchElementException("用户不存在"))
+                    .orElseThrow(() -> new NoSuchElementException("user not found"))
                     .getId();
         }
-        return userRepo.findAll().stream()
-                .filter(u -> u.getRole() != null && u.getRole().name().equals("TEACHER"))
-                .findFirst()
-                .map(UserEntity::getId)
-                .orElse(1L);
+        throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "authentication required");
     }
 
     record SyncConfigRequest(String ptaKeyword, Boolean syncEnabled) {}
@@ -47,16 +45,20 @@ public class PtaSyncController {
     }
 
     @PostMapping("/trigger")
-    public ApiResponse<Map<String, Object>> trigger(@PathVariable Long classId) {
+    public ApiResponse<Map<String, Object>> trigger(@AuthenticationPrincipal UserDetails principal,
+                                                    @PathVariable Long classId) {
+        resolveUserId(principal);
         return ApiResponse.of(syncService.triggerSync(classId));
     }
 
     @GetMapping("/status")
-    public ApiResponse<Map<String, Object>> status(@PathVariable Long classId) {
+    public ApiResponse<Map<String, Object>> status(@AuthenticationPrincipal UserDetails principal,
+                                                   @PathVariable Long classId) {
+        resolveUserId(principal);
         return ApiResponse.of(syncService.getSyncStatus(classId));
     }
 
-    /** 爬虫服务回调：任务完成后更新同步状态 */
+    /** 鐖櫕鏈嶅姟鍥炶皟锛氫换鍔″畬鎴愬悗鏇存柊鍚屾鐘舵€?*/
     record CallbackRequest(String status) {}
 
     @PutMapping("/callback")

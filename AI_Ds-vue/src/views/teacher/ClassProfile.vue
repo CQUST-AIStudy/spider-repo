@@ -1,53 +1,53 @@
-<template>
+﻿<template>
   <div class="class-profile">
     <div v-if="loading"><el-skeleton :rows="10" animated /></div>
     <el-alert v-else-if="errorMsg" :title="errorMsg" type="warning" show-icon :closable="false" />
     <template v-else>
-      <!-- 概览 -->
+      <!-- 姒傝 -->
       <el-row :gutter="16">
         <el-col :span="6">
           <el-card shadow="hover" class="stat-card">
             <div class="stat-value">{{ data.totalStudents }}</div>
-            <div class="stat-label">学生总数</div>
+            <div class="stat-label">瀛︾敓鎬绘暟</div>
           </el-card>
         </el-col>
         <el-col :span="6">
           <el-card shadow="hover" class="stat-card">
             <div class="stat-value good">{{ tierCount('A') }}</div>
-            <div class="stat-label">优秀 (≥70)</div>
+            <div class="stat-label">浼樼 (鈮?0)</div>
           </el-card>
         </el-col>
         <el-col :span="6">
           <el-card shadow="hover" class="stat-card">
             <div class="stat-value warn">{{ tierCount('B') }}</div>
-            <div class="stat-label">中等 (40-69)</div>
+            <div class="stat-label">涓瓑 (40-69)</div>
           </el-card>
         </el-col>
         <el-col :span="6">
           <el-card shadow="hover" class="stat-card">
             <div class="stat-value danger">{{ tierCount('C') }}</div>
-            <div class="stat-label">需关注 (&lt;40)</div>
+            <div class="stat-label">闇€鍏虫敞 (&lt;40)</div>
           </el-card>
         </el-col>
       </el-row>
 
       <el-row :gutter="16" style="margin-top:16px">
-        <!-- 维度柱状图 -->
+        <!-- 缁村害鏌辩姸鍥?-->
         <el-col :span="12">
           <el-card shadow="hover">
-            <template #header><span>班级各维度平均分</span></template>
+            <template #header><span>鐝骇鍚勭淮搴﹀钩鍧囧垎</span></template>
             <div ref="barChartRef" style="height:350px"></div>
           </el-card>
         </el-col>
-        <!-- 薄弱排行 -->
+        <!-- 钖勫急鎺掕 -->
         <el-col :span="12">
           <el-card shadow="hover">
-            <template #header><span>薄弱维度排行</span></template>
+            <template #header><span>钖勫急缁村害鎺掕</span></template>
             <el-table :data="data.weakRanking" stripe size="small">
-              <el-table-column prop="dimension" label="维度" width="100" />
-              <el-table-column prop="avgScore" label="班级均分" width="90" />
-              <el-table-column prop="weakCount" label="低分人数" width="90" />
-              <el-table-column label="低分占比">
+              <el-table-column prop="dimension" label="缁村害" width="100" />
+              <el-table-column prop="avgScore" label="鐝骇鍧囧垎" width="90" />
+              <el-table-column prop="weakCount" label="浣庡垎浜烘暟" width="90" />
+              <el-table-column label="浣庡垎鍗犳瘮">
                 <template #default="{ row }">
                   <el-progress :percentage="row.weakRatio" :color="row.weakRatio > 30 ? '#F56C6C' : '#E6A23C'" :stroke-width="10" />
                 </template>
@@ -57,25 +57,25 @@
         </el-col>
       </el-row>
 
-      <!-- ABC分层 -->
+      <!-- ABC鍒嗗眰 -->
       <el-card shadow="hover" style="margin-top:16px">
-        <template #header><span>学生分层 (ABC)</span></template>
+        <template #header><span>瀛︾敓鍒嗗眰 (ABC)</span></template>
         <el-tabs>
           <el-tab-pane v-for="(tier, key) in data.tiers" :key="key"
-                       :label="key + ' - ' + tier.label + ' (' + tier.count + '人)'">
+                       :label="key + ' - ' + tier.label + ' (' + tier.count + '浜?'">
             <el-table :data="tier.students" stripe size="small" max-height="400">
-              <el-table-column prop="studentId" label="学号" width="120" />
-              <el-table-column prop="studentName" label="姓名" width="100" />
-              <el-table-column label="综合分">
+              <el-table-column prop="studentId" label="瀛﹀彿" width="120" />
+              <el-table-column prop="studentName" label="濮撳悕" width="100" />
+              <el-table-column label="缁煎悎鍒?>
                 <template #default="{ row }">
                   <el-progress :percentage="Math.round(row.overallScore)"
                                :color="row.overallScore >= 70 ? '#67C23A' : row.overallScore >= 40 ? '#E6A23C' : '#F56C6C'"
                                :stroke-width="10" />
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="100">
+              <el-table-column label="鎿嶄綔" width="100">
                 <template #default="{ row }">
-                  <el-button type="primary" link size="small" @click="viewStudent(row.studentId)">查看画像</el-button>
+                  <el-button type="primary" link size="small" @click="viewStudent(row.studentId)">鏌ョ湅鐢诲儚</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -84,8 +84,8 @@
       </el-card>
     </template>
 
-    <!-- 学生画像弹窗 -->
-    <el-dialog v-model="dialogVisible" :title="'学生画像 - ' + dialogStudentName" width="80%" top="5vh" destroy-on-close>
+    <!-- 瀛︾敓鐢诲儚寮圭獥 -->
+    <el-dialog v-model="dialogVisible" :title="'瀛︾敓鐢诲儚 - ' + dialogStudentName" width="80%" top="5vh" destroy-on-close>
       <div v-if="dialogLoading"><el-skeleton :rows="6" animated /></div>
       <template v-else>
         <el-row :gutter="16">
@@ -111,7 +111,7 @@ import * as echarts from 'echarts'
 import axios from 'axios'
 import { useUserStore } from '../../store'
 
-const API_BASE = 'http://localhost:8081'
+const API_BASE = API_BASE_URL
 const userStore = useUserStore()
 const loading = ref(true)
 const errorMsg = ref('')
@@ -120,7 +120,7 @@ const barChartRef = ref(null)
 let barChartInst = null
 const selectedClassName = computed(() => userStore.selectedClass?.name?.trim() || '')
 
-// 弹窗
+// 寮圭獥
 const dialogVisible = ref(false)
 const dialogLoading = ref(false)
 const dialogStudentName = ref('')
@@ -141,16 +141,16 @@ async function fetchData() {
     const d = res.data || res
     if (d.error) { errorMsg.value = d.error; return }
     data.value = d
-    console.log('[ClassProfile] 数据加载成功:', {
+    console.log('[ClassProfile] 鏁版嵁鍔犺浇鎴愬姛:', {
       totalStudents: d.totalStudents,
       dimensions: d.dimensions,
       dimensionAvg: d.dimensionAvg
     })
     await nextTick()
-    // 延迟一帧确保 DOM 已渲染
+    // 寤惰繜涓€甯х‘淇?DOM 宸叉覆鏌?
     setTimeout(() => renderBar(), 100)
   } catch (e) {
-    errorMsg.value = '加载失败: ' + (e.message || e)
+    errorMsg.value = '鍔犺浇澶辫触: ' + (e.message || e)
   } finally {
     loading.value = false
   }
@@ -158,13 +158,13 @@ async function fetchData() {
 
 function renderBar() {
   if (!barChartRef.value) {
-    console.warn('[ClassProfile] barChartRef 未就绪')
+    console.warn('[ClassProfile] barChartRef 鏈氨缁?)
     return
   }
   const dims = data.value.dimensions
   const avg = data.value.dimensionAvg
   if (!dims || !avg) {
-    console.warn('[ClassProfile] 无维度数据', { dims, avg })
+    console.warn('[ClassProfile] 鏃犵淮搴︽暟鎹?, { dims, avg })
     return
   }
 
@@ -173,12 +173,12 @@ function renderBar() {
   barChartInst = chart
 
   const values = dims.map(d => avg[d] ?? 0)
-  console.log('[ClassProfile] 渲染柱状图:', { dims, values })
+  console.log('[ClassProfile] 娓叉煋鏌辩姸鍥?', { dims, values })
 
   chart.setOption({
     tooltip: { trigger: 'axis' },
     xAxis: { type: 'category', data: dims, axisLabel: { fontSize: 12 } },
-    yAxis: { type: 'value', min: 0, max: 100, name: '均分' },
+    yAxis: { type: 'value', min: 0, max: 100, name: '鍧囧垎' },
     series: [{
       type: 'bar',
       data: values.map(v => ({
@@ -273,3 +273,5 @@ onBeforeUnmount(() => {
   box-shadow: 0 1px 3px rgba(0,0,0,0.04);
 }
 </style>
+
+

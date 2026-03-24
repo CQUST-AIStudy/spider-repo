@@ -67,19 +67,19 @@
 import { ref, reactive, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
+import { getUserInfo } from '../../constants/auth'
 import PageHeader from '../../components/PageHeader.vue'
+import { API_BASE_URL_WITH_SLASH } from '../../config/runtime'
 
 const apiClient = axios.create({
-  baseURL: 'http://localhost:8081/',
+  baseURL: API_BASE_URL_WITH_SLASH,
   timeout: 10000,
   withCredentials: true,
   headers: { 'Content-Type': 'application/json' }
 })
 
 const userInfo = computed(() => {
-  try {
-    return JSON.parse(localStorage.getItem('userInfo') || '{}')
-  } catch { return {} }
+  return getUserInfo() || {}
 })
 
 const displayName = computed(() => userInfo.value.username || '教师用户')

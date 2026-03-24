@@ -1,9 +1,9 @@
-<template>
+﻿<template>
   <div class="profile-container">
     <page-header
         class="my-page-header"
-      title="个人信息"
-      description="查看和管理您的个人资料"
+      title="涓汉淇℃伅"
+      description="鏌ョ湅鍜岀鐞嗘偍鐨勪釜浜鸿祫鏂?
     />
 
     <loading-state :loading="loading">
@@ -27,22 +27,22 @@
 
               <div class="user-info">
                 <h2 class="user-name">{{ userInfo.username}}</h2>
-                <div class="user-id">学号：{{ userInfo.usernum }}</div>
-                <div class="user-class">班级：{{ userInfo.class }}</div>
-                <div class="user-grade">年级：2023级</div>
-                <div class="user-email">邮箱：{{ userInfo.email }}</div>
+                <div class="user-id">瀛﹀彿锛歿{ userInfo.usernum }}</div>
+                <div class="user-class">鐝骇锛歿{ userInfo.class }}</div>
+                <div class="user-grade">骞寸骇锛?023绾?/div>
+                <div class="user-email">閭锛歿{ userInfo.email }}</div>
               </div>
 
               <div class="user-actions">
-                <el-button type="primary" @click="openEditProfileDialog">修改资料</el-button>
-                <el-button @click="openChangePasswordDialog">修改密码</el-button>
+                <el-button type="primary" @click="openEditProfileDialog">淇敼璧勬枡</el-button>
+                <el-button @click="openChangePasswordDialog">淇敼瀵嗙爜</el-button>
               </div>
             </el-card>
 
             <el-card class="account-settings">
               <template #header>
                 <div class="card-header">
-                  <span>账号设置</span>
+                  <span>璐﹀彿璁剧疆</span>
                 </div>
               </template>
               <div class="settings-list">
@@ -53,8 +53,8 @@
                         <el-icon><Bell /></el-icon>
                       </div>
                       <div class="setting-info">
-                        <div class="setting-title">系统通知</div>
-                        <div class="setting-desc">接收重要的实验和课程通知</div>
+                        <div class="setting-title">绯荤粺閫氱煡</div>
+                        <div class="setting-desc">鎺ユ敹閲嶈鐨勫疄楠屽拰璇剧▼閫氱煡</div>
                       </div>
                     </div>
                     <div class="setting-action">
@@ -68,8 +68,8 @@
                         <el-icon><AlarmClock /></el-icon>
                       </div>
                       <div class="setting-info">
-                        <div class="setting-title">截止日期提醒</div>
-                        <div class="setting-desc">实验截止前提前通知</div>
+                        <div class="setting-title">鎴鏃ユ湡鎻愰啋</div>
+                        <div class="setting-desc">瀹為獙鎴鍓嶆彁鍓嶉€氱煡</div>
                       </div>
                     </div>
                     <div class="setting-action">
@@ -83,8 +83,8 @@
                         <el-icon><Lock /></el-icon>
                       </div>
                       <div class="setting-info">
-                        <div class="setting-title">双重认证</div>
-                        <div class="setting-desc">增强账号安全性</div>
+                        <div class="setting-title">鍙岄噸璁よ瘉</div>
+                        <div class="setting-desc">澧炲己璐﹀彿瀹夊叏鎬?/div>
                       </div>
                     </div>
                     <div class="setting-action">
@@ -98,8 +98,8 @@
                         <el-icon><ChatLineRound /></el-icon>
                       </div>
                       <div class="setting-info">
-                        <div class="setting-title">评测反馈通知</div>
-                        <div class="setting-desc">接收AI评测的结果和反馈</div>
+                        <div class="setting-title">璇勬祴鍙嶉閫氱煡</div>
+                        <div class="setting-desc">鎺ユ敹AI璇勬祴鐨勭粨鏋滃拰鍙嶉</div>
                       </div>
                     </div>
                     <div class="setting-action">
@@ -115,7 +115,7 @@
             <el-card class="activity-card">
               <template #header>
                 <div class="card-header">
-                  <span>最近活动</span>
+                  <span>鏈€杩戞椿鍔?/span>
                 </div>
               </template>
 
@@ -139,29 +139,29 @@
                 <el-card class="stats-card">
                   <template #header>
                     <div class="card-header">
-                      <span>学习统计</span>
+                      <span>瀛︿範缁熻</span>
                     </div>
                   </template>
 
                   <div class="stats-content">
                     <div class="stats-item">
-                      <div class="stats-label">总实验数</div>
+                      <div class="stats-label">鎬诲疄楠屾暟</div>
                       <div class="stats-value">5</div>
                     </div>
 
                     <div class="stats-item">
-                      <div class="stats-label">已完成</div>
+                      <div class="stats-label">宸插畬鎴?/div>
                       <div class="stats-value">2</div>
                     </div>
 
                     <div class="stats-item">
-                      <div class="stats-label">平均成绩</div>
+                      <div class="stats-label">骞冲潎鎴愮哗</div>
                       <div class="stats-value">90</div>
                     </div>
 
                     <div class="stats-item">
-                      <div class="stats-label">完成实验总用时</div>
-                      <div class="stats-value">16小时</div>
+                      <div class="stats-label">瀹屾垚瀹為獙鎬荤敤鏃?/div>
+                      <div class="stats-value">16灏忔椂</div>
                     </div>
                   </div>
                 </el-card>
@@ -171,7 +171,7 @@
                 <el-card class="badges-card">
                   <template #header>
                     <div class="card-header">
-                      <span>获得的徽章</span>
+                      <span>鑾峰緱鐨勫窘绔?/span>
                     </div>
                   </template>
 
@@ -198,10 +198,10 @@
       </div>
     </loading-state>
 
-    <!-- 修改资料对话框 -->
+    <!-- 淇敼璧勬枡瀵硅瘽妗?-->
     <el-dialog
       v-model="editProfileDialog"
-      title="修改个人资料"
+      title="淇敼涓汉璧勬枡"
       width="500px"
     >
       <el-form
@@ -210,28 +210,28 @@
         ref="profileFormRef"
         label-width="100px"
       >
-        <el-form-item label="姓名" prop="username">
-          <el-input v-model="profileForm.username" placeholder="请输入姓名" />
+        <el-form-item label="濮撳悕" prop="username">
+          <el-input v-model="profileForm.username" placeholder="璇疯緭鍏ュ鍚? />
         </el-form-item>
-        <el-form-item label="邮箱" prop="email">
-          <el-input v-model="profileForm.email" placeholder="请输入邮箱" />
+        <el-form-item label="閭" prop="email">
+          <el-input v-model="profileForm.email" placeholder="璇疯緭鍏ラ偖绠? />
         </el-form-item>
-        <el-form-item label="电话" prop="phone">
-          <el-input v-model="profileForm.phone" placeholder="请输入电话号码" />
+        <el-form-item label="鐢佃瘽" prop="phone">
+          <el-input v-model="profileForm.phone" placeholder="璇疯緭鍏ョ數璇濆彿鐮? />
         </el-form-item>
       </el-form>
       <template #footer>
         <span class="dialog-footer">
-          <el-button @click="editProfileDialog = false">取消</el-button>
-          <el-button type="primary" @click="submitProfileForm" :loading="submitting">确认修改</el-button>
+          <el-button @click="editProfileDialog = false">鍙栨秷</el-button>
+          <el-button type="primary" @click="submitProfileForm" :loading="submitting">纭淇敼</el-button>
         </span>
       </template>
     </el-dialog>
 
-    <!-- 修改密码对话框 -->
+    <!-- 淇敼瀵嗙爜瀵硅瘽妗?-->
     <el-dialog
       v-model="changePasswordDialog"
-      title="修改密码"
+      title="淇敼瀵嗙爜"
       width="500px"
     >
       <el-form
@@ -240,20 +240,20 @@
         ref="passwordFormRef"
         label-width="100px"
       >
-        <el-form-item label="原密码" prop="oldPassword">
-          <el-input v-model="passwordForm.oldPassword" type="password" placeholder="请输入原密码" show-password />
+        <el-form-item label="鍘熷瘑鐮? prop="oldPassword">
+          <el-input v-model="passwordForm.oldPassword" type="password" placeholder="璇疯緭鍏ュ師瀵嗙爜" show-password />
         </el-form-item>
-        <el-form-item label="新密码" prop="newPassword">
-          <el-input v-model="passwordForm.newPassword" type="password" placeholder="请输入新密码" show-password />
+        <el-form-item label="鏂板瘑鐮? prop="newPassword">
+          <el-input v-model="passwordForm.newPassword" type="password" placeholder="璇疯緭鍏ユ柊瀵嗙爜" show-password />
         </el-form-item>
-        <el-form-item label="确认新密码" prop="confirmPassword">
-          <el-input v-model="passwordForm.confirmPassword" type="password" placeholder="请再次输入新密码" show-password />
+        <el-form-item label="纭鏂板瘑鐮? prop="confirmPassword">
+          <el-input v-model="passwordForm.confirmPassword" type="password" placeholder="璇峰啀娆¤緭鍏ユ柊瀵嗙爜" show-password />
         </el-form-item>
       </el-form>
       <template #footer>
         <span class="dialog-footer">
-          <el-button @click="changePasswordDialog = false">取消</el-button>
-          <el-button type="primary" @click="submitPasswordForm" :loading="submitting">确认修改</el-button>
+          <el-button @click="changePasswordDialog = false">鍙栨秷</el-button>
+          <el-button type="primary" @click="submitPasswordForm" :loading="submitting">纭淇敼</el-button>
         </span>
       </template>
     </el-dialog>
@@ -263,12 +263,14 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { useUserStore } from '../../store'
-import { useRouter } from 'vue-router' // 导入 router
+import { useRouter } from 'vue-router' // 瀵煎叆 router
 import PageHeader from '../../components/PageHeader.vue'
 import LoadingState from '../../components/LoadingState.vue'
 import api from '../../api'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
+import { clearAuthStorage } from '../../constants/auth'
+import { API_BASE_URL, buildApiUrl } from '../../config/runtime'
 import {
   EditPen,
   Bell,
@@ -283,9 +285,8 @@ import {
   DataLine
 } from '@element-plus/icons-vue'
 
-// 创建API客户端
-const apiClient = axios.create({
-  baseURL: 'http://localhost:8081',
+// 鍒涘缓API瀹㈡埛绔?const apiClient = axios.create({
+  baseURL: API_BASE_URL,
   timeout: 10000,
   withCredentials: true,
   headers: {
@@ -294,13 +295,12 @@ const apiClient = axios.create({
 });
 
 const userStore = useUserStore()
-const router = useRouter() // 初始化路由对象
-const loading = ref(true)
+const router = useRouter() // 鍒濆鍖栬矾鐢卞璞?const loading = ref(true)
 
-// 用户信息
+// 鐢ㄦ埛淇℃伅
 const userInfo = reactive({...userStore.userInfo})
 
-// 账号设置
+// 璐﹀彿璁剧疆
 const settings = reactive({
   notifications: true,
   reminders: true,
@@ -308,39 +308,38 @@ const settings = reactive({
   feedback: true
 })
 
-// 最近活动
-const activities = [
+// 鏈€杩戞椿鍔?const activities = [
   {
-    title: '完成实验【栈与队列的应用】',
-    content: '得分：88分，AI点评：栈和队列的基本操作实现正确，表达式求值算法可以处理基本运算，但对于复杂表达式和错误处理有待完善。',
+    title: '瀹屾垚瀹為獙銆愭爤涓庨槦鍒楃殑搴旂敤銆?,
+    content: '寰楀垎锛?8鍒嗭紝AI鐐硅瘎锛氭爤鍜岄槦鍒楃殑鍩烘湰鎿嶄綔瀹炵幇姝ｇ‘锛岃〃杈惧紡姹傚€肩畻娉曞彲浠ュ鐞嗗熀鏈繍绠楋紝浣嗗浜庡鏉傝〃杈惧紡鍜岄敊璇鐞嗘湁寰呭畬鍠勩€?,
     time: '2023-09-28 20:15',
     type: 'success',
     color: '#67c23a'
   },
   {
-    title: '自我评估更新',
-    content: '更新了对栈和队列的知识点自评，当前掌握度：75%',
+    title: '鑷垜璇勪及鏇存柊',
+    content: '鏇存柊浜嗗鏍堝拰闃熷垪鐨勭煡璇嗙偣鑷瘎锛屽綋鍓嶆帉鎻″害锛?5%',
     time: '2023-09-25 15:30',
     type: 'primary',
     color: '#409eff'
   },
   {
-    title: '开始实验【栈与队列的应用】',
-    content: '开始了新的实验任务',
+    title: '寮€濮嬪疄楠屻€愭爤涓庨槦鍒楃殑搴旂敤銆?,
+    content: '寮€濮嬩簡鏂扮殑瀹為獙浠诲姟',
     time: '2023-09-20 10:00',
     type: 'warning',
     color: '#e6a23c'
   },
   {
-    title: '完成实验【线性表的实现与应用】',
-    content: '得分：92分，AI点评：代码实现规范，能够正确完成各项基本操作，但约瑟夫环问题的时间复杂度可以进一步优化。',
+    title: '瀹屾垚瀹為獙銆愮嚎鎬ц〃鐨勫疄鐜颁笌搴旂敤銆?,
+    content: '寰楀垎锛?2鍒嗭紝AI鐐硅瘎锛氫唬鐮佸疄鐜拌鑼冿紝鑳藉姝ｇ‘瀹屾垚鍚勯」鍩烘湰鎿嶄綔锛屼絾绾︾憻澶幆闂鐨勬椂闂村鏉傚害鍙互杩涗竴姝ヤ紭鍖栥€?,
     time: '2023-09-12 15:30',
     type: 'success',
     color: '#67c23a'
   },
   {
-    title: '提交了自我评估',
-    content: '更新了对线性表的知识点自评，当前掌握度：80%',
+    title: '鎻愪氦浜嗚嚜鎴戣瘎浼?,
+    content: '鏇存柊浜嗗绾挎€ц〃鐨勭煡璇嗙偣鑷瘎锛屽綋鍓嶆帉鎻″害锛?0%',
     time: '2023-09-10 16:45',
     type: 'primary',
     color: '#409eff',
@@ -348,99 +347,97 @@ const activities = [
   }
 ]
 
-// 徽章
+// 寰界珷
 const badges = [
   {
-    name: '实验达人',
-    description: '完成所有实验任务',
+    name: '瀹為獙杈句汉',
+    description: '瀹屾垚鎵€鏈夊疄楠屼换鍔?,
     icon: TrophyBase,
     earned: false
   },
   {
-    name: '优秀学员',
-    description: '实验平均分超过90分',
+    name: '浼樼瀛﹀憳',
+    description: '瀹為獙骞冲潎鍒嗚秴杩?0鍒?,
     icon: Medal,
     earned: true
   },
   {
-    name: '勤学者',
-    description: '连续7天登录学习',
+    name: '鍕ゅ鑰?,
+    description: '杩炵画7澶╃櫥褰曞涔?,
     icon: Star,
     earned: true
   },
   {
-    name: '编程能手',
-    description: '代码查重率低于5%',
+    name: '缂栫▼鑳芥墜',
+    description: '浠ｇ爜鏌ラ噸鐜囦綆浜?%',
     icon: Cpu,
     earned: false
   },
   {
-    name: '数据结构大师',
-    description: '知识点掌握度全部达到80%以上',
+    name: '鏁版嵁缁撴瀯澶у笀',
+    description: '鐭ヨ瘑鐐规帉鎻″害鍏ㄩ儴杈惧埌80%浠ヤ笂',
     icon: DataLine,
     earned: false
   },
   {
-    name: '学习达人',
-    description: '完成50道练习题',
+    name: '瀛︿範杈句汉',
+    description: '瀹屾垚50閬撶粌涔犻',
     icon: Histogram,
     earned: false
   }
 ]
 
-// 修改资料对话框控制
-const editProfileDialog = ref(false)
+// 淇敼璧勬枡瀵硅瘽妗嗘帶鍒?const editProfileDialog = ref(false)
 const profileFormRef = ref(null)
 const submitting = ref(false)
 
-// 修改资料表单数据
+// 淇敼璧勬枡琛ㄥ崟鏁版嵁
 const profileForm = reactive({
   username: '',
   email: '',
   phone: ''
 })
 
-// 修改资料表单验证规则
+// 淇敼璧勬枡琛ㄥ崟楠岃瘉瑙勫垯
 const profileRules = {
   username: [
-    { required: true, message: '请输入姓名', trigger: 'blur' },
-    { min: 2, max: 20, message: '长度在2到20个字符之间', trigger: 'blur' }
+    { required: true, message: '璇疯緭鍏ュ鍚?, trigger: 'blur' },
+    { min: 2, max: 20, message: '闀垮害鍦?鍒?0涓瓧绗︿箣闂?, trigger: 'blur' }
   ],
   email: [
-    { required: true, message: '请输入邮箱地址', trigger: 'blur' },
-    { type: 'email', message: '请输入正确的邮箱格式', trigger: 'blur' }
+    { required: true, message: '璇疯緭鍏ラ偖绠卞湴鍧€', trigger: 'blur' },
+    { type: 'email', message: '璇疯緭鍏ユ纭殑閭鏍煎紡', trigger: 'blur' }
   ],
   phone: [
-    { pattern: /^1[3-9]\d{9}$/, message: '请输入正确的手机号码', trigger: 'blur' }
+    { pattern: /^1[3-9]\d{9}$/, message: '璇疯緭鍏ユ纭殑鎵嬫満鍙风爜', trigger: 'blur' }
   ]
 }
 
-// 修改密码对话框控制
-const changePasswordDialog = ref(false)
+// 淇敼瀵嗙爜瀵硅瘽妗嗘帶鍒?const changePasswordDialog = ref(false)
 const passwordFormRef = ref(null)
 
-// 修改密码表单数据
+// 淇敼瀵嗙爜琛ㄥ崟鏁版嵁
 const passwordForm = reactive({
   oldPassword: '',
   newPassword: '',
   confirmPassword: ''
 })
 
-// 修改密码表单验证规则
+// 淇敼瀵嗙爜琛ㄥ崟楠岃瘉瑙勫垯
 const passwordRules = {
   oldPassword: [
-    { required: true, message: '请输入原密码', trigger: 'blur' }
+    { required: true, message: '璇疯緭鍏ュ師瀵嗙爜', trigger: 'blur' }
   ],
   newPassword: [
-    { required: true, message: '请输入新密码', trigger: 'blur' },
-    { min: 6, message: '密码长度不能少于6个字符', trigger: 'blur' }
+    { required: true, message: '璇疯緭鍏ユ柊瀵嗙爜', trigger: 'blur' },
+    { min: 6, message: '瀵嗙爜闀垮害涓嶈兘灏戜簬6涓瓧绗?, trigger: 'blur' }
   ],
   confirmPassword: [
-    { required: true, message: '请再次输入新密码', trigger: 'blur' },
+    { required: true, message: '璇峰啀娆¤緭鍏ユ柊瀵嗙爜', trigger: 'blur' },
     {
       validator: (rule, value, callback) => {
         if (value !== passwordForm.newPassword) {
-          callback(new Error('两次输入的密码不一致'))
+          callback(new Error('涓ゆ杈撳叆鐨勫瘑鐮佷笉涓€鑷?))
         } else {
           callback()
         }
@@ -450,16 +447,14 @@ const passwordRules = {
   ]
 }
 
-// 打开修改资料对话框
-const openEditProfileDialog = () => {
-  // 初始化表单数据
-  profileForm.username = userInfo.username || ''
+// 鎵撳紑淇敼璧勬枡瀵硅瘽妗?const openEditProfileDialog = () => {
+  // 鍒濆鍖栬〃鍗曟暟鎹?  profileForm.username = userInfo.username || ''
   profileForm.email = userInfo.email || ''
   profileForm.phone = userInfo.phone || ''
   editProfileDialog.value = true
 }
 
-// 提交修改资料表单
+// 鎻愪氦淇敼璧勬枡琛ㄥ崟
 const submitProfileForm = async () => {
   if (!profileFormRef.value) return
   
@@ -470,29 +465,27 @@ const submitProfileForm = async () => {
     
     submitting.value = true
     try {
-      // 构造提交数据
-      const userData = {
+      // 鏋勯€犳彁浜ゆ暟鎹?      const userData = {
         username: profileForm.username,
         email: profileForm.email,
         phone: profileForm.phone
       }
 
-      // 调用API更新用户信息
-      // // 假设后端API是 /api/user/profile
+      // 璋冪敤API鏇存柊鐢ㄦ埛淇℃伅
+      // // 鍋囪鍚庣API鏄?/api/user/profile
       // const response = await apiClient.put('/api/user/profile', userData)
       
-      // 更新本地数据
+      // 鏇存柊鏈湴鏁版嵁
       userInfo.username = profileForm.username
       userInfo.email = profileForm.email
       userInfo.phone = profileForm.phone
       
-      // 关闭对话框
-      editProfileDialog.value = false
+      // 鍏抽棴瀵硅瘽妗?      editProfileDialog.value = false
       
-      // 显示成功消息
-      ElMessage.success('个人资料修改成功')
+      // 鏄剧ず鎴愬姛娑堟伅
+      ElMessage.success('涓汉璧勬枡淇敼鎴愬姛')
       
-      // 更新用户信息到Vuex
+      // 鏇存柊鐢ㄦ埛淇℃伅鍒癡uex
       userStore.updateUserInfo({
         ...userStore.userInfo,
         username: profileForm.username,
@@ -500,24 +493,23 @@ const submitProfileForm = async () => {
       })
       
     } catch (error) {
-      console.error('修改资料失败:', error)
-      // ElMessage.error('修改资料失败: ' + (error.message || '未知错误'))
+      console.error('淇敼璧勬枡澶辫触:', error)
+      // ElMessage.error('淇敼璧勬枡澶辫触: ' + (error.message || '鏈煡閿欒'))
     } finally {
       submitting.value = false
     }
   })
 }
 
-// 打开修改密码对话框
-const openChangePasswordDialog = () => {
-  // 重置表单数据
+// 鎵撳紑淇敼瀵嗙爜瀵硅瘽妗?const openChangePasswordDialog = () => {
+  // 閲嶇疆琛ㄥ崟鏁版嵁
   passwordForm.oldPassword = ''
   passwordForm.newPassword = ''
   passwordForm.confirmPassword = ''
   changePasswordDialog.value = true
 }
 
-// 提交修改密码表单
+// 鎻愪氦淇敼瀵嗙爜琛ㄥ崟
 const submitPasswordForm = async () => {
   if (!passwordFormRef.value) return
   
@@ -528,28 +520,25 @@ const submitPasswordForm = async () => {
     
     submitting.value = true
     try {
-      // 构造提交数据
-      const passwordData = {
+      // 鏋勯€犳彁浜ゆ暟鎹?      const passwordData = {
         oldPassword: passwordForm.oldPassword,
         newPassword: passwordForm.newPassword
       }
       
-      // 调用API更新密码
-      const response = await axios.post('http://localhost:8081/api/user/password', passwordData)
+      // 璋冪敤API鏇存柊瀵嗙爜
+      const response = await axios.post(buildApiUrl('/api/user/password'), passwordData)
 
-      console.log("跟新内容：",response)
+      console.log("璺熸柊鍐呭锛?,response)
       if(response.data.success){
-        // 关闭对话框
-        changePasswordDialog.value = false
+        // 鍏抽棴瀵硅瘽妗?        changePasswordDialog.value = false
 
-        // 显示成功消息
-        ElMessage.success('密码修改成功，请使用新密码重新登录')
+        // 鏄剧ず鎴愬姛娑堟伅
+        ElMessage.success('瀵嗙爜淇敼鎴愬姛锛岃浣跨敤鏂板瘑鐮侀噸鏂扮櫥褰?)
         
-        // 清除用户登录信息
-        localStorage.removeItem('token')
-        localStorage.removeItem('userInfo')
+        // 娓呴櫎鐢ㄦ埛鐧诲綍淇℃伅
+        clearAuthStorage()
         
-        // 延迟一秒后跳转到登录页面，让用户有时间看到成功消息
+        // 寤惰繜涓€绉掑悗璺宠浆鍒扮櫥褰曢〉闈紝璁╃敤鎴锋湁鏃堕棿鐪嬪埌鎴愬姛娑堟伅
         setTimeout(() => {
           router.push('/login')
         }, 1500)
@@ -557,13 +546,12 @@ const submitPasswordForm = async () => {
         ElMessage.error(response.data.message)
       }
 
-      // 可选：退出登录，让用户重新登录
-      // 这里可以调用退出登录的方法
+      // 鍙€夛細閫€鍑虹櫥褰曪紝璁╃敤鎴烽噸鏂扮櫥褰?      // 杩欓噷鍙互璋冪敤閫€鍑虹櫥褰曠殑鏂规硶
       // logout()
       
     } catch (error) {
-      console.error('修改密码失败:', error)
-      ElMessage.error('修改密码失败: ' + (error.message || '未知错误'))
+      console.error('淇敼瀵嗙爜澶辫触:', error)
+      ElMessage.error('淇敼瀵嗙爜澶辫触: ' + (error.message || '鏈煡閿欒'))
     } finally {
       submitting.value = false
     }
@@ -590,7 +578,7 @@ onMounted(() => {
   gap: 20px;
 }
 
-/* 用户信息卡片样式 */
+/* 鐢ㄦ埛淇℃伅鍗＄墖鏍峰紡 */
 .user-card {
   margin-bottom: 20px;
   display: flex;
@@ -642,7 +630,7 @@ onMounted(() => {
   margin-top: 10px;
 }
 
-/* 账号设置卡片样式 */
+/* 璐﹀彿璁剧疆鍗＄墖鏍峰紡 */
 .account-settings {
   margin-bottom: 20px;
 }
@@ -677,7 +665,7 @@ onMounted(() => {
   color: #909399;
 }
 
-/* 活动卡片样式 */
+/* 娲诲姩鍗＄墖鏍峰紡 */
 .activity-card {
   margin-bottom: 20px;
 }
@@ -695,7 +683,7 @@ onMounted(() => {
   line-height: 1.6;
 }
 
-/* 统计卡片样式 */
+/* 缁熻鍗＄墖鏍峰紡 */
 .stats-row {
   margin-bottom: 20px;
 }
@@ -724,7 +712,7 @@ onMounted(() => {
   color: #303133;
 }
 
-/* 徽章卡片样式 */
+/* 寰界珷鍗＄墖鏍峰紡 */
 .badges-container {
   display: flex;
   flex-wrap: wrap;
@@ -777,3 +765,5 @@ margin: 0 0 0 50px;
 border: 7px solid rgb(91, 159, 227);
 }
 </style>
+
+

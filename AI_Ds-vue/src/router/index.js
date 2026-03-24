@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { getSessionToken, getUserInfo } from '../constants/auth'
 
 const routes = [
   {
@@ -305,7 +306,7 @@ router.beforeEach((to, from, next) => {
   console.log('路由守卫检查:', to.path)
   const isLoginPage = to.path === '/login'
   const isClassSelector = to.path === '/teacher/select-class'
-  const token = localStorage.getItem('token')
+  const token = getSessionToken()
 
   if (!isLoginPage && !isClassSelector && !token) {
     console.log('未登录，重定向到登录页')
@@ -322,9 +323,7 @@ router.beforeEach((to, from, next) => {
       console.log('未选择班级，重定向到班级选择页')
       next('/teacher/select-class')
     } else if (to.meta.requiredPermissions) {
-      const userInfoStr = localStorage.getItem('userInfo')
-      let userInfo = null
-      try { userInfo = userInfoStr ? JSON.parse(userInfoStr) : null } catch (e) { /* ignore */ }
+      const userInfo = getUserInfo()
       const userPermissions = userInfo?.permissions || []
       const hasPermission = to.meta.requiredPermissions.some(p => userPermissions.includes(p))
       if (hasPermission) next()
@@ -333,9 +332,7 @@ router.beforeEach((to, from, next) => {
       next()
     }
   } else if (to.meta.requiredPermissions) {
-    const userInfoStr = localStorage.getItem('userInfo')
-    let userInfo = null
-    try { userInfo = userInfoStr ? JSON.parse(userInfoStr) : null } catch (error) { /* ignore */ }
+    const userInfo = getUserInfo()
     const userPermissions = userInfo?.permissions || []
     const hasPermission = to.meta.requiredPermissions.some(p => userPermissions.includes(p))
     if (hasPermission) next()

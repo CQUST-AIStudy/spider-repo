@@ -84,6 +84,8 @@
 import { nextTick, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import DOMPurify from 'dompurify'
+import { getTapToken } from '../../constants/auth'
+import { buildApiUrl } from '../../config/runtime'
 import { marked } from 'marked'
 
 const userInput = ref('')
@@ -115,9 +117,9 @@ const scrollToBottom = async () => {
 
 const fetchCourseSpaces = async () => {
   try {
-    const token = localStorage.getItem('tap_token')
+    const token = getTapToken()
     if (!token) return
-    const response = await fetch('http://localhost:8081/api/course-spaces', {
+    const response = await fetch(buildApiUrl('/api/course-spaces'), {
       headers: { Authorization: `Bearer ${token}` }
     })
     if (!response.ok) return
@@ -159,7 +161,7 @@ const sendMessage = async () => {
 
   try {
     const isRagMode = !!selectedCourseSpaceId.value
-    const url = isRagMode ? 'http://localhost:8081/api/rag/chat' : 'http://localhost:8081/api/chat'
+    const url = isRagMode ? buildApiUrl('/api/rag/chat') : buildApiUrl('/api/chat')
     const body = isRagMode
       ? {
           courseSpaceId: selectedCourseSpaceId.value,
@@ -169,7 +171,7 @@ const sendMessage = async () => {
       : { userInput: text }
 
     const headers = { 'Content-Type': 'application/json' }
-    const token = localStorage.getItem('tap_token')
+    const token = getTapToken()
     if (token && isRagMode) {
       headers.Authorization = `Bearer ${token}`
     }
@@ -222,8 +224,8 @@ const sendMessage = async () => {
 const submitFeedback = async (message, value) => {
   if (!message.qaLogId) return
   try {
-    const token = localStorage.getItem('tap_token')
-    await fetch('http://localhost:8081/api/rag/feedback', {
+    const token = getTapToken()
+    await fetch(buildApiUrl('/api/rag/feedback'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -364,3 +366,5 @@ onMounted(() => {
   }
 }
 </style>
+
+

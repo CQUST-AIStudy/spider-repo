@@ -1,14 +1,14 @@
-<template>
+﻿<template>
   <div class="submission-detail">
-    <page-header class="my-page-header" title="学生提交详情" :description="`${studentName} 的实验提交`">
-      <el-button @click="goBack" icon="Back">返回提交列表</el-button>
+    <page-header class="my-page-header" title="瀛︾敓鎻愪氦璇︽儏" :description="`${studentName} 鐨勫疄楠屾彁浜">
+      <el-button @click="goBack" icon="Back">杩斿洖鎻愪氦鍒楄〃</el-button>
     </page-header>
 
     <div class="page-content" v-loading="loading">
       <el-row :gutter="20">
-        <!-- 左侧区域：学生信息、统计数据及小卡片 -->
+        <!-- 宸︿晶鍖哄煙锛氬鐢熶俊鎭€佺粺璁℃暟鎹強灏忓崱鐗?-->
         <el-col :span="6">
-          <!-- 学生基本信息卡片 -->
+          <!-- 瀛︾敓鍩烘湰淇℃伅鍗＄墖 -->
           <el-card class="info-card">
             <div class="student-info">
               <div class="avatar-container text-center">
@@ -18,11 +18,11 @@
               <div class="student-details">
                 <h3 class="text-center">{{ submission.studentName }}</h3>
                 <div class="detail-item">
-                  <span class="label">学号：</span>
+                  <span class="label">瀛﹀彿锛?/span>
                   <span>{{ submission.studentId }}</span>
                 </div>
                 <div class="detail-item">
-                  <span class="label">班级：</span>
+                  <span class="label">鐝骇锛?/span>
                   <span>{{ submission.class }}</span>
                 </div>
                 <!-- <div class="text-center">
@@ -34,47 +34,47 @@
             </div>
           </el-card>
 
-          <!-- 统计数据卡片 -->
+          <!-- 缁熻鏁版嵁鍗＄墖 -->
           <el-card class="stats-card">
             <div class="stat-grid">
               <div class="stat-item">
-                <div class="stat-label">上机成绩评分</div>
+                <div class="stat-label">涓婃満鎴愮哗璇勫垎</div>
                 <div class="stat-value" :class="{ 'highlighted': submission.status === 'graded' }">
-                  {{ submission.score !== null ? submission.score : '未评分' }}
+                  {{ submission.score !== null ? submission.score : '鏈瘎鍒? }}
                 </div>
               </div>
               <div class="stat-item">
-                <div class="stat-label">查重率</div>
+                <div class="stat-label">鏌ラ噸鐜?/div>
                 <div class="stat-value" :class="{
                   'low-plagiarism': submission.plagiarismRate < 15,
                   'medium-plagiarism': submission.plagiarismRate >= 15 && submission.plagiarismRate < 30,
                   'high-plagiarism': submission.plagiarismRate >= 30
                 }">
-                  {{ submission.plagiarismRate !== null ? `${submission.plagiarismRate}%` : '未检测' }}
+                  {{ submission.plagiarismRate !== null ? `${submission.plagiarismRate}%` : '鏈娴? }}
                 </div>
               </div>
               <div class="stat-item">
-                <div class="stat-label">提交时间</div>
+                <div class="stat-label">鎻愪氦鏃堕棿</div>
                 <div class="stat-value time-value">{{ submission.date }}</div>
               </div>
             </div>
           </el-card>
 
-          <!-- 操作按钮卡片 -->
+          <!-- 鎿嶄綔鎸夐挳鍗＄墖 -->
           <el-card class="action-card">
             <div class="action-buttons">
               <el-button type="primary" @click="openGradeDialog" class="full-width-btn">
                 <el-icon>
                   <Edit />
-                </el-icon>{{ submission.status === 'graded' ? '重新评分' : '评分' }}
+                </el-icon>{{ submission.status === 'graded' ? '閲嶆柊璇勫垎' : '璇勫垎' }}
               </el-button>
               <!-- <el-button type="danger" @click="rejectSubmission" v-if="submission.status !== 'rejected'"
                 class="full-width-btn">
                 <el-icon>
                   <Close />
-                </el-icon>拒绝提交
+                </el-icon>鎷掔粷鎻愪氦
               </el-button> -->
-              <!-- 其他按钮 -->
+              <!-- 鍏朵粬鎸夐挳 -->
 
               <!-- <el-button 
                 type="success"
@@ -83,21 +83,21 @@
                 :disabled="generatingComment"
                 class="full-width-btn"
               >
-                <el-icon><Magic /></el-icon>AI辅助评测
+                <el-icon><MagicStick /></el-icon>AI杈呭姪璇勬祴
               </el-button> -->
 
             </div>
           </el-card>
 
-          <!-- AI评测结果卡片 -->
+          <!-- AI璇勬祴缁撴灉鍗＄墖 -->
           <!-- <el-card class="ai-comment-card" v-if="submission.aiComment">
             <template #header>
               <div class="card-header">
                 <div class="ai-header">
                   <el-icon>
-                    <Magic />
+                    <MagicStick />
                   </el-icon>
-                  <span>AI点评</span>
+                  <span>AI鐐硅瘎</span>
                 </div>
                 <div class="ai-actions">
                   <el-button type="primary" circle size="small" @click="editAIComment">
@@ -120,27 +120,27 @@
 </el-card> -->
         </el-col>
 
-        <!-- 右侧区域：代码和报告内容 -->
+        <!-- 鍙充晶鍖哄煙锛氫唬鐮佸拰鎶ュ憡鍐呭 -->
         <el-col :span="18">
-          <!-- 提交内容标签页 -->
+          <!-- 鎻愪氦鍐呭鏍囩椤?-->
           <el-card class="content-card">
             <el-tabs v-model="activeTab" class="main-tabs">
-              <el-tab-pane label="代码" name="code">
+              <el-tab-pane label="浠ｇ爜" name="code">
                 <div class="code-header">
-                  <h3>实验代码</h3>
+                  <h3>瀹為獙浠ｇ爜</h3>
                   <div class="code-actions">
                     <el-button type="info" @click="copyCode">
                       <el-icon>
                         <CopyDocument />
                       </el-icon>
-                      复制代码
+                      澶嶅埗浠ｇ爜
                     </el-button>
                     <el-dropdown>
                       <el-button type="success">
                         <el-icon>
                           <Document />
                         </el-icon>
-                        文件操作
+                        鏂囦欢鎿嶄綔
                         <el-icon class="el-icon--right">
                           <ArrowDown />
                         </el-icon>
@@ -151,43 +151,42 @@
                             <el-icon>
                               <Download />
                             </el-icon>
-                            下载代码
+                            涓嬭浇浠ｇ爜
                           </el-dropdown-item>
                           <!-- <el-dropdown-item @click="formatCode">
                             <el-icon>
                               <Operation />
                             </el-icon>
-                            格式化代码
-                          </el-dropdown-item> -->
+                            鏍煎紡鍖栦唬鐮?                          </el-dropdown-item> -->
                         </el-dropdown-menu>
                       </template>
                     </el-dropdown>
                   </div>
                 </div>
 
-                <!-- 题目列表显示 -->
+                <!-- 棰樼洰鍒楄〃鏄剧ず -->
                 <el-tabs v-model="activeQuestionTab" tab-position="left" class="question-tabs"
                          v-if="parsedQuestions.length > 0">
-                  <el-tab-pane v-for="(question, index) in parsedQuestions" :key="index" :label="`第${question.number}题`"
+                  <el-tab-pane v-for="(question, index) in parsedQuestions" :key="index" :label="`绗?{question.number}棰榒"
                                :name="String(index)">
                     <div class="question-container">
                       <pre class="code-display"><code>{{ question.code }}</code></pre>
 
                       <div class="test-results" v-if="question.testResults">
-                        <h4>测试结果</h4>
+                        <h4>娴嬭瘯缁撴灉</h4>
                         <div v-html="formatTestResults(question.testResults)"></div>
                       </div>
 
-                      <el-divider content-position="left">教师评语</el-divider>
+                      <el-divider content-position="left">鏁欏笀璇勮</el-divider>
 
-                      <!-- 在评语编辑区添加ref引用 -->
+                      <!-- 鍦ㄨ瘎璇紪杈戝尯娣诲姞ref寮曠敤 -->
                       <div class="comment-edit" ref="commentDivs">
-                        <el-input v-model="question.comment" type="textarea" :rows="3" placeholder="请输入对本题的评语..."
+                        <el-input v-model="question.comment" type="textarea" :rows="3" placeholder="璇疯緭鍏ュ鏈鐨勮瘎璇?.."
                                   @input="updateQuestionComment(index, $event)" />
                         <div class="comment-actions">
                           <el-button type="primary" size="small" @click="saveQuestionComment(index)"
                                      :loading="question.saving">
-                            保存评语
+                            淇濆瓨璇勮
                           </el-button>
                         </div>
                       </div>
@@ -196,37 +195,37 @@
                   </el-tab-pane>
                 </el-tabs>
 
-                <!-- 如果没有解析出题目，则显示完整代码 -->
+                <!-- 濡傛灉娌℃湁瑙ｆ瀽鍑洪鐩紝鍒欐樉绀哄畬鏁翠唬鐮?-->
                 <pre class="code-display" v-else><code>{{ submission.code }}</code></pre>
 
-                <!-- 代码运行结果 -->
+                <!-- 浠ｇ爜杩愯缁撴灉 -->
                 <div class="code-result" v-if="codeResult">
                   <div class="result-header">
-                    <h3>运行结果</h3>
+                    <h3>杩愯缁撴灉</h3>
                     <el-tag :type="codeResult.success ? 'success' : 'danger'">
-                      {{ codeResult.success ? '运行成功' : '运行失败' }}
+                      {{ codeResult.success ? '杩愯鎴愬姛' : '杩愯澶辫触' }}
                     </el-tag>
                   </div>
                   <pre class="result-output">{{ codeResult.output }}</pre>
                 </div>
               </el-tab-pane>
 
-              <el-tab-pane label="实验报告" name="report">
+              <el-tab-pane label="瀹為獙鎶ュ憡" name="report">
                 <div class="report-header">
-                  <h3>实验报告</h3>
+                  <h3>瀹為獙鎶ュ憡</h3>
                   <div class="report-actions">
                     <!-- <el-button type="primary" round size="small" @click="printReport">
                       <el-icon>
                         <Printer />
                       </el-icon>
-                      打印报告
+                      鎵撳嵃鎶ュ憡
                     </el-button> -->
                     <el-dropdown>
                       <el-button type="success">
                         <el-icon>
                           <Download />
                         </el-icon>
-                        下载报告
+                        涓嬭浇鎶ュ憡
                         <el-icon class="el-icon--right">
                           <ArrowDown />
                         </el-icon>
@@ -241,13 +240,13 @@
                             <el-icon>
                               <Document />
                             </el-icon>
-                            下载 Word 文档
+                            涓嬭浇 Word 鏂囨。
                           </el-dropdown-item>
                           <el-dropdown-item @click="downloadPDF">
                             <el-icon>
                               <Document />
                             </el-icon>
-                            下载 PDF 文档
+                            涓嬭浇 PDF 鏂囨。
                           </el-dropdown-item>
                         </el-dropdown-menu>
                       </template>
@@ -256,17 +255,17 @@
                 </div>
 
                 <div v-if="submission.report" class="report-container">
-                  <!-- 使用标准报告组件 -->
+                  <!-- 浣跨敤鏍囧噯鎶ュ憡缁勪欢 -->
                   <report-generator :report-data="reportData" @update:report-data="handleReportDataUpdate"
                                     ref="reportGeneratorRef" />
 
                 </div>
-                <el-empty v-else description="学生未提交实验报告"></el-empty>
+                <el-empty v-else description="瀛︾敓鏈彁浜ゅ疄楠屾姤鍛?></el-empty>
               </el-tab-pane>
 
-              <!-- <el-tab-pane label="学习历程" name="history">
+              <!-- <el-tab-pane label="瀛︿範鍘嗙▼" name="history">
                 <div class="history-header">
-                  <h3>学习历程与代码提交记录</h3>
+                  <h3>瀛︿範鍘嗙▼涓庝唬鐮佹彁浜よ褰?/h3>
                 </div>
 
                 <el-timeline>
@@ -277,7 +276,7 @@
                       <div class="history-content">{{ item.content }}</div>
                       <div class="history-actions" v-if="item.code">
                         <el-button type="primary" round size="small" @click="viewHistoryCode(item)">
-                          查看代码
+                          鏌ョ湅浠ｇ爜
                         </el-button>
                       </div>
                     </div>
@@ -285,9 +284,9 @@
                 </el-timeline>
               </el-tab-pane> -->
 
-              <el-tab-pane label="学生表现" name="performance" class="performance">
+              <el-tab-pane label="瀛︾敓琛ㄧ幇" name="performance" class="performance">
                 <div class="performance-header">
-                  <h3>学习表现分析</h3>
+                  <h3>瀛︿範琛ㄧ幇鍒嗘瀽</h3>
                 </div>
 
                 <el-row :gutter="20">
@@ -295,7 +294,7 @@
                     <el-card class="chart-card" shadow="hover">
                       <template #header>
                         <div class="chart-header">
-                          <span>实验成绩趋势</span>
+                          <span>瀹為獙鎴愮哗瓒嬪娍</span>
                         </div>
                       </template>
                       <div class="chart-container" ref="scoreChartContainer"></div>
@@ -306,7 +305,7 @@
                     <el-card class="chart-card" shadow="hover">
                       <template #header>
                         <div class="chart-header">
-                          <span>实验完成情况</span>
+                          <span>瀹為獙瀹屾垚鎯呭喌</span>
                         </div>
                       </template>
                       <div class="chart-container" ref="completionChartContainer"></div>
@@ -317,54 +316,53 @@
                 <el-card class="performance-card" shadow="hover">
                   <template #header>
                     <div class="card-header">
-                      <span>综合表现评估</span>
+                      <span>缁煎悎琛ㄧ幇璇勪及</span>
                       <!-- <el-button type="primary" round size="small" @click="generatePerformanceReport">
-                        生成综合评估报告
+                        鐢熸垚缁煎悎璇勪及鎶ュ憡
                       </el-button> -->
                     </div>
                   </template>
 
                   <el-descriptions :column="3" border>
-                    <el-descriptions-item label="平均成绩">
+                    <el-descriptions-item label="骞冲潎鎴愮哗">
                       <span :class="getScoreClass(studentPerformance.averageScore)">
                         {{ studentPerformance.averageScore }}
                       </span>
                     </el-descriptions-item>
-                    <el-descriptions-item label="实验完成率">
+                    <el-descriptions-item label="瀹為獙瀹屾垚鐜?>
                       {{ studentPerformance.completionRate }}%
                     </el-descriptions-item>
-                    <el-descriptions-item label="班级排名">
-                      第 {{ studentPerformance.classRank }} 名
-                    </el-descriptions-item>
-                    <el-descriptions-item label="作业提交及时性">
+                    <el-descriptions-item label="鐝骇鎺掑悕">
+                      绗?{{ studentPerformance.classRank }} 鍚?                    </el-descriptions-item>
+                    <el-descriptions-item label="浣滀笟鎻愪氦鍙婃椂鎬?>
                       <el-rate v-model="studentPerformance.punctuality" disabled show-score
                                :colors="['#F56C6C', '#E6A23C', '#67C23A']" />
                     </el-descriptions-item>
-                    <el-descriptions-item label="代码质量评分">
+                    <el-descriptions-item label="浠ｇ爜璐ㄩ噺璇勫垎">
                       <el-rate v-model="studentPerformance.codeQuality" disabled show-score
                                :colors="['#F56C6C', '#E6A23C', '#67C23A']" />
                     </el-descriptions-item>
-                    <el-descriptions-item label="沟通参与度">
+                    <el-descriptions-item label="娌熼€氬弬涓庡害">
                       <el-rate v-model="studentPerformance.participation" disabled show-score
                                :colors="['#F56C6C', '#E6A23C', '#67C23A']" />
                     </el-descriptions-item>
                   </el-descriptions>
 
                   <div class="performance-analysis">
-                    <h4>AI助教点评</h4>
+                    <h4>AI鍔╂暀鐐硅瘎</h4>
                     <div class="ai-comment-content" v-html="renderMarkdown(submission.aiRemarks)"></div>
                   </div>
 
                   <el-divider />
 
                   <div class="learning-recommendation">
-                    <h4>学习建议</h4>
+                    <h4>瀛︿範寤鸿</h4>
                     <el-collapse v-if="learningRecommendations.length > 0">
                       <el-collapse-item v-for="(rec, index) in learningRecommendations" :key="index" :title="rec.title">
                         <div class="recommendation-content">
                           <p>{{ rec.content }}</p>
                           <div class="resource-links" v-if="rec.resources && rec.resources.length">
-                            <h5>推荐资源：</h5>
+                            <h5>鎺ㄨ崘璧勬簮锛?/h5>
                             <ul>
                               <li v-for="(resource, rIndex) in rec.resources" :key="rIndex">
                                 <a :href="resource.url" target="_blank">{{ resource.name }}</a>
@@ -374,7 +372,7 @@
                         </div>
                       </el-collapse-item>
                     </el-collapse>
-                    <el-empty v-else description="暂无学习建议，请点击'生成综合评估报告'生成"></el-empty>
+                    <el-empty v-else description="鏆傛棤瀛︿範寤鸿锛岃鐐瑰嚮'鐢熸垚缁煎悎璇勪及鎶ュ憡'鐢熸垚"></el-empty>
                   </div>
                 </el-card>
               </el-tab-pane>
@@ -384,36 +382,36 @@
       </el-row>
     </div>
 
-    <!-- 评分对话框 -->
-    <el-dialog v-model="gradeDialogVisible" title="评分" width="500px">
+    <!-- 璇勫垎瀵硅瘽妗?-->
+    <el-dialog v-model="gradeDialogVisible" title="璇勫垎" width="500px">
       <el-form :model="gradeForm" label-width="100px">
-        <el-form-item label="学生">
+        <el-form-item label="瀛︾敓">
           <span>{{ submission.studentName }}</span>
         </el-form-item>
 
-        <el-form-item label="实验名称">
+        <el-form-item label="瀹為獙鍚嶇О">
           <span>{{ submission.experimentName }}</span>
         </el-form-item>
 
-        <el-form-item label="上机成绩得分" prop="score">
+        <el-form-item label="涓婃満鎴愮哗寰楀垎" prop="score">
           <el-input-number v-model="gradeForm.score" :min="0" :max="100" :precision="1" style="width: 150px;" />
         </el-form-item>
       </el-form>
 
       <template #footer>
         <div class="dialog-footer">
-          <el-button @click="gradeDialogVisible = false">取消</el-button>
-          <el-button type="primary" @click="submitGrade">提交评分</el-button>
+          <el-button @click="gradeDialogVisible = false">鍙栨秷</el-button>
+          <el-button type="primary" @click="submitGrade">鎻愪氦璇勫垎</el-button>
         </div>
       </template>
     </el-dialog>
 
-    <!-- 历史代码对话框 -->
-    <el-dialog v-model="historyCodeVisible" :title="selectedHistory ? selectedHistory.title : '历史代码'" width="70%">
+    <!-- 鍘嗗彶浠ｇ爜瀵硅瘽妗?-->
+    <el-dialog v-model="historyCodeVisible" :title="selectedHistory ? selectedHistory.title : '鍘嗗彶浠ｇ爜'" width="70%">
       <div v-if="selectedHistory" class="history-code-dialog">
         <div class="history-info">
-          <div><strong>提交时间：</strong>{{ selectedHistory.time }}</div>
-          <div><strong>描述：</strong>{{ selectedHistory.content }}</div>
+          <div><strong>鎻愪氦鏃堕棿锛?/strong>{{ selectedHistory.time }}</div>
+          <div><strong>鎻忚堪锛?/strong>{{ selectedHistory.content }}</div>
         </div>
         <pre class="code-display"><code>{{ selectedHistory.code }}</code></pre>
       </div>
@@ -441,10 +439,11 @@ import {
 import { CanvasRenderer } from 'echarts/renderers'
 import {
   VideoPlay, Warning, CopyDocument, Document, ArrowDown, Download,
-  Operation, Printer, Magic, ChatLineRound, Check, Close, Edit
+  Operation, Printer, MagicStick, ChatLineRound, Check, Close, Edit
 } from '@element-plus/icons-vue'
 import ReportGenerator from '../../components/ReportGenerator.vue'
-// 引入 DocxGenerator
+import { buildApiUrl } from '../../config/runtime'
+// 寮曞叆 DocxGenerator
 import { DocxGenerator } from '../../utils/docxGenerator'
 import html2canvas from 'html2canvas';
 
@@ -473,11 +472,10 @@ const completionChartContainer = ref(null)
 let scoreChart = null
 let completionChart = null
 
-// 题目解析相关
-const activeQuestionTab = ref('0') // 默认选中第一题
-const parsedQuestions = ref([]) // 解析后的题目列表
+// 棰樼洰瑙ｆ瀽鐩稿叧
+const activeQuestionTab = ref('0') // 榛樿閫変腑绗竴棰?const parsedQuestions = ref([]) // 瑙ｆ瀽鍚庣殑棰樼洰鍒楄〃
 
-// 评分相关
+// 璇勫垎鐩稿叧
 const gradeDialogVisible = ref(false)
 const gradeForm = reactive({
   score: 0,
@@ -487,13 +485,12 @@ const gradeForm = reactive({
 })
 const generatingComment = ref(false)
 
-// 历史记录相关
+// 鍘嗗彶璁板綍鐩稿叧
 const submissionHistory = ref([])
 const historyCodeVisible = ref(false)
 const selectedHistory = ref(null)
 
-// 学生表现（从真实数据计算）
-const studentPerformance = reactive({
+// 瀛︾敓琛ㄧ幇锛堜粠鐪熷疄鏁版嵁璁＄畻锛?const studentPerformance = reactive({
   averageScore: 0,
   completionRate: 0,
   classRank: '-',
@@ -503,10 +500,10 @@ const studentPerformance = reactive({
   aiAnalysis: ''
 })
 
-// 学习建议
+// 瀛︿範寤鸿
 const learningRecommendations = ref([])
 
-// 新增报告相关变量
+// 鏂板鎶ュ憡鐩稿叧鍙橀噺
 const reportData = ref({})
 const reportGeneratorRef = ref(null)
 const isEditingComment = ref(false)
@@ -516,12 +513,11 @@ const editingTeacherComment = ref('')
 
 
 
-// 解析提交代码，按题目分割
+// 瑙ｆ瀽鎻愪氦浠ｇ爜锛屾寜棰樼洰鍒嗗壊
 const parseQuestionCode = () => {
   if (!submission.value || !submission.value.code) return
 
-  // 使用正则表达式匹配所有题目
-  const regex = /第\s*(\d+)\s*题如下:([\s\S]*?)(?=第\s*\d+\s*题如下:|$)/g
+  // 浣跨敤姝ｅ垯琛ㄨ揪寮忓尮閰嶆墍鏈夐鐩?  const regex = /绗琝s*(\d+)\s*棰樺涓?([\s\S]*?)(?=绗琝s*\d+\s*棰樺涓?|$)/g
   const code = submission.value.code
   const questions = []
 
@@ -530,8 +526,7 @@ const parseQuestionCode = () => {
     const questionNumber = match[1]
     let questionCode = match[2].trim()
 
-    // 提取测试结果表格（如果有）
-    const testResultsRegex = /([\s\S]*?)((?:\|\s*测试点[\s\S]*?)+$)/
+    // 鎻愬彇娴嬭瘯缁撴灉琛ㄦ牸锛堝鏋滄湁锛?    const testResultsRegex = /([\s\S]*?)((?:\|\s*娴嬭瘯鐐筟\s\S]*?)+$)/
     const resultMatch = questionCode.match(testResultsRegex)
 
     let testResults = null
@@ -539,20 +534,18 @@ const parseQuestionCode = () => {
       questionCode = resultMatch[1].trim()
       testResults = resultMatch[2].trim()
     }
-    // 添加到题目列表，包括代码、测试结果、评语和保存状态
-    questions.push({
+    // 娣诲姞鍒伴鐩垪琛紝鍖呮嫭浠ｇ爜銆佹祴璇曠粨鏋溿€佽瘎璇拰淇濆瓨鐘舵€?    questions.push({
       number: parseInt(questionNumber),
       code: questionCode,
       testResults,
-      comment: '', // 初始评语为空
-      saving: false // 保存状态，用于控制按钮loading
+      comment: '', // 鍒濆璇勮涓虹┖
+      saving: false // 淇濆瓨鐘舵€侊紝鐢ㄤ簬鎺у埗鎸夐挳loading
     })
   }
 
   parsedQuestions.value = questions
 
-  // 如果没有解析出题目，将整个代码作为一个题目
-  if (questions.length === 0 && code) {
+  // 濡傛灉娌℃湁瑙ｆ瀽鍑洪鐩紝灏嗘暣涓唬鐮佷綔涓轰竴涓鐩?  if (questions.length === 0 && code) {
     parsedQuestions.value = [{
       number: 1,
       code: code,
@@ -563,22 +556,21 @@ const parseQuestionCode = () => {
   }
 }
 
-// 格式化测试结果为HTML
+// 鏍煎紡鍖栨祴璇曠粨鏋滀负HTML
 const formatTestResults = (resultsText) => {
   if (!resultsText) return ''
-  // 简单替换保持表格格式
-  return resultsText.replace(/\|/g, '|')
+  // 绠€鍗曟浛鎹繚鎸佽〃鏍兼牸寮?  return resultsText.replace(/\|/g, '|')
       .replace(/\n/g, '<br>')
       .replace(/\s/g, '&nbsp;')
 }
 
-// 更新题目评语
+// 鏇存柊棰樼洰璇勮
 const updateQuestionComment = (index, comment) => {
   parsedQuestions.value[index].comment = comment
   updateReportWithComments()
 }
 
-// 渲染Markdown格式文本为HTML
+// 娓叉煋Markdown鏍煎紡鏂囨湰涓篐TML
 const renderMarkdown = (text) => {
   if (!text) return ''
   const rawHtml = marked.parse(text)
@@ -587,23 +579,21 @@ const renderMarkdown = (text) => {
 
 const splitAiRemarksToQuestions = () => {
   const aiRemarks = submission.value.aiRemarks || '';
-  // 假设格式：第1题评语: ... 第2题评语: ... 总评语: ...
-  const questionRegex = /题目\s*([123456789\d]+)[:：]([\s\S]*?)(?=题目[123456789\d]+[:：]|总体评估|$)/g;
-  const summaryRegex = /总体评估([\s\S]*)$/;
+  // 鍋囪鏍煎紡锛氱1棰樿瘎璇? ... 绗?棰樿瘎璇? ... 鎬昏瘎璇? ...
+  const questionRegex = /棰樼洰\s*([123456789\d]+)[:锛歖([\s\S]*?)(?=棰樼洰[123456789\d]+[:锛歖|鎬讳綋璇勪及|$)/g;
+  const summaryRegex = /鎬讳綋璇勪及([\s\S]*)$/;
   let match;
   let questionComments = [];
   while ((match = questionRegex.exec(aiRemarks)) !== null) {
     questionComments.push(match[2].trim());
   }
-  // 只保留总评语
-  const summaryMatch = aiRemarks.match(summaryRegex);
+  // 鍙繚鐣欐€昏瘎璇?  const summaryMatch = aiRemarks.match(summaryRegex);
   if (summaryMatch) {
     submission.value.aiRemarks = summaryMatch[1].trim();
   } else {
     submission.value.aiRemarks = '';
   }
-  // 设置每题的默认评语
-  parsedQuestions.value.forEach((q, i) => {
+  // 璁剧疆姣忛鐨勯粯璁よ瘎璇?  parsedQuestions.value.forEach((q, i) => {
     if (questionComments[i]) q.comment = questionComments[i];
   });
 };
@@ -621,8 +611,7 @@ const generateCommentImage = async (question) => {
   commentContainer.innerHTML = `
     <div style="padding:15px; border:1px solid #ddd; background:#f9f9f9; width:100%; box-sizing:border-box;">
       <h3 style="margin-top:0; color:#333; font-size:16px; border-bottom:1px solid #eee; padding-bottom:8px; color: red" class="handwritten-title">
-        教师评语：
-      </h3>
+        鏁欏笀璇勮锛?      </h3>
       <div style="color:#333; line-height:1.5; font-size:14px; white-space:pre-wrap; color: red" class="handwritten-romantic">
         ${question.comment.replace(/\n/g, '<br>')}
       </div>
@@ -645,7 +634,7 @@ const generateCommentImage = async (question) => {
 
 
 
-// 保存题目评语
+// 淇濆瓨棰樼洰璇勮
 const saveQuestionComment = async (index) => {
   const question = parsedQuestions.value[index];
 
@@ -656,12 +645,11 @@ const saveQuestionComment = async (index) => {
   try {
     await api.saveQuestionComment(submissionId.value, index, question.comment);
 
-    // 计算合适的图片宽度（基于当前视图宽度）
+    // 璁＄畻鍚堥€傜殑鍥剧墖瀹藉害锛堝熀浜庡綋鍓嶈鍥惧搴︼級
     const viewportWidth = window.innerWidth;
-    // 在小屏幕上减小宽度，大屏幕保持合理大小
-    const imageWidth = Math.min(viewportWidth * 0.1, 500);
+    // 鍦ㄥ皬灞忓箷涓婂噺灏忓搴︼紝澶у睆骞曚繚鎸佸悎鐞嗗ぇ灏?    const imageWidth = Math.min(viewportWidth * 0.1, 500);
 
-    // 创建评语容器
+    // 鍒涘缓璇勮瀹瑰櫒
     const commentContainer = document.createElement('div');
     commentContainer.className = 'teacher-comment-preview';
     commentContainer.style.width = `${imageWidth}px`;
@@ -670,93 +658,86 @@ const saveQuestionComment = async (index) => {
     commentContainer.style.left = '-9999px';
     commentContainer.style.top = '-9999px';
 
-    // 修改评语容器HTML部分
+    // 淇敼璇勮瀹瑰櫒HTML閮ㄥ垎
     commentContainer.innerHTML = `
   <div style="padding:15px; border:1px solid #ddd; background:#f9f9f9; width:100%; box-sizing:border-box;">
     <h3 style="margin-top:0; color:#333; font-size:16px; border-bottom:1px solid #eee; padding-bottom:8px; color: red" class="handwritten-title">
-      教师评语：
-    </h3>
+      鏁欏笀璇勮锛?    </h3>
     <div style="color:#333; line-height:1.5; font-size:14px; white-space:pre-wrap; color: red" class="handwritten-romantic">
       ${question.comment.replace(/\n/g, '<br>')}
     </div>
   </div>
 `;
 
-    // 添加字体加载检查
-    await ensureFontsLoaded();
+    // 娣诲姞瀛椾綋鍔犺浇妫€鏌?    await ensureFontsLoaded();
 
     document.body.appendChild(commentContainer);
 
-    // 使用html2canvas生成图片
+    // 浣跨敤html2canvas鐢熸垚鍥剧墖
     const canvas = await html2canvas(commentContainer, {
       backgroundColor: '#ffffff',
-      scale: 2, // 提高清晰度
-      logging: true,
+      scale: 2, // 鎻愰珮娓呮櫚搴?      logging: true,
       useCORS: true,
       width: imageWidth,
-      // 增加一个小延迟以确保字体完全应用
-      timeout: 1000
+      // 澧炲姞涓€涓皬寤惰繜浠ョ‘淇濆瓧浣撳畬鍏ㄥ簲鐢?      timeout: 1000
     });
 
     document.body.removeChild(commentContainer);
 
-    // 指定PNG格式
+    // 鎸囧畾PNG鏍煎紡
     const imageDataUrl = canvas.toDataURL('image/png', 1.0);
     question.commentImage = imageDataUrl;
 
-    // 存储生成的图片尺寸，便于后续处理
+    // 瀛樺偍鐢熸垚鐨勫浘鐗囧昂瀵革紝渚夸簬鍚庣画澶勭悊
     question.commentImageWidth = imageWidth;
 
     updateReportWithComments();
-    ElMessage.success(`第${question.number}题评语保存成功`);
+    ElMessage.success(`绗?{question.number}棰樿瘎璇繚瀛樻垚鍔焋);
   } catch (error) {
-    console.error('保存评语失败:', error);
-    ElMessage.error(`第${question.number}题评语保存失败: ${error.message}`);
+    console.error('淇濆瓨璇勮澶辫触:', error);
+    ElMessage.error(`绗?{question.number}棰樿瘎璇繚瀛樺け璐? ${error.message}`);
   } finally {
     question.saving = false;
   }
 };
 
-// 辅助函数：确保字体已加载
+// 杈呭姪鍑芥暟锛氱‘淇濆瓧浣撳凡鍔犺浇
 const ensureFontsLoaded = () => {
   return new Promise((resolve) => {
-    // 使用FontFaceObserver库检查字体加载
-    // 如果不使用该库，可以使用简单的超时方法
-    setTimeout(resolve, 500); // 给字体加载预留500ms时间
+    // 浣跨敤FontFaceObserver搴撴鏌ュ瓧浣撳姞杞?    // 濡傛灉涓嶄娇鐢ㄨ搴擄紝鍙互浣跨敤绠€鍗曠殑瓒呮椂鏂规硶
+    setTimeout(resolve, 500); // 缁欏瓧浣撳姞杞介鐣?00ms鏃堕棿
 
-    // 如果使用FontFaceObserver库，代码会是：
-    // const zitangKai = new FontFaceObserver('ZitangKai');
+    // 濡傛灉浣跨敤FontFaceObserver搴擄紝浠ｇ爜浼氭槸锛?    // const zitangKai = new FontFaceObserver('ZitangKai');
     // const maoShanCat = new FontFaceObserver('MaoShanCat');
     // Promise.all([zitangKai.load(), maoShanCat.load()]).then(resolve);
   });
 };
 
-// 更新报告数据中的实验步骤，包含代码和评语
+// 鏇存柊鎶ュ憡鏁版嵁涓殑瀹為獙姝ラ锛屽寘鍚唬鐮佸拰璇勮
 const updateReportWithComments = () => {
   if (!reportData.value) {
     prepareReportData();
   }
 
-  // 构建steps内容，包含题目、代码和评语图片
+  // 鏋勫缓steps鍐呭锛屽寘鍚鐩€佷唬鐮佸拰璇勮鍥剧墖
   let stepsContent = '';
   parsedQuestions.value.forEach((question) => {
-    stepsContent += `### 第${question.number}题\n\n`;
+    stepsContent += `### 绗?{question.number}棰榎n\n`;
     stepsContent += '```c\n' + question.code + '\n```\n\n';
 
-    // 如果有评语图片，添加评语图片标记
+    // 濡傛灉鏈夎瘎璇浘鐗囷紝娣诲姞璇勮鍥剧墖鏍囪
     if (question.commentImage) {
       stepsContent += `<div class="comment-image-container" data-image="${question.commentImage}"></div>\n\n`;
     }
-    // 如果只有文字评语但没有图片，保留文字评语作为备选
-    else if (question.comment) {
-      stepsContent += `**教师评语**：${question.comment}\n\n`;
+    // 濡傛灉鍙湁鏂囧瓧璇勮浣嗘病鏈夊浘鐗囷紝淇濈暀鏂囧瓧璇勮浣滀负澶囬€?    else if (question.comment) {
+      stepsContent += `**鏁欏笀璇勮**锛?{question.comment}\n\n`;
     }
   });
 
-  // 更新报告数据
+  // 鏇存柊鎶ュ憡鏁版嵁
   reportData.value.steps = stepsContent;
 
-  // 如果当前在报告预览页面，刷新视图
+  // 濡傛灉褰撳墠鍦ㄦ姤鍛婇瑙堥〉闈紝鍒锋柊瑙嗗浘
   if (activeTab.value === 'report' && reportGeneratorRef.value &&
       typeof reportGeneratorRef.value.updateReport === 'function') {
     nextTick(() => {
@@ -765,7 +746,7 @@ const updateReportWithComments = () => {
   }
 };
 
-// 成绩样式
+// 鎴愮哗鏍峰紡
 const getScoreClass = (score) => {
   if (!score) return ''
   if (score >= 90) return 'score-excellent'
@@ -775,7 +756,7 @@ const getScoreClass = (score) => {
 }
 
 
-// 获取提交详情
+// 鑾峰彇鎻愪氦璇︽儏
 const loadSubmissionDetail = async () => {
   loading.value = true
   try {
@@ -787,10 +768,10 @@ const loadSubmissionDetail = async () => {
     gradeForm.teacherComment = submission.value.teacherComment || ''
     parseQuestionCode()
 
-    // 1. 分割AI评语并赋值为每题初始评语
+    // 1. 鍒嗗壊AI璇勮骞惰祴鍊间负姣忛鍒濆璇勮
     splitAiRemarksToQuestions();
 
-    // 2. 自动生成每题评语图片
+    // 2. 鑷姩鐢熸垚姣忛璇勮鍥剧墖
     for (const q of parsedQuestions.value) {
       if (q.comment) {
         await generateCommentImage(q);
@@ -806,15 +787,14 @@ const loadSubmissionDetail = async () => {
       initCharts()
     })
   } catch (error) {
-    console.error('加载提交详情失败:', error)
-    ElMessage.error(error?.message || '加载提交详情失败')
+    console.error('鍔犺浇鎻愪氦璇︽儏澶辫触:', error)
+    ElMessage.error(error?.message || '鍔犺浇鎻愪氦璇︽儏澶辫触')
   } finally {
     loading.value = false
   }
 }
 
-// 加载提交历史 - 从真实API获取该学生的所有提交记录
-const loadSubmissionHistory = async () => {
+// 鍔犺浇鎻愪氦鍘嗗彶 - 浠庣湡瀹濧PI鑾峰彇璇ュ鐢熺殑鎵€鏈夋彁浜よ褰?const loadSubmissionHistory = async () => {
   try {
     const allData = await api.getAllStudentExperiments()
     const studentId = submission.value.studentId
@@ -822,28 +802,27 @@ const loadSubmissionHistory = async () => {
       submissionHistory.value = []
       return
     }
-    // 筛选该学生的所有提交，按时间排序
-    const studentSubs = allData
+    // 绛涢€夎瀛︾敓鐨勬墍鏈夋彁浜わ紝鎸夋椂闂存帓搴?    const studentSubs = allData
       .filter(s => String(s.studentId) === String(studentId))
       .sort((a, b) => new Date(a.submitTime || a.date || 0) - new Date(b.submitTime || b.date || 0))
 
     submissionHistory.value = studentSubs.map((s, idx) => ({
-      time: s.submitTime || s.date || '未知时间',
+      time: s.submitTime || s.date || '鏈煡鏃堕棿',
       type: s.status === 'completed' ? 'submit' : 'edit',
-      title: s.experimentName || `实验${idx + 1}`,
-      content: `得分: ${s.score || '未评分'} | 状态: ${s.status === 'completed' ? '已完成' : '进行中'}`,
+      title: s.experimentName || `瀹為獙${idx + 1}`,
+      content: `寰楀垎: ${s.score || '鏈瘎鍒?} | 鐘舵€? ${s.status === 'completed' ? '宸插畬鎴? : '杩涜涓?}`,
       code: null
     }))
   } catch (error) {
-    console.error('加载提交历史失败:', error)
+    console.error('鍔犺浇鎻愪氦鍘嗗彶澶辫触:', error)
     submissionHistory.value = []
   }
 }
 
-// 加载学习建议
+// 鍔犺浇瀛︿範寤鸿
 const loadLearningRecommendations = async () => {
   try {
-    // 基于学生真实提交数据生成学习建议
+    // 鍩轰簬瀛︾敓鐪熷疄鎻愪氦鏁版嵁鐢熸垚瀛︿範寤鸿
     const allData = await api.getAllStudentExperiments()
     const studentId = submission.value.studentId
     if (!allData || !studentId) { learningRecommendations.value = []; return }
@@ -856,15 +835,15 @@ const loadLearningRecommendations = async () => {
     const recs = []
     if (lowScoreExps.length > 0) {
       recs.push({
-        title: '薄弱实验需要加强',
-        content: `以下实验得分较低，建议重点复习：${lowScoreExps.map(s => s.experimentName + '(' + s.score + '分)').join('、')}`,
+        title: '钖勫急瀹為獙闇€瑕佸姞寮?,
+        content: `浠ヤ笅瀹為獙寰楀垎杈冧綆锛屽缓璁噸鐐瑰涔狅細${lowScoreExps.map(s => s.experimentName + '(' + s.score + '鍒?').join('銆?)}`,
         resources: []
       })
     }
     if (avgScore < 80 && avgScore > 0) {
       recs.push({
-        title: '提升整体成绩',
-        content: `当前平均成绩为${Math.round(avgScore * 10) / 10}分，建议多做练习题巩固基础知识，争取将平均分提升到80分以上。`,
+        title: '鎻愬崌鏁翠綋鎴愮哗',
+        content: `褰撳墠骞冲潎鎴愮哗涓?{Math.round(avgScore * 10) / 10}鍒嗭紝寤鸿澶氬仛缁冧範棰樺珐鍥哄熀纭€鐭ヨ瘑锛屼簤鍙栧皢骞冲潎鍒嗘彁鍗囧埌80鍒嗕互涓娿€俙,
         resources: []
       })
     }
@@ -872,27 +851,26 @@ const loadLearningRecommendations = async () => {
     const total = studentSubs.length
     if (total > 0 && completed / total < 0.8) {
       recs.push({
-        title: '提高实验完成率',
-        content: `目前完成了${completed}/${total}个实验（${Math.round(completed / total * 100)}%），建议尽快完成未提交的实验。`,
+        title: '鎻愰珮瀹為獙瀹屾垚鐜?,
+        content: `鐩墠瀹屾垚浜?{completed}/${total}涓疄楠岋紙${Math.round(completed / total * 100)}%锛夛紝寤鸿灏藉揩瀹屾垚鏈彁浜ょ殑瀹為獙銆俙,
         resources: []
       })
     }
     if (recs.length === 0) {
       recs.push({
-        title: '表现优秀，继续保持',
-        content: `该学生各项实验完成情况良好，平均成绩${Math.round(avgScore * 10) / 10}分，建议继续保持并挑战更高难度的题目。`,
+        title: '琛ㄧ幇浼樼锛岀户缁繚鎸?,
+        content: `璇ュ鐢熷悇椤瑰疄楠屽畬鎴愭儏鍐佃壇濂斤紝骞冲潎鎴愮哗${Math.round(avgScore * 10) / 10}鍒嗭紝寤鸿缁х画淇濇寔骞舵寫鎴樻洿楂橀毦搴︾殑棰樼洰銆俙,
         resources: []
       })
     }
     learningRecommendations.value = recs
   } catch (error) {
-    console.error('加载学习建议失败:', error)
+    console.error('鍔犺浇瀛︿範寤鸿澶辫触:', error)
     learningRecommendations.value = []
   }
 }
 
-// 从真实数据计算学生表现
-const loadStudentPerformance = async () => {
+// 浠庣湡瀹炴暟鎹绠楀鐢熻〃鐜?const loadStudentPerformance = async () => {
   try {
     const allData = await api.getAllStudentExperiments()
     const studentId = submission.value.studentId
@@ -903,14 +881,13 @@ const loadStudentPerformance = async () => {
     const completed = studentSubs.filter(s => s.status === 'completed')
     const total = studentSubs.length
 
-    // 平均成绩
+    // 骞冲潎鎴愮哗
     studentPerformance.averageScore = scored.length > 0
       ? Math.round(scored.reduce((a, b) => a + b.score, 0) / scored.length * 10) / 10 : 0
 
-    // 完成率
-    studentPerformance.completionRate = total > 0 ? Math.round(completed.length / total * 100) : 0
+    // 瀹屾垚鐜?    studentPerformance.completionRate = total > 0 ? Math.round(completed.length / total * 100) : 0
 
-    // 班级排名：计算所有学生的平均分并排序
+    // 鐝骇鎺掑悕锛氳绠楁墍鏈夊鐢熺殑骞冲潎鍒嗗苟鎺掑簭
     const studentScores = {}
     allData.filter(s => s.score > 0).forEach(s => {
       if (!studentScores[s.studentId]) studentScores[s.studentId] = []
@@ -922,40 +899,35 @@ const loadStudentPerformance = async () => {
     const rank = rankings.findIndex(r => String(r.id) === String(studentId))
     studentPerformance.classRank = rank >= 0 ? rank + 1 : '-'
 
-    // 及时性评分（基于完成率，5分制）
-    studentPerformance.punctuality = Math.min(5, Math.round(studentPerformance.completionRate / 20 * 10) / 10)
+    // 鍙婃椂鎬ц瘎鍒嗭紙鍩轰簬瀹屾垚鐜囷紝5鍒嗗埗锛?    studentPerformance.punctuality = Math.min(5, Math.round(studentPerformance.completionRate / 20 * 10) / 10)
 
-    // 代码质量评分（基于平均分，5分制）
-    studentPerformance.codeQuality = Math.min(5, Math.round(studentPerformance.averageScore / 20 * 10) / 10)
+    // 浠ｇ爜璐ㄩ噺璇勫垎锛堝熀浜庡钩鍧囧垎锛?鍒嗗埗锛?    studentPerformance.codeQuality = Math.min(5, Math.round(studentPerformance.averageScore / 20 * 10) / 10)
 
-    // 参与度（基于提交数量占总实验比例，5分制）
-    studentPerformance.participation = Math.min(5, Math.round(studentSubs.length / Math.max(1, new Set(allData.map(s => s.experimentId)).size) * 5 * 10) / 10)
+    // 鍙備笌搴︼紙鍩轰簬鎻愪氦鏁伴噺鍗犳€诲疄楠屾瘮渚嬶紝5鍒嗗埗锛?    studentPerformance.participation = Math.min(5, Math.round(studentSubs.length / Math.max(1, new Set(allData.map(s => s.experimentId)).size) * 5 * 10) / 10)
 
-    // 更新图表
+    // 鏇存柊鍥捐〃
     updatePerformanceCharts(studentSubs, allData)
   } catch (error) {
-    console.error('加载学生表现数据失败:', error)
+    console.error('鍔犺浇瀛︾敓琛ㄧ幇鏁版嵁澶辫触:', error)
   }
 }
 
-// 用真实数据更新图表
-const updatePerformanceCharts = (studentSubs, allData) => {
+// 鐢ㄧ湡瀹炴暟鎹洿鏂板浘琛?const updatePerformanceCharts = (studentSubs, allData) => {
   const scored = studentSubs.filter(s => s.score > 0).sort((a, b) => {
     const nameA = a.experimentName || ''
     const nameB = b.experimentName || ''
     return nameA.localeCompare(nameB, 'zh')
   })
 
-  // 计算班级平均分
-  const expAvgs = {}
+  // 璁＄畻鐝骇骞冲潎鍒?  const expAvgs = {}
   allData.filter(s => s.score > 0).forEach(s => {
-    const name = s.experimentName || '未知'
+    const name = s.experimentName || '鏈煡'
     if (!expAvgs[name]) expAvgs[name] = []
     expAvgs[name].push(s.score)
   })
 
   if (scoreChartContainer.value && scoreChart) {
-    const labels = scored.map(s => s.experimentName || '实验')
+    const labels = scored.map(s => s.experimentName || '瀹為獙')
     const scores = scored.map(s => s.score)
     const classAvg = labels.map(name => {
       const arr = expAvgs[name]
@@ -964,8 +936,8 @@ const updatePerformanceCharts = (studentSubs, allData) => {
     scoreChart.setOption({
       xAxis: { data: labels },
       series: [
-        { name: '成绩', data: scores },
-        { name: '班级平均', data: classAvg }
+        { name: '鎴愮哗', data: scores },
+        { name: '鐝骇骞冲潎', data: classAvg }
       ]
     })
   }
@@ -978,20 +950,18 @@ const updatePerformanceCharts = (studentSubs, allData) => {
     completionChart.setOption({
       series: [{
         data: [
-          { value: completed, name: '已完成', itemStyle: { color: '#67C23A' } },
-          { value: pending, name: '进行中', itemStyle: { color: '#E6A23C' } },
-          { value: notSubmitted, name: '未提交', itemStyle: { color: '#F56C6C' } }
+          { value: completed, name: '宸插畬鎴?, itemStyle: { color: '#67C23A' } },
+          { value: pending, name: '杩涜涓?, itemStyle: { color: '#E6A23C' } },
+          { value: notSubmitted, name: '鏈彁浜?, itemStyle: { color: '#F56C6C' } }
         ]
       }]
     })
   }
 }
 
-// 图表初始化
-const initCharts = () => {
+// 鍥捐〃鍒濆鍖?const initCharts = () => {
 
-  // 成绩趋势图
-  if (scoreChartContainer.value) {
+  // 鎴愮哗瓒嬪娍鍥?  if (scoreChartContainer.value) {
     scoreChart = echarts.init(scoreChartContainer.value)
     const scoreOption = {
       tooltip: {
@@ -999,28 +969,28 @@ const initCharts = () => {
       },
       xAxis: {
         type: 'category',
-        data: ['实验1', '实验2', '实验3', '当前实验', '实验5']
+        data: ['瀹為獙1', '瀹為獙2', '瀹為獙3', '褰撳墠瀹為獙', '瀹為獙5']
       },
       yAxis: {
         type: 'value',
-        name: '分数',
+        name: '鍒嗘暟',
         min: 0,
         max: 100
       },
       series: [
         {
-          name: '成绩',
+          name: '鎴愮哗',
           type: 'line',
           data: [82, 88, 75, submission.value.score || 0, null],
           markPoint: {
             data: [
-              { type: 'max', name: '最高分' },
-              { type: 'min', name: '最低分' }
+              { type: 'max', name: '鏈€楂樺垎' },
+              { type: 'min', name: '鏈€浣庡垎' }
             ]
           }
         },
         {
-          name: '班级平均',
+          name: '鐝骇骞冲潎',
           type: 'line',
           data: [75, 78, 72, 80, null],
           lineStyle: {
@@ -1032,8 +1002,7 @@ const initCharts = () => {
     scoreChart.setOption(scoreOption)
   }
 
-  // 完成情况图
-  if (completionChartContainer.value) {
+  // 瀹屾垚鎯呭喌鍥?  if (completionChartContainer.value) {
     completionChart = echarts.init(completionChartContainer.value)
     const completionOption = {
 
@@ -1044,18 +1013,18 @@ const initCharts = () => {
       legend: {
         orient: 'vertical',
         left: 'left',
-        data: ['按时完成', '逾期完成', '未完成']
+        data: ['鎸夋椂瀹屾垚', '閫炬湡瀹屾垚', '鏈畬鎴?]
       },
       series: [
         {
-          name: '完成情况',
+          name: '瀹屾垚鎯呭喌',
           type: 'pie',
           radius: '70%',
           center: ['50%', '60%'],
           data: [
-            { value: 4, name: '按时完成', itemStyle: { color: '#67C23A' } },
-            { value: 1, name: '逾期完成', itemStyle: { color: '#E6A23C' } },
-            { value: 0, name: '未完成', itemStyle: { color: '#F56C6C' } }
+            { value: 4, name: '鎸夋椂瀹屾垚', itemStyle: { color: '#67C23A' } },
+            { value: 1, name: '閫炬湡瀹屾垚', itemStyle: { color: '#E6A23C' } },
+            { value: 0, name: '鏈畬鎴?, itemStyle: { color: '#F56C6C' } }
           ],
           emphasis: {
             itemStyle: {
@@ -1071,23 +1040,21 @@ const initCharts = () => {
   }
 }
 
-// 返回提交列表
+// 杩斿洖鎻愪氦鍒楄〃
 const goBack = () => {
-  router.go(-1) // 返回上一页
-}
+  router.go(-1) // 杩斿洖涓婁竴椤?}
 
-// 打开评分对话框
-const openGradeDialog = () => {
+// 鎵撳紑璇勫垎瀵硅瘽妗?const openGradeDialog = () => {
   gradeDialogVisible.value = true
 }
 
-// 提交评分
+// 鎻愪氦璇勫垎
 const submitGrade = async () => {
   try {
-    // 调用API提交评分
+    // 璋冪敤API鎻愪氦璇勫垎
     // await api.gradeSubmission(submissionId.value, gradeForm)
 
-    // 更新本地数据
+    // 鏇存柊鏈湴鏁版嵁
     submission.value = {
       ...submission.value,
       score: gradeForm.score,
@@ -1097,79 +1064,77 @@ const submitGrade = async () => {
       status: 'graded'
     }
 
-    // 直接更新报告数据中的成绩
+    // 鐩存帴鏇存柊鎶ュ憡鏁版嵁涓殑鎴愮哗
     if (reportData.value) {
       reportData.value.score = gradeForm.score;
-      console.log('评分后更新报告数据:', reportData.value);
+      console.log('璇勫垎鍚庢洿鏂版姤鍛婃暟鎹?', reportData.value);
     } else {
-      // 如果报告数据还没准备好，创建它
-      prepareReportData();
-      console.log('评分后初始化报告数据:', reportData.value);
+      // 濡傛灉鎶ュ憡鏁版嵁杩樻病鍑嗗濂斤紝鍒涘缓瀹?      prepareReportData();
+      console.log('璇勫垎鍚庡垵濮嬪寲鎶ュ憡鏁版嵁:', reportData.value);
     }
 
-    // 更新报告中的评语内容
+    // 鏇存柊鎶ュ憡涓殑璇勮鍐呭
     updateReportWithComments();
 
-    // 如果当前在报告预览页面，立即刷新报告视图
+    // 濡傛灉褰撳墠鍦ㄦ姤鍛婇瑙堥〉闈紝绔嬪嵆鍒锋柊鎶ュ憡瑙嗗浘
     if (activeTab.value === 'report' && reportGeneratorRef.value) {
-      // 使用 nextTick 确保在DOM更新后执行
-      nextTick(() => {
-        console.log('尝试调用 updateReport 方法...');
+      // 浣跨敤 nextTick 纭繚鍦―OM鏇存柊鍚庢墽琛?      nextTick(() => {
+        console.log('灏濊瘯璋冪敤 updateReport 鏂规硶...');
         if (typeof reportGeneratorRef.value.updateReport === 'function') {
-          console.log('调用 updateReport 方法成功');
+          console.log('璋冪敤 updateReport 鏂规硶鎴愬姛');
           reportGeneratorRef.value.updateReport();
         } else {
-          console.warn('ReportGenerator 组件缺少 updateReport 方法');
+          console.warn('ReportGenerator 缁勪欢缂哄皯 updateReport 鏂规硶');
         }
       });
     }
 
     gradeDialogVisible.value = false
-    ElMessage.success('评分成功')
+    ElMessage.success('璇勫垎鎴愬姛')
   } catch (error) {
-    console.error('评分失败:', error)
-    ElMessage.error('评分失败，请稍后重试')
+    console.error('璇勫垎澶辫触:', error)
+    ElMessage.error('璇勫垎澶辫触锛岃绋嶅悗閲嶈瘯')
   }
 }
 
-// 拒绝提交
+// 鎷掔粷鎻愪氦
 // const rejectSubmission = () => {
-//   ElMessageBox.confirm('确定要拒绝此次提交吗？学生将需要重新提交。', '提示', {
-//     confirmButtonText: '确定',
-//     cancelButtonText: '取消',
+//   ElMessageBox.confirm('纭畾瑕佹嫆缁濇娆℃彁浜ゅ悧锛熷鐢熷皢闇€瑕侀噸鏂版彁浜ゃ€?, '鎻愮ず', {
+//     confirmButtonText: '纭畾',
+//     cancelButtonText: '鍙栨秷',
 //     type: 'warning'
 //   }).then(async () => {
 //     try {
 //       // await api.rejectSubmission(submissionId.value)
 //       submission.value.status = 'rejected'
-//       ElMessage.success('已拒绝此次提交')
+//       ElMessage.success('宸叉嫆缁濇娆℃彁浜?)
 //     } catch (error) {
-//       console.error('操作失败:', error)
-//       ElMessage.error('操作失败，请稍后重试')
+//       console.error('鎿嶄綔澶辫触:', error)
+//       ElMessage.error('鎿嶄綔澶辫触锛岃绋嶅悗閲嶈瘯')
 //     }
 //   }).catch(() => { })
 // }
 
-// 生成AI评语
+// 鐢熸垚AI璇勮
 const generateAIComment = async () => {
   generatingComment.value = true
   try {
     const code = submission.value.code || ''
-    const expName = submission.value.experimentName || '数据结构实验'
+    const expName = submission.value.experimentName || '鏁版嵁缁撴瀯瀹為獙'
     const studentName = submission.value.studentName || ''
 
-    // 调用后端 DeepSeek chat API 生成评语
-    const prompt = `请对以下学生提交的"${expName}"实验代码进行简要点评（150字以内），包括优点、不足和改进建议：\n\n${code.substring(0, 3000)}`
-    const response = await fetch('http://localhost:8081/api/chat', {
+    // 璋冪敤鍚庣 DeepSeek chat API 鐢熸垚璇勮
+    const prompt = `璇峰浠ヤ笅瀛︾敓鎻愪氦鐨?${expName}"瀹為獙浠ｇ爜杩涜绠€瑕佺偣璇勶紙150瀛椾互鍐咃級锛屽寘鎷紭鐐广€佷笉瓒冲拰鏀硅繘寤鸿锛歕n\n${code.substring(0, 3000)}`
+    const response = await fetch(buildApiUrl('/api/chat'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify({ userInput: prompt })
     })
 
-    if (!response.ok) throw new Error('AI服务请求失败')
+    if (!response.ok) throw new Error('AI鏈嶅姟璇锋眰澶辫触')
 
-    // 读取流式响应
+    // 璇诲彇娴佸紡鍝嶅簲
     const reader = response.body.getReader()
     const decoder = new TextDecoder('utf-8')
     let aiComment = ''
@@ -1183,7 +1148,7 @@ const generateAIComment = async () => {
     }
 
     if (!aiComment.trim()) {
-      throw new Error('AI未返回有效评语')
+      throw new Error('AI鏈繑鍥炴湁鏁堣瘎璇?)
     }
 
     if (gradeDialogVisible.value) {
@@ -1192,170 +1157,166 @@ const generateAIComment = async () => {
       submission.value.aiComment = aiComment
     }
 
-    ElMessage.success('AI评语生成成功')
+    ElMessage.success('AI璇勮鐢熸垚鎴愬姛')
   } catch (error) {
-    console.error('生成AI评语失败:', error)
-    ElMessage.error('生成AI评语失败: ' + (error.message || '请稍后重试'))
+    console.error('鐢熸垚AI璇勮澶辫触:', error)
+    ElMessage.error('鐢熸垚AI璇勮澶辫触: ' + (error.message || '璇风◢鍚庨噸璇?))
   } finally {
     generatingComment.value = false
   }
 }
 
-// 修改AI评语
+// 淇敼AI璇勮
 const editAIComment = () => {
-  ElMessageBox.prompt('请修改AI评语', '修改评语', {
-    confirmButtonText: '确定',
-    cancelButtonText: '取消',
+  ElMessageBox.prompt('璇蜂慨鏀笰I璇勮', '淇敼璇勮', {
+    confirmButtonText: '纭畾',
+    cancelButtonText: '鍙栨秷',
     inputType: 'textarea',
     inputValue: submission.value.aiComment,
-    inputPlaceholder: '请输入修改后的AI评语'
+    inputPlaceholder: '璇疯緭鍏ヤ慨鏀瑰悗鐨凙I璇勮'
   }).then(({ value }) => {
     submission.value.aiComment = value
-    ElMessage.success('AI评语已修改')
+    ElMessage.success('AI璇勮宸蹭慨鏀?)
   }).catch(() => { })
 }
 
-// 重新生成AI评语
+// 閲嶆柊鐢熸垚AI璇勮
 const regenerateAIComment = () => {
-  ElMessageBox.confirm('确定要重新生成AI评语吗？这将覆盖当前的评语。', '提示', {
-    confirmButtonText: '确定',
-    cancelButtonText: '取消',
+  ElMessageBox.confirm('纭畾瑕侀噸鏂扮敓鎴怉I璇勮鍚楋紵杩欏皢瑕嗙洊褰撳墠鐨勮瘎璇€?, '鎻愮ず', {
+    confirmButtonText: '纭畾',
+    cancelButtonText: '鍙栨秷',
     type: 'warning'
   }).then(() => {
     generateAIComment()
   }).catch(() => { })
 }
 
-// 修改教师评语
+// 淇敼鏁欏笀璇勮
 const editTeacherComment = () => {
   editingTeacherComment.value = submission.value.teacherComment || ''
   isEditingComment.value = true
 }
 
-// 保存教师评语
+// 淇濆瓨鏁欏笀璇勮
 const saveTeacherComment = async () => {
   try {
-    // 这里应该调用API保存评语
+    // 杩欓噷搴旇璋冪敤API淇濆瓨璇勮
     // await api.saveTeacherComment(submissionId.value, editingTeacherComment.value)
 
-    // 更新本地数据
+    // 鏇存柊鏈湴鏁版嵁
     submission.value.teacherComment = editingTeacherComment.value
 
     isEditingComment.value = false
-    ElMessage.success('评语保存成功')
+    ElMessage.success('璇勮淇濆瓨鎴愬姛')
   } catch (error) {
-    console.error('保存评语失败:', error)
-    ElMessage.error('保存评语失败，请稍后重试')
+    console.error('淇濆瓨璇勮澶辫触:', error)
+    ElMessage.error('淇濆瓨璇勮澶辫触锛岃绋嶅悗閲嶈瘯')
   }
 }
 
-// 取消编辑评语
+// 鍙栨秷缂栬緫璇勮
 const cancelEditComment = () => {
   isEditingComment.value = false
   editingTeacherComment.value = submission.value.teacherComment || ''
 }
 
-// 准备报告数据
+// 鍑嗗鎶ュ憡鏁版嵁
 const prepareReportData = () => {
   if (!submission.value) return
 
-  console.log('准备报告数据，当前成绩:', submission.value.score) // 调试日志
+  console.log('鍑嗗鎶ュ憡鏁版嵁锛屽綋鍓嶆垚缁?', submission.value.score) // 璋冭瘯鏃ュ織
 
-  // 基础信息
+  // 鍩虹淇℃伅
   reportData.value = {
-    experimentName: submission.value.experimentName || '数据结构实验',
-    studentName: submission.value.studentName || '未知',
-    studentId: submission.value.studentId || '未知学号',
-    className: submission.value.class || '未知班级',
-    courseName: '数据结构',
-    // 确保成绩正确传递，处理可能的undefined或null值
-    score: submission.value.score !== null && submission.value.score !== undefined
+    experimentName: submission.value.experimentName || '鏁版嵁缁撴瀯瀹為獙',
+    studentName: submission.value.studentName || '鏈煡',
+    studentId: submission.value.studentId || '鏈煡瀛﹀彿',
+    className: submission.value.class || '鏈煡鐝骇',
+    courseName: '鏁版嵁缁撴瀯',
+    // 纭繚鎴愮哗姝ｇ‘浼犻€掞紝澶勭悊鍙兘鐨剈ndefined鎴杗ull鍊?    score: submission.value.score !== null && submission.value.score !== undefined
         ? Number(submission.value.score) : null,
-    teacherName: '指导教师',
-    labName: '计算机实验室',
+    teacherName: '鎸囧鏁欏笀',
+    labName: '璁＄畻鏈哄疄楠屽',
     labTime: new Date().toLocaleDateString(),
   }
 
-  //提取各章节内容（如果有报告的情况）
-  if (submission.value.report) {
+  //鎻愬彇鍚勭珷鑺傚唴瀹癸紙濡傛灉鏈夋姤鍛婄殑鎯呭喌锛?  if (submission.value.report) {
     try {
       const report = submission.value.report
 
-      // 提取各章节内容
-      const purposeMatch = report.match(/##?\s*实验目的[^\n]*\n+([\s\S]+?)(?=##)/i)
+      // 鎻愬彇鍚勭珷鑺傚唴瀹?      const purposeMatch = report.match(/##?\s*瀹為獙鐩殑[^\n]*\n+([\s\S]+?)(?=##)/i)
       if (purposeMatch) reportData.value.purpose = purposeMatch[1].trim()
 
-      const requirementsMatch = report.match(/##?\s*实验环境[^\n]*\n+([\s\S]+?)(?=##)/i)
+      const requirementsMatch = report.match(/##?\s*瀹為獙鐜[^\n]*\n+([\s\S]+?)(?=##)/i)
       if (requirementsMatch) reportData.value.requirements = requirementsMatch[1].trim()
 
-      const tasksMatch = report.match(/##?\s*实验内容[^\n]*\n+([\s\S]+?)(?=##)/i) ||
-          report.match(/##?\s*实验任务[^\n]*\n+([\s\S]+?)(?=##)/i)
+      const tasksMatch = report.match(/##?\s*瀹為獙鍐呭[^\n]*\n+([\s\S]+?)(?=##)/i) ||
+          report.match(/##?\s*瀹為獙浠诲姟[^\n]*\n+([\s\S]+?)(?=##)/i)
       if (tasksMatch) reportData.value.tasks = tasksMatch[1].trim()
 
-      // 不再从Markdown提取steps，而是通过题目评语生成
+      // 涓嶅啀浠嶮arkdown鎻愬彇steps锛岃€屾槸閫氳繃棰樼洰璇勮鐢熸垚
 
-      const resultsMatch = report.match(/##?\s*实验结果[^\n]*\n+([\s\S]+?)(?=##)/i)
+      const resultsMatch = report.match(/##?\s*瀹為獙缁撴灉[^\n]*\n+([\s\S]+?)(?=##)/i)
       if (resultsMatch) reportData.value.results = resultsMatch[1].trim()
 
-      const summaryMatch = report.match(/##?\s*实验总结[^\n]*\n+([\s\S]+?)(?=$)/i) ||
-          report.match(/##?\s*心得体会[^\n]*\n+([\s\S]+?)(?=$)/i)
+      const summaryMatch = report.match(/##?\s*瀹為獙鎬荤粨[^\n]*\n+([\s\S]+?)(?=$)/i) ||
+          report.match(/##?\s*蹇冨緱浣撲細[^\n]*\n+([\s\S]+?)(?=$)/i)
       if (summaryMatch) reportData.value.summary = summaryMatch[1].trim()
     } catch (e) {
-      console.error('解析报告内容失败:', e)
+      console.error('瑙ｆ瀽鎶ュ憡鍐呭澶辫触:', e)
     }
   }
 
-  // 根据解析的题目生成实验步骤内容
-  if (parsedQuestions.value.length > 0) {
+  // 鏍规嵁瑙ｆ瀽鐨勯鐩敓鎴愬疄楠屾楠ゅ唴瀹?  if (parsedQuestions.value.length > 0) {
     updateReportWithComments()
   }
 
-  console.log('报告数据准备完成，成绩值:', reportData.value.score) // 调试日志
+  console.log('鎶ュ憡鏁版嵁鍑嗗瀹屾垚锛屾垚缁╁€?', reportData.value.score) // 璋冭瘯鏃ュ織
 }
 
-// 处理报告数据更新
+// 澶勭悊鎶ュ憡鏁版嵁鏇存柊
 const handleReportDataUpdate = (newData) => {
   reportData.value = newData
 }
 
-// 运行代码
+// 杩愯浠ｇ爜
 // const runCode = async () => {
 //   try {
-//     // 这里应该调用API运行代码
+//     // 杩欓噷搴旇璋冪敤API杩愯浠ｇ爜
 //     // const result = await api.runStudentCode(submissionId.value)
 
-//     // 模拟运行
+//     // 妯℃嫙杩愯
 //     await new Promise(resolve => setTimeout(resolve, 1000))
 
 //     codeResult.value = {
 //       success: true,
-//       output: "编译成功!\n运行结果:\n1 -> 2 -> 3 -> NULL\n程序执行时间: 0.002s"
+//       output: "缂栬瘧鎴愬姛!\n杩愯缁撴灉:\n1 -> 2 -> 3 -> NULL\n绋嬪簭鎵ц鏃堕棿: 0.002s"
 //     }
 
-//     ElMessage.success('代码运行成功')
+//     ElMessage.success('浠ｇ爜杩愯鎴愬姛')
 //   } catch (error) {
-//     console.error('代码运行失败:', error)
-//     ElMessage.error('代码运行失败')
+//     console.error('浠ｇ爜杩愯澶辫触:', error)
+//     ElMessage.error('浠ｇ爜杩愯澶辫触')
 
 //     codeResult.value = {
 //       success: false,
-//       output: "编译错误:\nError: undefined reference to 'printLinkedList'\n代码编译失败，请检查函数声明和定义。"
+//       output: "缂栬瘧閿欒:\nError: undefined reference to 'printLinkedList'\n浠ｇ爜缂栬瘧澶辫触锛岃妫€鏌ュ嚱鏁板０鏄庡拰瀹氫箟銆?
 //     }
 //   }
 // }
 
-// 复制代码
+// 澶嶅埗浠ｇ爜
 const copyCode = () => {
   navigator.clipboard.writeText(submission.value.code)
       .then(() => {
-        ElMessage.success('代码已复制到剪贴板')
+        ElMessage.success('浠ｇ爜宸插鍒跺埌鍓创鏉?)
       })
       .catch(() => {
-        ElMessage.error('复制失败，请手动复制')
+        ElMessage.error('澶嶅埗澶辫触锛岃鎵嬪姩澶嶅埗')
       })
 }
 
-// 下载代码
+// 涓嬭浇浠ｇ爜
 const downloadCode = () => {
   const blob = new Blob([submission.value.code], { type: 'text/plain' })
   const link = document.createElement('a')
@@ -1365,115 +1326,112 @@ const downloadCode = () => {
   URL.revokeObjectURL(link.href)
 }
 
-// // 格式化代码
-// const formatCode = () => {
-//   ElMessage.info('代码格式化功能开发中')
+// // 鏍煎紡鍖栦唬鐮?// const formatCode = () => {
+//   ElMessage.info('浠ｇ爜鏍煎紡鍖栧姛鑳藉紑鍙戜腑')
 // }
 
-// // 打印报告
+// // 鎵撳嵃鎶ュ憡
 // const printReport = () => {
 //   window.print()
 // }
 
-// // 下载报告
+// // 涓嬭浇鎶ュ憡
 // const downloadReport = () => {
 //   if (!submission.value.report) {
-//     ElMessage.warning('没有报告可下载')
+//     ElMessage.warning('娌℃湁鎶ュ憡鍙笅杞?)
 //     return
 //   }
 
 //   const blob = new Blob([submission.value.report], { type: 'text/markdown' })
 //   const link = document.createElement('a')
 //   link.href = URL.createObjectURL(blob)
-//   link.download = `${submission.value.experimentName}_${submission.value.studentName}_报告.md`
+//   link.download = `${submission.value.experimentName}_${submission.value.studentName}_鎶ュ憡.md`
 //   link.click()
 //   URL.revokeObjectURL(link.href)
 // }
 
-// 下载 Word 文档
+// 涓嬭浇 Word 鏂囨。
 const downloadWordDoc = async () => {
   if (!reportData.value) {
-    ElMessage.warning('没有报告数据可下载')
+    ElMessage.warning('娌℃湁鎶ュ憡鏁版嵁鍙笅杞?)
     return
   }
 
   try {
-    // 创建一个新对象，避免引用问题
-    const exportData = { ...reportData.value }
+    // 鍒涘缓涓€涓柊瀵硅薄锛岄伩鍏嶅紩鐢ㄩ棶棰?    const exportData = { ...reportData.value }
 
-    // 确保成绩正确
+    // 纭繚鎴愮哗姝ｇ‘
     if (submission.value.score !== undefined && submission.value.score !== null) {
       exportData.score = String(submission.value.score)
     }
 
-    console.log('下载Word文档时的成绩:', exportData.score)
+    console.log('涓嬭浇Word鏂囨。鏃剁殑鎴愮哗:', exportData.score)
 
-    // 如果有教师评语，将其添加到报告数据中
+    // 濡傛灉鏈夋暀甯堣瘎璇紝灏嗗叾娣诲姞鍒版姤鍛婃暟鎹腑
     if (submission.value.teacherComment) {
       exportData.teacherComment = submission.value.teacherComment
     }
 
-    // 确保评语已更新到steps
+    // 纭繚璇勮宸叉洿鏂板埌steps
     updateReportWithComments()
 
     const docxGenerator = new DocxGenerator()
     const blob = await docxGenerator.generateStandardReport(exportData)
 
-    // 下载文件名格式: 学号_姓名_实验名称.docx
+    // 涓嬭浇鏂囦欢鍚嶆牸寮? 瀛﹀彿_濮撳悕_瀹為獙鍚嶇О.docx
     const fileName = `${submission.value.studentId}_${submission.value.studentName}_${submission.value.experimentName}.docx`
     DocxGenerator.downloadReport(blob, fileName)
 
-    ElMessage.success('Word文档下载成功')
+    ElMessage.success('Word鏂囨。涓嬭浇鎴愬姛')
   } catch (error) {
-    console.error('生成Word文档失败:', error)
-    ElMessage.error('生成Word文档失败，请稍后重试')
+    console.error('鐢熸垚Word鏂囨。澶辫触:', error)
+    ElMessage.error('鐢熸垚Word鏂囨。澶辫触锛岃绋嶅悗閲嶈瘯')
   }
 }
 
-// 前端发送请求到服务器端
+// 鍓嶇鍙戦€佽姹傚埌鏈嶅姟鍣ㄧ
 const downloadPDF = async () => {
   try {
-    // 显示加载提示
+    // 鏄剧ず鍔犺浇鎻愮ず
     const loadingInstance = ElLoading.service({
       lock: true,
-      text: 'PDF生成中，请稍候...',
+      text: 'PDF鐢熸垚涓紝璇风◢鍊?..',
       background: 'rgba(0, 0, 0, 0.7)'
     });
 
-    // 创建一个新对象，避免引用问题
-    const exportData = { ...reportData.value };
+    // 鍒涘缓涓€涓柊瀵硅薄锛岄伩鍏嶅紩鐢ㄩ棶棰?    const exportData = { ...reportData.value };
 
-    // 直接从submission中获取成绩，确保拿到最新值，并转成字符串
+    // 鐩存帴浠巗ubmission涓幏鍙栨垚缁╋紝纭繚鎷垮埌鏈€鏂板€硷紝骞惰浆鎴愬瓧绗︿覆
     if (submission.value.score !== undefined && submission.value.score !== null) {
       exportData.score = String(submission.value.score);
     }
 
-    console.log('下载PDF文档时的成绩:', exportData.score);
+    console.log('涓嬭浇PDF鏂囨。鏃剁殑鎴愮哗:', exportData.score);
 
-    // 如果有教师评语，将其添加到报告数据中
+    // 濡傛灉鏈夋暀甯堣瘎璇紝灏嗗叾娣诲姞鍒版姤鍛婃暟鎹腑
     if (submission.value.teacherComment) {
       exportData.teacherComment = submission.value.teacherComment;
     }
 
-    // 先生成 Word 文档
+    // 鍏堢敓鎴?Word 鏂囨。
     const docxGenerator = new DocxGenerator();
     const wordBlob = await docxGenerator.generateStandardReport(exportData);
 
-    // 发送 Word 文档到服务器进行转换
+    // 鍙戦€?Word 鏂囨。鍒版湇鍔″櫒杩涜杞崲
     const formData = new FormData();
     formData.append('wordFile', new Blob([wordBlob]), 'report.docx');
 
     const response = await axios.post('/api/api/convert-to-pdf', formData, {
-      responseType: 'blob', // 重要：指定响应类型为blob
+      responseType: 'blob', // 閲嶈锛氭寚瀹氬搷搴旂被鍨嬩负blob
       headers: {
         'Content-Type': 'multipart/form-data'
       }
     });
 
-    // 关闭加载提示
+    // 鍏抽棴鍔犺浇鎻愮ず
     loadingInstance.close();
 
-    // 下载返回的PDF
+    // 涓嬭浇杩斿洖鐨凱DF
     const fileName = `${submission.value.studentId}_${submission.value.studentName}_${submission.value.experimentName}.pdf`;
     const url = window.URL.createObjectURL(new Blob([response.data]));
     const link = document.createElement('a');
@@ -1481,19 +1439,17 @@ const downloadPDF = async () => {
     link.download = fileName;
     link.click();
 
-    ElMessage.success('PDF文档下载成功');
+    ElMessage.success('PDF鏂囨。涓嬭浇鎴愬姛');
   } catch (error) {
-    console.error('生成PDF文档失败:', error);
-    ElMessage.error('生成PDF文档失败，请稍后重试');
+    console.error('鐢熸垚PDF鏂囨。澶辫触:', error);
+    ElMessage.error('鐢熸垚PDF鏂囨。澶辫触锛岃绋嶅悗閲嶈瘯');
 
-    // 关闭可能存在的加载提示
-    const loadingInstance = ElLoading.service();
+    // 鍏抽棴鍙兘瀛樺湪鐨勫姞杞芥彁绀?    const loadingInstance = ElLoading.service();
     loadingInstance.close();
   }
 }
 
-// 窗口大小变化时重绘图表
-const handleResize = () => {
+// 绐楀彛澶у皬鍙樺寲鏃堕噸缁樺浘琛?const handleResize = () => {
   scoreChart?.resize()
   completionChart?.resize()
 }
@@ -1502,24 +1458,23 @@ onMounted(() => {
   loadSubmissionDetail()
   window.addEventListener('resize', handleResize)
 
-  // 添加一个初始化标记，用于追踪组件是否已初始化
-  let reportComponentInitialized = false;
+  // 娣诲姞涓€涓垵濮嬪寲鏍囪锛岀敤浜庤拷韪粍浠舵槸鍚﹀凡鍒濆鍖?  let reportComponentInitialized = false;
 
-  // 监听标签页变化，当切换到报告标签页时加载报告数据
+  // 鐩戝惉鏍囩椤靛彉鍖栵紝褰撳垏鎹㈠埌鎶ュ憡鏍囩椤垫椂鍔犺浇鎶ュ憡鏁版嵁
   watch(() => activeTab.value, (newTab) => {
     if (newTab === 'report' && submission.value) {
-      // 强制重新准备报告数据，确保包含最新成绩和评语
+      // 寮哄埗閲嶆柊鍑嗗鎶ュ憡鏁版嵁锛岀‘淇濆寘鍚渶鏂版垚缁╁拰璇勮
       prepareReportData();
 
-      // 确保ReportGenerator组件更新
+      // 纭繚ReportGenerator缁勪欢鏇存柊
       nextTick(() => {
         if (reportGeneratorRef.value && typeof reportGeneratorRef.value.updateReport === 'function') {
-          console.log('切换到报告标签页，更新报告，当前成绩:', reportData.value.score);
+          console.log('鍒囨崲鍒版姤鍛婃爣绛鹃〉锛屾洿鏂版姤鍛婏紝褰撳墠鎴愮哗:', reportData.value.score);
           reportGeneratorRef.value.updateReport();
           reportComponentInitialized = true;
         } else {
-          console.warn('ReportGenerator组件缺少updateReport方法或组件未挂载');
-          // 组件未就绪，设置延迟重试
+          console.warn('ReportGenerator缁勪欢缂哄皯updateReport鏂规硶鎴栫粍浠舵湭鎸傝浇');
+          // 缁勪欢鏈氨缁紝璁剧疆寤惰繜閲嶈瘯
           setTimeout(() => {
             if (reportGeneratorRef.value && typeof reportGeneratorRef.value.updateReport === 'function') {
               reportGeneratorRef.value.updateReport();
@@ -1529,14 +1484,13 @@ onMounted(() => {
         }
       });
     }
-  }, { immediate: true }); // 添加immediate:true确保初始加载时也执行
+  }, { immediate: true }); // 娣诲姞immediate:true纭繚鍒濆鍔犺浇鏃朵篃鎵ц
 
-  // 监听成绩变化，确保报告数据同步更新
-  watch(() => submission.value.score, (newScore) => {
+  // 鐩戝惉鎴愮哗鍙樺寲锛岀‘淇濇姤鍛婃暟鎹悓姝ユ洿鏂?  watch(() => submission.value.score, (newScore) => {
     if (reportData.value) {
-      console.log('成绩已变更为:', newScore);
+      console.log('鎴愮哗宸插彉鏇翠负:', newScore);
       reportData.value.score = newScore;
-      // 如果当前在报告预览页面，刷新报告视图
+      // 濡傛灉褰撳墠鍦ㄦ姤鍛婇瑙堥〉闈紝鍒锋柊鎶ュ憡瑙嗗浘
       if (activeTab.value === 'report' && reportGeneratorRef.value) {
         nextTick(() => {
           if (typeof reportGeneratorRef.value.updateReport === 'function') {
@@ -1547,10 +1501,10 @@ onMounted(() => {
     }
   });
 
-  // 监听 reportGeneratorRef 以处理组件后期挂载的情况
+  // 鐩戝惉 reportGeneratorRef 浠ュ鐞嗙粍浠跺悗鏈熸寕杞界殑鎯呭喌
   watch(() => reportGeneratorRef.value, (newRef) => {
     if (newRef && !reportComponentInitialized && activeTab.value === 'report' && reportData.value) {
-      console.log('ReportGenerator组件已挂载，初始化报告数据');
+      console.log('ReportGenerator缁勪欢宸叉寕杞斤紝鍒濆鍖栨姤鍛婃暟鎹?);
       nextTick(() => {
         if (typeof newRef.updateReport === 'function') {
           newRef.updateReport();
@@ -1560,8 +1514,7 @@ onMounted(() => {
     }
   });
 
-  // 监听题目评语变化，同步更新报告内容
-  watch(() => parsedQuestions.value, () => {
+  // 鐩戝惉棰樼洰璇勮鍙樺寲锛屽悓姝ユ洿鏂版姤鍛婂唴瀹?  watch(() => parsedQuestions.value, () => {
     if (parsedQuestions.value.length > 0) {
       updateReportWithComments();
     }
@@ -1869,7 +1822,7 @@ onMounted(() => {
   margin-bottom: 20px;
 }
 
-/* 题目选项卡样式 */
+/* 棰樼洰閫夐」鍗℃牱寮?*/
 .question-tabs {
   margin-bottom: 20px;
   border: 1px solid #ebeef5;
@@ -1947,7 +1900,7 @@ onMounted(() => {
   overflow-y: auto;
 }
 
-/* 评分样式 */
+/* 璇勫垎鏍峰紡 */
 .score-excellent {
   color: #67C23A;
   font-weight: bold;
@@ -1967,7 +1920,7 @@ onMounted(() => {
   font-weight: bold;
 }
 
-/* 教师评语编辑区域样式 */
+/* 鏁欏笀璇勮缂栬緫鍖哄煙鏍峰紡 */
 .comment-card {
   margin-top: 20px;
 }
@@ -2006,7 +1959,7 @@ onMounted(() => {
   line-height: 1.6;
 }
 
-/* 左侧区域样式优化 */
+/* 宸︿晶鍖哄煙鏍峰紡浼樺寲 */
 .info-card,
 .stats-card,
 .action-card,
@@ -2043,7 +1996,7 @@ onMounted(() => {
   text-align: center;
 }
 
-/* 右侧区域样式优化 */
+/* 鍙充晶鍖哄煙鏍峰紡浼樺寲 */
 .content-card {
   height: 80vh;
   margin-bottom: 50px;
@@ -2054,14 +2007,14 @@ onMounted(() => {
 
 }
 
-/* 修改标签页内容区域样式 */
+/* 淇敼鏍囩椤靛唴瀹瑰尯鍩熸牱寮?*/
 .main-tabs :deep(.el-tabs__content) {
   height: calc(100% - 55px);
   position: relative;
-  /* 添加相对定位 */
+  /* 娣诲姞鐩稿瀹氫綅 */
 }
 
-/* 为每个标签页面板添加滚动功能 */
+/* 涓烘瘡涓爣绛鹃〉闈㈡澘娣诲姞婊氬姩鍔熻兘 */
 .main-tabs :deep(.el-tab-pane) {
   height: 100%;
   overflow-y: auto;
@@ -2073,28 +2026,28 @@ onMounted(() => {
   gap: 8px;
 }
 
-/* 修改报告容器样式，确保可以滚动 */
+/* 淇敼鎶ュ憡瀹瑰櫒鏍峰紡锛岀‘淇濆彲浠ユ粴鍔?*/
 .report-container {
   padding-bottom: 100px;
   max-width: 95%;
   margin: 0 auto;
   font-size: 0.95em;
   overflow-y: auto;
-  /* 添加垂直滚动条 */
+  /* 娣诲姞鍨傜洿婊氬姩鏉?*/
   max-height: 70vh;
-  /* 限制最大高度，确保需要滚动 */
+  /* 闄愬埗鏈€澶ч珮搴︼紝纭繚闇€瑕佹粴鍔?*/
 }
 
-/* 确保报告生成器组件可以滚动 */
+/* 纭繚鎶ュ憡鐢熸垚鍣ㄧ粍浠跺彲浠ユ粴鍔?*/
 .report-container :deep(.report-generator) {
   width: 100%;
   max-width: 100%;
   overflow-y: auto;
-  /* 改为visible，让滚动由父容器处理 */
+  /* 鏀逛负visible锛岃婊氬姩鐢辩埗瀹瑰櫒澶勭悊 */
 }
 
 
-/* 美化按钮样式 */
+/* 缇庡寲鎸夐挳鏍峰紡 */
 .el-button.is-round {
   border-radius: 20px;
   padding-left: 15px;
@@ -2107,14 +2060,14 @@ onMounted(() => {
   box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
 }
 
-/* 美化卡片样式 */
+/* 缇庡寲鍗＄墖鏍峰紡 */
 .el-card {
   transition: all 0.3s ease;
   border-radius: 8px;
   overflow: hidden;
 }
 
-/* 打印样式优化 */
+/* 鎵撳嵃鏍峰紡浼樺寲 */
 @media print {
 
   .my-page-header,
@@ -2152,7 +2105,7 @@ onMounted(() => {
   margin: 0 auto;
   font-size: 0.95em;
   overflow-y: auto;
-  /* 添加垂直滚动条 */
+  /* 娣诲姞鍨傜洿婊氬姩鏉?*/
   max-height: 70vh;
   overflow: hidden;
 }
@@ -2181,7 +2134,7 @@ onMounted(() => {
   font-family: 'Courier New', monospace;
 }
 
-/* 添加评语相关样式 */
+/* 娣诲姞璇勮鐩稿叧鏍峰紡 */
 .teacher-comment-image {
   margin: 10px 0;
   max-width: 100%;
@@ -2199,3 +2152,5 @@ onMounted(() => {
   font-family: 'Microsoft YaHei', sans-serif;
 }
 </style>
+
+

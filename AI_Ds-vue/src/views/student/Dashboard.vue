@@ -1,10 +1,10 @@
-<template>
+﻿<template>
   <div class="g-dashboard">
-    <page-header title="首页" description="欢迎使用数据结构课程AI辅助系统" />
+    <page-header title="棣栭〉" description="娆㈣繋浣跨敤鏁版嵁缁撴瀯璇剧▼AI杈呭姪绯荤粺" />
 
     <loading-state :loading="loading">
       <div class="g-content">
-        <!-- 统计卡片 -->
+        <!-- 缁熻鍗＄墖 -->
         <div class="g-stat-row">
           <div class="g-stat-card" v-for="s in statCards" :key="s.label">
             <div class="g-stat-icon" :style="{ background: s.bg, color: s.color }">
@@ -18,24 +18,24 @@
           </div>
         </div>
 
-        <!-- 图表行 -->
+        <!-- 鍥捐〃琛?-->
         <div class="g-chart-row">
           <div class="g-card g-card-half">
             <div class="g-card-head">
-              <span>实验完成情况</span>
-              <a class="g-link" @click="nav('/student/experiments')">查看全部</a>
+              <span>瀹為獙瀹屾垚鎯呭喌</span>
+              <a class="g-link" @click="nav('/student/experiments')">鏌ョ湅鍏ㄩ儴</a>
             </div>
             <div ref="progressChartRef" class="g-chart"></div>
           </div>
           <div class="g-card g-card-half">
-            <div class="g-card-head"><span>各实验掌握度趋势</span></div>
+            <div class="g-card-head"><span>鍚勫疄楠屾帉鎻″害瓒嬪娍</span></div>
             <div ref="scoreChartRef" class="g-chart"></div>
           </div>
         </div>
 
-        <!-- AI 功能入口 -->
+        <!-- AI 鍔熻兘鍏ュ彛 -->
         <div class="g-card">
-          <div class="g-card-head"><span>AI 辅助学习中心</span></div>
+          <div class="g-card-head"><span>AI 杈呭姪瀛︿範涓績</span></div>
           <div class="g-feature-grid">
             <div class="g-feature-item" v-for="f in features" :key="f.path" @click="nav(f.path)">
               <el-icon class="g-feature-icon" :size="24"><component :is="f.icon" /></el-icon>
@@ -47,12 +47,12 @@
           </div>
         </div>
 
-        <!-- 最近实验 + 薄弱点 -->
+        <!-- 鏈€杩戝疄楠?+ 钖勫急鐐?-->
         <div class="g-bottom-row">
           <div class="g-card g-card-wide">
             <div class="g-card-head">
-              <span>最近实验</span>
-              <a class="g-link" @click="nav('/student/experiments')">查看全部</a>
+              <span>鏈€杩戝疄楠?/span>
+              <a class="g-link" @click="nav('/student/experiments')">鏌ョ湅鍏ㄩ儴</a>
             </div>
             <div class="g-exp-list">
               <div class="g-exp-item" v-for="e in recentExperiments" :key="e.id"
@@ -62,26 +62,26 @@
                   <div class="g-exp-name">{{ e.name }}</div>
                   <div class="g-exp-meta">
                     <span class="g-exp-tag" :class="'tag-' + e.status">{{ statusLabel(e.status) }}</span>
-                    <span v-if="e.deadline" class="g-exp-date">截止: {{ e.deadline }}</span>
+                    <span v-if="e.deadline" class="g-exp-date">鎴: {{ e.deadline }}</span>
                   </div>
                 </div>
                 <el-icon class="g-exp-arrow"><ArrowRight /></el-icon>
               </div>
-              <div v-if="!recentExperiments.length" class="g-empty-hint">暂无实验数据</div>
+              <div v-if="!recentExperiments.length" class="g-empty-hint">鏆傛棤瀹為獙鏁版嵁</div>
             </div>
           </div>
           <div class="g-card g-card-narrow">
-            <div class="g-card-head"><span>薄弱知识点</span></div>
+            <div class="g-card-head"><span>钖勫急鐭ヨ瘑鐐?/span></div>
             <div v-if="profileData.weaknesses && profileData.weaknesses.length" class="g-weak-list">
               <div v-for="(w, i) in profileData.weaknesses" :key="i" class="g-weak-item">
                 <span class="g-weak-tag">{{ w.dimension }}</span>
                 <span class="g-weak-text">{{ w.experimentName }}</span>
-                <span class="g-weak-score">{{ Math.round(w.mastery) }}分</span>
+                <span class="g-weak-score">{{ Math.round(w.mastery) }}鍒?/span>
               </div>
             </div>
-            <div v-else class="g-empty-hint">暂无数据</div>
+            <div v-else class="g-empty-hint">鏆傛棤鏁版嵁</div>
             <div class="g-weak-action">
-              <button class="g-pill-btn" @click="nav('/student/ability-profile')">查看完整画像</button>
+              <button class="g-pill-btn" @click="nav('/student/ability-profile')">鏌ョ湅瀹屾暣鐢诲儚</button>
             </div>
           </div>
         </div>
@@ -99,8 +99,10 @@ import LoadingState from '../../components/LoadingState.vue'
 import { useExperimentStore } from '../../store'
 import * as echarts from 'echarts'
 import axios from 'axios'
+import { API_BASE_URL } from '../../config/runtime'
+import { getCurrentStudentId } from '../../constants/auth'
 
-const API_BASE = 'http://localhost:8081'
+const API_BASE = API_BASE_URL
 const router = useRouter()
 const experimentStore = useExperimentStore()
 const loading = ref(true)
@@ -112,10 +114,10 @@ let progressChart = null, scoreChart = null
 function nav(path) { router.push(path) }
 
 const features = [
-  { icon: markRaw(Document), title: 'AI 实验报告', desc: '智能生成专业实验报告', path: '/student/ai-report' },
-  { icon: markRaw(DataAnalysis), title: 'AI 学情分析', desc: '精准定位薄弱知识点', path: '/student/learning-analysis' },
-  { icon: markRaw(ChatDotRound), title: 'AI 学习助手', desc: 'AI助手为您解答疑惑', path: '/student/ai-assistant' },
-  { icon: markRaw(TrendCharts), title: '能力画像', desc: '全面了解能力分布', path: '/student/ability-profile' }
+  { icon: markRaw(Document), title: 'AI 瀹為獙鎶ュ憡', desc: '鏅鸿兘鐢熸垚涓撲笟瀹為獙鎶ュ憡', path: '/student/ai-report' },
+  { icon: markRaw(DataAnalysis), title: 'AI 瀛︽儏鍒嗘瀽', desc: '绮惧噯瀹氫綅钖勫急鐭ヨ瘑鐐?, path: '/student/learning-analysis' },
+  { icon: markRaw(ChatDotRound), title: 'AI 瀛︿範鍔╂墜', desc: 'AI鍔╂墜涓烘偍瑙ｇ瓟鐤戞儜', path: '/student/ai-assistant' },
+  { icon: markRaw(TrendCharts), title: '鑳藉姏鐢诲儚', desc: '鍏ㄩ潰浜嗚В鑳藉姏鍒嗗竷', path: '/student/ability-profile' }
 ]
 
 const stats = computed(() => {
@@ -126,16 +128,16 @@ const stats = computed(() => {
 
 const trendHtml = computed(() => {
   const d = profileData.value.trend?.direction
-  if (d === 'up') return '<span style="color:#1e8e3e">↑ 进步</span>'
-  if (d === 'down') return '<span style="color:#d93025">↓ 下降</span>'
-  return '<span style="color:#5f6368">→ 平稳</span>'
+  if (d === 'up') return '<span style="color:#1e8e3e">鈫?杩涙</span>'
+  if (d === 'down') return '<span style="color:#d93025">鈫?涓嬮檷</span>'
+  return '<span style="color:#5f6368">鈫?骞崇ǔ</span>'
 })
 
 const statCards = computed(() => [
-  { label: '实验总数', value: stats.value.total, bg: '#e8f0fe', color: '#1a73e8', icon: markRaw(Notebook), extra: `完成率 ${stats.value.rate}%` },
-  { label: '总提交次数', value: profileData.value.overview?.totalSubmissions || 0, bg: '#e6f4ea', color: '#1e8e3e', icon: markRaw(TrendCharts), extra: `AC率 ${profileData.value.overview?.overallAcRate || 0}%` },
-  { label: '通过次数', value: profileData.value.overview?.totalAc || 0, bg: '#fef7e0', color: '#e37400', icon: markRaw(Finished), extra: trendHtml.value },
-  { label: '推荐练习', value: stats.value.total, bg: '#f3e8fd', color: '#8430ce', icon: markRaw(Collection), extra: null }
+  { label: '瀹為獙鎬绘暟', value: stats.value.total, bg: '#e8f0fe', color: '#1a73e8', icon: markRaw(Notebook), extra: `瀹屾垚鐜?${stats.value.rate}%` },
+  { label: '鎬绘彁浜ゆ鏁?, value: profileData.value.overview?.totalSubmissions || 0, bg: '#e6f4ea', color: '#1e8e3e', icon: markRaw(TrendCharts), extra: `AC鐜?${profileData.value.overview?.overallAcRate || 0}%` },
+  { label: '閫氳繃娆℃暟', value: profileData.value.overview?.totalAc || 0, bg: '#fef7e0', color: '#e37400', icon: markRaw(Finished), extra: trendHtml.value },
+  { label: '鎺ㄨ崘缁冧範', value: stats.value.total, bg: '#f3e8fd', color: '#8430ce', icon: markRaw(Collection), extra: null }
 ])
 
 const recentExperiments = computed(() => {
@@ -143,7 +145,7 @@ const recentExperiments = computed(() => {
   return [...list].sort((a, b) => (b.id || 0) - (a.id || 0)).slice(0, 5)
 })
 
-function statusLabel(s) { return s === 'completed' ? '已完成' : s === 'in_progress' ? '进行中' : '未开始' }
+function statusLabel(s) { return s === 'completed' ? '宸插畬鎴? : s === 'in_progress' ? '杩涜涓? : '鏈紑濮? }
 
 function initProgressChart() {
   if (!progressChartRef.value) return
@@ -158,8 +160,8 @@ function initProgressChart() {
       itemStyle: { borderRadius: 8, borderColor: '#fff', borderWidth: 2 },
       label: { show: true, position: 'inside', formatter: p => p.value > 0 ? p.name : '', fontSize: 11, color: '#fff' },
       data: [
-        { value: completed, name: '已完成', itemStyle: { color: '#1e8e3e' } },
-        { value: list.length - completed, name: '未开始', itemStyle: { color: '#dadce0' } }
+        { value: completed, name: '宸插畬鎴?, itemStyle: { color: '#1e8e3e' } },
+        { value: list.length - completed, name: '鏈紑濮?, itemStyle: { color: '#dadce0' } }
       ]
     }]
   })
@@ -172,7 +174,7 @@ function initScoreChart() {
   if (!series || !series.length) return
   scoreChart = echarts.init(scoreChartRef.value)
   scoreChart.setOption({
-    tooltip: { trigger: 'axis', formatter: params => params[0].name + '<br/>掌握度: ' + params[0].value + '分' },
+    tooltip: { trigger: 'axis', formatter: params => params[0].name + '<br/>鎺屾彙搴? ' + params[0].value + '鍒? },
     grid: { left: 45, right: 16, bottom: 55, top: 16 },
     xAxis: { type: 'category', data: series.map(x => x.name), axisLabel: { rotate: 35, fontSize: 10, color: '#5f6368' }, axisLine: { lineStyle: { color: '#dadce0' } } },
     yAxis: { type: 'value', min: 0, max: 100, splitLine: { lineStyle: { type: 'dashed', color: '#e8eaed' } }, axisLabel: { fontSize: 11, color: '#5f6368' } },
@@ -180,7 +182,7 @@ function initScoreChart() {
       lineStyle: { color: '#1a73e8', width: 2 },
       areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(26,115,232,0.15)' }, { offset: 1, color: 'rgba(26,115,232,0.01)' }]) },
       itemStyle: { color: '#1a73e8', borderColor: '#fff', borderWidth: 2 },
-      markLine: { data: [{ type: 'average', label: { formatter: '均值 {c}', fontSize: 10 } }], lineStyle: { color: '#e37400', type: 'dashed', width: 1 } }
+      markLine: { data: [{ type: 'average', label: { formatter: '鍧囧€?{c}', fontSize: 10 } }], lineStyle: { color: '#e37400', type: 'dashed', width: 1 } }
     }]
   })
 }
@@ -193,9 +195,9 @@ async function loadData() {
       const res = await axios.get(`${API_BASE}/api/profile/me`, { withCredentials: true })
       profileData.value = res.data || res || {}
     } catch {
-      const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
-      if (userInfo.usernum) {
-        const res = await axios.get(`${API_BASE}/api/profile/student/${userInfo.usernum}`, { withCredentials: true })
+      const studentId = getCurrentStudentId()
+      if (studentId) {
+        const res = await axios.get(`${API_BASE}/api/profile/student/${studentId}`, { withCredentials: true })
         profileData.value = res.data || res || {}
       }
     }
@@ -214,7 +216,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', handleResize); prog
 .g-dashboard { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; }
 .g-content { display: flex; flex-direction: column; gap: 20px; }
 
-/* 统计卡片 */
+/* 缁熻鍗＄墖 */
 .g-stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
 .g-stat-card {
   background: #fff; border-radius: 16px; padding: 20px;
@@ -228,7 +230,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', handleResize); prog
 .g-stat-num { font-size: 26px; font-weight: 600; color: #202124; line-height: 1.1; }
 .g-stat-extra { font-size: 12px; color: #5f6368; margin-top: 4px; }
 
-/* 通用卡片 */
+/* 閫氱敤鍗＄墖 */
 .g-card {
   background: #fff; border-radius: 16px; padding: 20px;
   border: 1px solid #dadce0;
@@ -240,12 +242,12 @@ onBeforeUnmount(() => { window.removeEventListener('resize', handleResize); prog
 .g-link { font-size: 13px; color: #1a73e8; cursor: pointer; font-weight: 500; }
 .g-link:hover { text-decoration: underline; }
 
-/* 图表行 */
+/* 鍥捐〃琛?*/
 .g-chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .g-card-half { min-width: 0; }
 .g-chart { height: 280px; width: 100%; }
 
-/* AI功能 */
+/* AI鍔熻兘 */
 .g-feature-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 .g-feature-item {
   display: flex; align-items: center; gap: 12px; padding: 16px;
@@ -257,11 +259,11 @@ onBeforeUnmount(() => { window.removeEventListener('resize', handleResize); prog
 .g-feature-title { font-size: 13px; font-weight: 500; color: #202124; }
 .g-feature-desc { font-size: 11px; color: #5f6368; margin-top: 2px; }
 
-/* 底部行 */
+/* 搴曢儴琛?*/
 .g-bottom-row { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
 .g-card-wide, .g-card-narrow { min-width: 0; }
 
-/* 实验列表 */
+/* 瀹為獙鍒楄〃 */
 .g-exp-list { display: flex; flex-direction: column; }
 .g-exp-item {
   display: flex; align-items: center; gap: 12px; padding: 12px 0;
@@ -283,7 +285,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', handleResize); prog
 .g-exp-date { font-size: 11px; color: #9aa0a6; }
 .g-exp-arrow { color: #9aa0a6; flex-shrink: 0; }
 
-/* 薄弱点 */
+/* 钖勫急鐐?*/
 .g-weak-list { display: flex; flex-direction: column; gap: 10px; }
 .g-weak-item { display: flex; align-items: center; gap: 8px; }
 .g-weak-tag { font-size: 11px; padding: 2px 8px; border-radius: 100px; background: #fce8e6; color: #d93025; white-space: nowrap; }
@@ -299,3 +301,5 @@ onBeforeUnmount(() => { window.removeEventListener('resize', handleResize); prog
 
 .g-empty-hint { text-align: center; padding: 24px 0; font-size: 13px; color: #9aa0a6; }
 </style>
+
+

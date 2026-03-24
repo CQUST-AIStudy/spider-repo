@@ -1,9 +1,9 @@
-<template>
+﻿<template>
   <div class="admin-profile">
     <page-header
         class="my-page-header"
-      title="个人信息"
-      description="查看和编辑您的个人信息"
+      title="涓汉淇℃伅"
+      description="鏌ョ湅鍜岀紪杈戞偍鐨勪釜浜轰俊鎭?
     />
 
     <el-row :gutter="20">
@@ -12,27 +12,27 @@
           <div class="profile-header">
             <el-avatar :size="100" :src="userInfo.avatar" />
             <h3>{{ userInfo.name }}</h3>
-            <p>{{ userInfo.role === 'admin' ? '系统管理员' : '未知角色' }}</p>
+            <p>{{ userInfo.role === 'admin' ? '绯荤粺绠＄悊鍛? : '鏈煡瑙掕壊' }}</p>
           </div>
 
           <div class="profile-info">
             <div class="info-item">
-              <span class="info-label">用户ID</span>
+              <span class="info-label">鐢ㄦ埛ID</span>
               <span class="info-value">{{ userInfo.id }}</span>
             </div>
 
             <div class="info-item">
-              <span class="info-label">部门</span>
+              <span class="info-label">閮ㄩ棬</span>
               <span class="info-value">{{ userInfo.department }}</span>
             </div>
 
             <div class="info-item">
-              <span class="info-label">电子邮箱</span>
+              <span class="info-label">鐢靛瓙閭</span>
               <span class="info-value">{{ userInfo.email }}</span>
             </div>
 
             <div class="info-item">
-              <span class="info-label">联系电话</span>
+              <span class="info-label">鑱旂郴鐢佃瘽</span>
               <span class="info-value">{{ userInfo.phone }}</span>
             </div>
           </div>
@@ -43,30 +43,30 @@
         <el-card class="form-card">
           <template #header>
             <div class="card-header">
-              <span>修改个人信息</span>
+              <span>淇敼涓汉淇℃伅</span>
             </div>
           </template>
 
           <el-form ref="formRef" :model="form" label-width="100px">
-            <el-form-item label="用户名">
+            <el-form-item label="鐢ㄦ埛鍚?>
               <el-input v-model="form.name" />
             </el-form-item>
 
-            <el-form-item label="电子邮箱">
+            <el-form-item label="鐢靛瓙閭">
               <el-input v-model="form.email" />
             </el-form-item>
 
-            <el-form-item label="联系电话">
+            <el-form-item label="鑱旂郴鐢佃瘽">
               <el-input v-model="form.phone" />
             </el-form-item>
 
-            <el-form-item label="部门">
+            <el-form-item label="閮ㄩ棬">
               <el-input v-model="form.department" />
             </el-form-item>
 
             <el-form-item>
-              <el-button type="primary" @click="saveProfile">保存修改</el-button>
-              <el-button @click="resetForm">重置</el-button>
+              <el-button type="primary" @click="saveProfile">淇濆瓨淇敼</el-button>
+              <el-button @click="resetForm">閲嶇疆</el-button>
             </el-form-item>
           </el-form>
         </el-card>
@@ -74,26 +74,26 @@
         <el-card class="form-card">
           <template #header>
             <div class="card-header">
-              <span>修改密码</span>
+              <span>淇敼瀵嗙爜</span>
             </div>
           </template>
 
           <el-form ref="passwordFormRef" :model="passwordForm" label-width="100px">
-            <el-form-item label="当前密码">
+            <el-form-item label="褰撳墠瀵嗙爜">
               <el-input v-model="passwordForm.currentPassword" type="password" show-password />
             </el-form-item>
 
-            <el-form-item label="新密码">
+            <el-form-item label="鏂板瘑鐮?>
               <el-input v-model="passwordForm.newPassword" type="password" show-password />
             </el-form-item>
 
-            <el-form-item label="确认新密码">
+            <el-form-item label="纭鏂板瘑鐮?>
               <el-input v-model="passwordForm.confirmPassword" type="password" show-password />
             </el-form-item>
 
             <el-form-item>
-              <el-button type="primary" @click="changePassword">修改密码</el-button>
-              <el-button @click="resetPasswordForm">重置</el-button>
+              <el-button type="primary" @click="changePassword">淇敼瀵嗙爜</el-button>
+              <el-button @click="resetPasswordForm">閲嶇疆</el-button>
             </el-form-item>
           </el-form>
         </el-card>
@@ -106,34 +106,22 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import PageHeader from '../../components/PageHeader.vue'
+import { getUserInfo, setUserInfo } from '../../constants/auth'
 
-// 获取用户信息
-const userInfo = computed(() => {
-  const userInfoStr = localStorage.getItem('userInfo')
-  try {
-    return userInfoStr ? JSON.parse(userInfoStr) : {
-      name: '管理员',
-      role: 'admin',
-      avatar: '',
-      id: '',
-      department: '',
-      email: '',
-      phone: ''
-    }
-  } catch (error) {
-    return {
-      name: '管理员',
-      role: 'admin',
-      avatar: '',
-      id: '',
-      department: '',
-      email: '',
-      phone: ''
-    }
-  }
-})
+const DEFAULT_ADMIN_USER_INFO = {
+  name: '管理员',
+  role: 'admin',
+  avatar: '',
+  id: '',
+  department: '',
+  email: '',
+  phone: ''
+}
 
-// 表单数据
+// 鑾峰彇鐢ㄦ埛淇℃伅
+const userInfo = computed(() => getUserInfo() || DEFAULT_ADMIN_USER_INFO)
+
+// 琛ㄥ崟鏁版嵁
 const formRef = ref(null)
 const form = reactive({
   name: '',
@@ -142,7 +130,7 @@ const form = reactive({
   department: ''
 })
 
-// 密码表单
+// 瀵嗙爜琛ㄥ崟
 const passwordFormRef = ref(null)
 const passwordForm = reactive({
   currentPassword: '',
@@ -150,12 +138,12 @@ const passwordForm = reactive({
   confirmPassword: ''
 })
 
-// 保存个人信息
+// 淇濆瓨涓汉淇℃伅
 const saveProfile = () => {
-  // 模拟保存操作
-  ElMessage.success('个人信息已更新')
+  // 妯℃嫙淇濆瓨鎿嶄綔
+  ElMessage.success('涓汉淇℃伅宸叉洿鏂?)
 
-  // 更新本地存储的用户信息
+  // 鏇存柊鏈湴瀛樺偍鐨勭敤鎴蜂俊鎭?
   const updatedInfo = {
     ...userInfo.value,
     name: form.name,
@@ -163,10 +151,10 @@ const saveProfile = () => {
     phone: form.phone,
     department: form.department
   }
-  localStorage.setItem('userInfo', JSON.stringify(updatedInfo))
+  setUserInfo(updatedInfo)
 }
 
-// 重置表单
+// 閲嶇疆琛ㄥ崟
 const resetForm = () => {
   form.name = userInfo.value.name
   form.email = userInfo.value.email
@@ -174,38 +162,38 @@ const resetForm = () => {
   form.department = userInfo.value.department
 }
 
-// 修改密码
+// 淇敼瀵嗙爜
 const changePassword = () => {
   if (!passwordForm.currentPassword) {
-    ElMessage.warning('请输入当前密码')
+    ElMessage.warning('璇疯緭鍏ュ綋鍓嶅瘑鐮?)
     return
   }
 
   if (!passwordForm.newPassword) {
-    ElMessage.warning('请输入新密码')
+    ElMessage.warning('璇疯緭鍏ユ柊瀵嗙爜')
     return
   }
 
   if (passwordForm.newPassword !== passwordForm.confirmPassword) {
-    ElMessage.warning('两次输入的新密码不一致')
+    ElMessage.warning('涓ゆ杈撳叆鐨勬柊瀵嗙爜涓嶄竴鑷?)
     return
   }
 
-  // 模拟修改密码操作
-  ElMessage.success('密码已成功修改')
+  // 妯℃嫙淇敼瀵嗙爜鎿嶄綔
+  ElMessage.success('瀵嗙爜宸叉垚鍔熶慨鏀?)
   resetPasswordForm()
 }
 
-// 重置密码表单
+// 閲嶇疆瀵嗙爜琛ㄥ崟
 const resetPasswordForm = () => {
   passwordForm.currentPassword = ''
   passwordForm.newPassword = ''
   passwordForm.confirmPassword = ''
 }
 
-// 初始化表单数据
+// 鍒濆鍖栬〃鍗曟暟鎹?
 onMounted(() => {
-  // 初始化个人信息表单
+  // 鍒濆鍖栦釜浜轰俊鎭〃鍗?
   form.name = userInfo.value.name
   form.email = userInfo.value.email
   form.phone = userInfo.value.phone
@@ -274,3 +262,5 @@ onMounted(() => {
 }
 
 </style>
+
+

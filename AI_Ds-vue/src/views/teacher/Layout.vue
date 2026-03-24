@@ -193,6 +193,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { useUserStore } from '../../store'
+import { clearAuthStorage } from '../../constants/auth'
 import {
   HomeFilled, DocumentChecked, UserFilled, Setting,
   Fold, Expand, FullScreen, DataAnalysis, Notebook, Collection,
@@ -275,8 +276,7 @@ onMounted(() => {
     ElMessageBox.alert('您没有教师权限，请重新登录', '权限错误', {
       confirmButtonText: '确定',
       callback: () => {
-        localStorage.removeItem('token')
-        localStorage.removeItem('userInfo')
+        clearAuthStorage()
         router.push('/login')
       }
     })

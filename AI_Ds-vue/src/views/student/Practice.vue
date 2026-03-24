@@ -38,11 +38,27 @@
                     </div>
                   </div>
 
+                  <div v-if="practice.reason" class="practice-reason">
+                    {{ practice.reason }}
+                  </div>
+
                   <div class="practice-info">
                     <span class="practice-number" v-if="practice.number">题目 {{practice.number}}</span>
                     <el-tag size="small" :type="difficultyType(practice.difficulty)">
                       {{ getDifficultyText(practice.difficulty) }}
                     </el-tag>
+                    <el-tag v-if="practice.estimatedMinutes" size="small" effect="plain" style="margin-left: 8px;">
+                      约 {{ practice.estimatedMinutes }} 分钟
+                    </el-tag>
+                    <el-button
+                      v-if="isTrackableRecommendation(practice)"
+                      text
+                      type="warning"
+                      @click.stop="handleDislike(practice)"
+                      style="margin-left: 10px;"
+                    >
+                      不感兴趣
+                    </el-button>
                     <el-button type="primary" size="small" @click.stop="startProblem(practice)"
                       style="margin-left: 10px;">
                       开始解答
@@ -77,7 +93,22 @@
                     <div v-html="getFormattedDescription(selectedPractice)"></div>
                   </div>
                   <div v-else>
+                    <div v-if="selectedPractice.reason" class="recommendation-reason">
+                      <h4>推荐理由</h4>
+                      <p>{{ selectedPractice.reason }}</p>
+                    </div>
+                    <div v-if="selectedPractice.estimatedMinutes" class="recommendation-meta">
+                      预计用时 {{ selectedPractice.estimatedMinutes }} 分钟
+                    </div>
                     <div class="detail-actions" v-if="canStartPractice(selectedPractice)">
+                      <el-button
+                        v-if="isTrackableRecommendation(selectedPractice)"
+                        type="warning"
+                        plain
+                        @click="handleDislike(selectedPractice)"
+                      >
+                        不感兴趣
+                      </el-button>
                       <el-button type="primary" @click="startProblem(selectedPractice)">开始解答</el-button>
                     </div>
                   </div>
@@ -159,6 +190,8 @@ import LoadingState from '../../components/LoadingState.vue'
 import { useLearningStore } from '../../store'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
+import api from '@/api'
+import { getCurrentStudentId as readCurrentStudentId } from '../../constants/auth'
 
 const router = useRouter()
 const learningStore = useLearningStore()
@@ -167,9 +200,17 @@ const activeTab = ref('recommended')
 const filterDifficulty = ref('')
 const selectedPractice = ref(null)
 const currentPage = ref(1)
-
 const pageSize = ref(10)
 const detailDialogVisible = ref(false)
+const completedProblemIds = ref([])
+const dismissedProblemIds = ref([])
+const sentFeedbackKeys = ref([])
+const recommendationSessionId = ref('')
+
+const COMPLETED_STORAGE_KEY = 'leetcode_completed_problem_ids'
+const SESSION_STORAGE_KEY = 'leetcode_recommendation_session_id'
+
+const recommendationRequestId = computed(() => learningStore.recommendedPractices?.requestId || null)
 
 // 所有练习题目
 const practices = computed(() => {
@@ -195,6 +236,8 @@ const filteredPractices = computed(() => {
   }
 
   let result = [...practices.value]
+
+  result = result.filter(practice => !dismissedProblemIds.value.includes(getPracticeProblemId(practice)))
 
   // 根据标签筛选
   if (activeTab.value === 'recommended') {
@@ -222,9 +265,12 @@ const currentPagePractices = computed(() => {
 })
 
 // 从列表中选择练习题目
-const selectPractice = (practice) => {
+const selectPractice = (practice, options = {}) => {
   if (!practice) return
   selectedPractice.value = practice
+  if (options.trackClick !== false) {
+    void recordRecommendationFeedback(practice, 'click')
+  }
 }
 
 const canStartPractice = (practice) => {
@@ -243,10 +289,19 @@ const startProblem = (practice) => {
   if (!currentPractice) return
 
   detailDialogVisible.value = false
+  void recordRecommendationFeedback(currentPractice, 'start')
 
   // 跳转到内置的LeetCode练习页面
   if (currentPractice.type === 'leetcode_problem' || currentPractice.source === 'leetcode_recommendation') {
-    router.push(`/student/leetcode-practice/${currentPractice.id || currentPractice.problemId}`)
+    router.push({
+      path: `/student/leetcode-practice/${currentPractice.id || currentPractice.problemId}`,
+      query: isTrackableRecommendation(currentPractice)
+        ? {
+            recommendationRequestId: currentPractice.requestId || recommendationRequestId.value,
+            recommendationSessionId: recommendationSessionId.value
+          }
+        : undefined
+    })
   } else {
     // 对于其他类型的题目，如果有URL则外部跳转
     const externalUrl = currentPractice.url
@@ -263,9 +318,110 @@ const startProblem = (practice) => {
   })
 }
 
+const getCurrentStudentId = () => {
+  return readCurrentStudentId()
+}
+
+const getPracticeProblemId = (practice) => {
+  const candidate = practice?.problemId ?? practice?.id ?? practice?.number
+  const parsed = Number(candidate)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+const isTrackableRecommendation = (practice) => {
+  return practice?.source === 'leetcode_recommendation' &&
+    !!(practice?.requestId || recommendationRequestId.value) &&
+    !!getPracticeProblemId(practice)
+}
+
+const ensureRecommendationSessionId = () => {
+  const existing = sessionStorage.getItem(SESSION_STORAGE_KEY)
+  if (existing) {
+    recommendationSessionId.value = existing
+    return existing
+  }
+  const sessionId = `rec_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+  sessionStorage.setItem(SESSION_STORAGE_KEY, sessionId)
+  recommendationSessionId.value = sessionId
+  return sessionId
+}
+
+const loadCompletedProblemIds = () => {
+  try {
+    const raw = sessionStorage.getItem(COMPLETED_STORAGE_KEY)
+    const ids = raw ? JSON.parse(raw) : []
+    completedProblemIds.value = Array.isArray(ids) ? ids.map(item => Number(item)).filter(Number.isFinite) : []
+  } catch {
+    completedProblemIds.value = []
+  }
+}
+
+const buildFeedbackKey = (practice, action) => {
+  return [
+    practice?.requestId || recommendationRequestId.value || 'no_request',
+    recommendationSessionId.value || ensureRecommendationSessionId(),
+    getPracticeProblemId(practice) || 'no_problem',
+    action
+  ].join(':')
+}
+
+const recordRecommendationFeedback = async (practice, action) => {
+  if (!isTrackableRecommendation(practice)) return false
+
+  const feedbackKey = buildFeedbackKey(practice, action)
+  if (sentFeedbackKeys.value.includes(feedbackKey)) {
+    return true
+  }
+
+  const studentId = getCurrentStudentId()
+  const problemId = getPracticeProblemId(practice)
+  if (!studentId || !problemId) return false
+
+  try {
+    await api.recordLeetCodeRecommendationFeedback({
+      requestId: practice.requestId || recommendationRequestId.value,
+      studentId,
+      problemId,
+      action,
+      sessionId: ensureRecommendationSessionId()
+    })
+    sentFeedbackKeys.value = [...sentFeedbackKeys.value, feedbackKey]
+    return true
+  } catch (error) {
+    console.warn('记录推荐反馈失败:', action, problemId, error)
+    return false
+  }
+}
+
+const trackVisiblePracticeExposure = async () => {
+  for (const practice of currentPagePractices.value) {
+    await recordRecommendationFeedback(practice, 'exposure')
+  }
+}
+
+const markPracticeAsDismissed = (practice) => {
+  const problemId = getPracticeProblemId(practice)
+  if (!problemId || dismissedProblemIds.value.includes(problemId)) return
+  dismissedProblemIds.value = [...dismissedProblemIds.value, problemId]
+
+  const remaining = filteredPractices.value.filter(item => getPracticeProblemId(item) !== problemId)
+  if (selectedPractice.value && getPracticeProblemId(selectedPractice.value) === problemId) {
+    selectedPractice.value = remaining[0] || null
+  }
+}
+
+const handleDislike = async (practice) => {
+  const ok = await recordRecommendationFeedback(practice, 'dislike')
+  if (ok) {
+    markPracticeAsDismissed(practice)
+    ElMessage.success('已降低该题后续推荐优先级')
+  }
+}
+
 // 处理分页和显示当前页内容
 const handlePageChange = (page) => {
   currentPage.value = page
+  void trackVisiblePracticeExposure()
 }
 
 // 获取难度对应的样式类型
@@ -371,7 +527,10 @@ const getFormattedDescription = (practice) => {
 
 // 统计数据
 const completedCount = computed(() => {
-  return 0 // 这里应该是从数据中获取的完成题目数量
+  const currentIds = practices.value
+    .map(item => getPracticeProblemId(item))
+    .filter(Number.isFinite)
+  return completedProblemIds.value.filter(id => currentIds.includes(id)).length
 })
 
 const pendingCount = computed(() => {
@@ -390,16 +549,20 @@ watch([activeTab, filterDifficulty], () => {
 
   // 如果有筛选后的数据，选择第一个
   if (filteredPractices.value.length > 0) {
-    selectPractice(filteredPractices.value[0])
+    selectPractice(filteredPractices.value[0], { trackClick: false })
   } else {
     selectedPractice.value = null
   }
+  void trackVisiblePracticeExposure()
 })
 
 // 初始化组件
 onMounted(async () => {
   loading.value = true
   try {
+    ensureRecommendationSessionId()
+    loadCompletedProblemIds()
+
     // 确保分析数据已加载
     if (!learningStore.analysisData) {
       await learningStore.fetchLearningAnalysis()
@@ -410,8 +573,9 @@ onMounted(async () => {
 
     // 如果有练习数据，默认选中第一个
     if (filteredPractices.value.length > 0) {
-      selectPractice(filteredPractices.value[0])
+      selectPractice(filteredPractices.value[0], { trackClick: false })
     }
+    await trackVisiblePracticeExposure()
 
   } catch (error) {
     console.error('加载推荐练习失败:', error)
@@ -471,6 +635,12 @@ onMounted(async () => {
   gap: 10px;
 }
 
+.practice-reason {
+  color: #5f6368;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .practice-title {
   display: flex;
   justify-content: space-between;
@@ -513,6 +683,31 @@ onMounted(async () => {
 
 .detail-card {
   margin-bottom: 15px;
+}
+
+.recommendation-reason {
+  margin-bottom: 12px;
+  padding: 12px;
+  border-radius: 8px;
+  background: #f7faff;
+  border-left: 4px solid #1a73e8;
+}
+
+.recommendation-reason h4 {
+  margin: 0 0 8px;
+  color: #1a73e8;
+}
+
+.recommendation-reason p {
+  margin: 0;
+  color: #3c4043;
+  line-height: 1.6;
+}
+
+.recommendation-meta {
+  margin-bottom: 12px;
+  color: #5f6368;
+  font-size: 13px;
 }
 
 .detail-header {

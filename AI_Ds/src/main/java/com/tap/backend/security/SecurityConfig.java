@@ -1,10 +1,12 @@
 package com.tap.backend.security;
 
 import com.tap.backend.domain.user.UserRole;
+import jakarta.servlet.http.HttpServletResponse;
 import java.util.List;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -19,6 +21,25 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 @Configuration
 @EnableMethodSecurity
 public class SecurityConfig {
+  private static final String[] TAP_API_MATCHERS = {
+      "/api/auth/**",
+      "/api/documents/**",
+      "/api/uploads/**",
+      "/api/papers/**",
+      "/api/tap-chat",
+      "/api/agent/**",
+      "/api/admin/**",
+      "/api/hello",
+      "/actuator/**",
+      "/api/course-spaces/**",
+      "/api/annotations/**",
+      "/api/classes/**",
+      "/api/grading/**",
+      "/api/rag/**",
+      "/api/pta-cookie/**",
+      "/api/analytics/**"
+  };
+
   @Bean
   public PasswordEncoder passwordEncoder() {
     return new BCryptPasswordEncoder();
@@ -32,29 +53,30 @@ public class SecurityConfig {
   @Bean
   @Order(1)
   public SecurityFilterChain tapSecurityFilterChain(HttpSecurity http, JwtAuthFilter jwtAuthFilter) throws Exception {
-    http.securityMatcher(
-        "/api/auth/**", "/api/documents/**", "/api/uploads/**", "/api/papers/**",
-        "/api/tap-chat", "/api/agent/**", "/api/admin/**", "/api/hello", "/actuator/**",
-        "/api/course-spaces/**", "/api/annotations/**", "/api/classes/**",
-        "/api/grading/**", "/api/rag/**", "/api/pta-cookie/**"
-    );
+    http.securityMatcher(TAP_API_MATCHERS);
     http.csrf(csrf -> csrf.disable());
     http.cors(cors -> {});
     http.sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
+    http.exceptionHandling(ex -> ex.authenticationEntryPoint((request, response, authException) -> {
+      response.sendError(HttpServletResponse.SC_UNAUTHORIZED);
+    }));
     http.authorizeHttpRequests(auth -> auth
         .requestMatchers("/actuator/health", "/api/auth/login").permitAll()
         .requestMatchers("/api/admin/**").hasRole(UserRole.ADMIN.name())
-        .requestMatchers("/api/classes/**").permitAll()
-        .requestMatchers("/api/pta-cookie/**").permitAll()
+        .requestMatchers("/api/documents/**").authenticated()
+        .requestMatchers("/api/uploads/**").authenticated()
+        .requestMatchers("/api/papers/**").authenticated()
+        .requestMatchers("/api/tap-chat").authenticated()
+        .requestMatchers("/api/agent/**").authenticated()
+        .requestMatchers("/api/course-spaces/**").authenticated()
+        .requestMatchers("/api/annotations/**").authenticated()
+        .requestMatchers(HttpMethod.POST, "/api/classes/join").permitAll()
+        .requestMatchers(HttpMethod.PUT, "/api/classes/*/pta-sync/callback").permitAll()
+        .requestMatchers(HttpMethod.PUT, "/api/pta-cookie/status").permitAll()
+        .requestMatchers("/api/pta-cookie/**").authenticated()
         .requestMatchers("/api/grading/**").permitAll()
         .requestMatchers("/api/rag/**").permitAll()
-        .requestMatchers("/api/documents/**").permitAll()
-        .requestMatchers("/api/uploads/**").permitAll()
-        .requestMatchers("/api/papers/**").permitAll()
-        .requestMatchers("/api/tap-chat").permitAll()
-        .requestMatchers("/api/agent/**").permitAll()
-        .requestMatchers("/api/course-spaces/**").permitAll()
-        .requestMatchers("/api/annotations/**").permitAll()
+        .requestMatchers("/api/classes/**").authenticated()
         .requestMatchers("/api/analytics/**").permitAll()
         .anyRequest().authenticated()
     );

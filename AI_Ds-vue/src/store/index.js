@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import api from '../api'
+import { clearAuthStorage, setSessionToken, setUserInfo } from '../constants/auth'
 
 // 用户状态
 export const useUserStore = defineStore('user', {
@@ -32,8 +33,8 @@ export const useUserStore = defineStore('user', {
             this.token = res.token || ('session_token_' + new Date().getTime());
             
             // 同步写 localStorage（路由守卫兼容）
-            localStorage.setItem('token', this.token)
-            localStorage.setItem('userInfo', JSON.stringify(this.userInfo))
+            setSessionToken(this.token)
+            setUserInfo(this.userInfo)
             
             // 同步获取 TAP JWT token（教辅模块需要）
             try {
@@ -66,10 +67,7 @@ export const useUserStore = defineStore('user', {
       this.selectedClass = null
       
       try {
-        localStorage.removeItem('token')
-        localStorage.removeItem('userInfo')
-        localStorage.removeItem('tap_token')
-        localStorage.removeItem('tap_user')
+        clearAuthStorage()
       } catch (e) {
         console.error('清除登录信息失败:', e)
       }
