@@ -15,6 +15,7 @@ $env:ARK_API_KEY = ""
 # $env:START_LEGACY_TAP_BACKEND = "true"
 
 # Optional local service credentials
+# $env:DB_USERNAME = "root"
 # $env:DB_PASSWORD = "123456"
 # $env:DB_PASS = "123456"
 # $env:MINIO_SECRET_KEY = "minioadmin"

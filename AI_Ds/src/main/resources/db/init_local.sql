@@ -173,8 +173,8 @@ CREATE TABLE IF NOT EXISTS `profile_ai_feedback` (
 
 -- ========== 测试数据 ==========
 INSERT IGNORE INTO `user` (`username`, `password`, `email`, `role`, `usernum`, `classname`) VALUES
-('teacher1', 'password123', 'teacher1@example.com', 'teacher', 'T001', '计科23'),
-('admin1', 'password123', 'admin1@example.com', 'admin', 'A001', NULL);
+('teacher1', '$2a$10$RiIfr7fwVhHVxLwmwK5dnOtDWiEdXtaGatoGeRf9qWjVHckXpNPJe', 'teacher1@example.com', 'teacher', 'T001', '计科23'),
+('admin1', '$2a$10$RiIfr7fwVhHVxLwmwK5dnOtDWiEdXtaGatoGeRf9qWjVHckXpNPJe', 'admin1@example.com', 'admin', 'A001', NULL);
 
 INSERT IGNORE INTO `teacher` (`teacher_name`, `username`, `classroom`) VALUES
 ('张老师', 'teacher1', '计科23');

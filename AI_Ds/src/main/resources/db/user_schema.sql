@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS `user` (
 
 -- 插入测试用户数据
 INSERT INTO `user` (`username`, `password`, `email`, `role`, `usernum`, `classname`) VALUES
-('student1', 'password123', 'student1@example.com', 'student', '2023001', '计算机科学1班'),
-('student2', 'password123', 'student2@example.com', 'student', '2023002', '计算机科学1班'),
-('teacher1', 'password123', 'teacher1@example.com', 'teacher', 'T001', NULL),
-('admin1', 'password123', 'admin1@example.com', 'admin', 'A001', NULL);
+('student1', '$2a$10$RiIfr7fwVhHVxLwmwK5dnOtDWiEdXtaGatoGeRf9qWjVHckXpNPJe', 'student1@example.com', 'student', '2023001', '计算机科学1班'),
+('student2', '$2a$10$RiIfr7fwVhHVxLwmwK5dnOtDWiEdXtaGatoGeRf9qWjVHckXpNPJe', 'student2@example.com', 'student', '2023002', '计算机科学1班'),
+('teacher1', '$2a$10$RiIfr7fwVhHVxLwmwK5dnOtDWiEdXtaGatoGeRf9qWjVHckXpNPJe', 'teacher1@example.com', 'teacher', 'T001', NULL),
+('admin1', '$2a$10$RiIfr7fwVhHVxLwmwK5dnOtDWiEdXtaGatoGeRf9qWjVHckXpNPJe', 'admin1@example.com', 'admin', 'A001', NULL);
