@@ -9,6 +9,7 @@ import java.util.HashMap;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -23,6 +24,9 @@ public class LoginController {
 
     @Autowired
     private LegacySessionAccessResolver legacySessionAccessResolver;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
 
     @GetMapping("/api/user/{username}")
     public ResponseEntity<Map<String, Object>> findUserByUsername(
@@ -60,11 +64,13 @@ public class LoginController {
                 return ResponseEntity.ok(response);
             }
 
-            if (!loginUser.getPassword().equals(user.getPassword())) {
+            if (!passwordMatches(loginUser.getPassword(), user.getPassword())) {
                 response.put("success", false);
                 response.put("message", "invalid password");
                 return ResponseEntity.ok(response);
             }
+
+            upgradePasswordIfNeeded(user, loginUser.getPassword());
 
             HttpSession session = request.getSession(true);
             session.setAttribute("currentUser", user);
@@ -112,7 +118,7 @@ public class LoginController {
 
             UserEntity user = new UserEntity();
             user.setUsername(username);
-            user.setPassword(password);
+            user.setPassword(passwordEncoder.encode(password));
             user.setRole("student");
             user.setUsernum(usernum);
             user.setClassname(classname);
@@ -182,13 +188,13 @@ public class LoginController {
                 return ResponseEntity.ok(response);
             }
 
-            if (!oldPassword.equals(user.getPassword())) {
+            if (!passwordMatches(oldPassword, user.getPassword())) {
                 response.put("success", false);
                 response.put("message", "invalid current password");
                 return ResponseEntity.ok(response);
             }
 
-            user.setPassword(newPassword);
+            user.setPassword(passwordEncoder.encode(newPassword));
             boolean updated = userService.updateUser(user);
             if (updated) {
                 response.put("success", true);
@@ -207,6 +213,28 @@ public class LoginController {
 
     private boolean isBlank(String value) {
         return value == null || value.isBlank();
+    }
+
+    private boolean passwordMatches(String rawPassword, String storedPassword) {
+        if (isBlank(rawPassword) || isBlank(storedPassword)) {
+            return false;
+        }
+        if (isEncodedPassword(storedPassword)) {
+            return passwordEncoder.matches(rawPassword, storedPassword);
+        }
+        return rawPassword.equals(storedPassword);
+    }
+
+    private void upgradePasswordIfNeeded(UserEntity user, String rawPassword) {
+        if (user == null || isBlank(rawPassword) || isEncodedPassword(user.getPassword())) {
+            return;
+        }
+        user.setPassword(passwordEncoder.encode(rawPassword));
+        userService.updateUser(user);
+    }
+
+    private boolean isEncodedPassword(String password) {
+        return password != null && password.startsWith("$2");
     }
 
     private Map<String, Object> toUserInfo(UserEntity user) {
