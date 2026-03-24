@@ -179,7 +179,8 @@ const sendMessage = async () => {
     const response = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      ...(isRagMode ? {} : { credentials: 'include' })
     })
 
     if (!response.ok) {
