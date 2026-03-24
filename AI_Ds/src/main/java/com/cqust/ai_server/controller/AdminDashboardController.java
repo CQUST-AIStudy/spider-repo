@@ -1,8 +1,8 @@
 package com.cqust.ai_server.controller;
 
+import com.cqust.ai_server.security.LegacySessionAccessResolver;
 import com.tap.backend.service.AdminDashboardService;
 import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpSession;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
@@ -13,15 +13,20 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @RequestMapping("/api/admin-dashboard")
 public class AdminDashboardController {
 
   private final AdminDashboardService adminDashboardService;
+  private final LegacySessionAccessResolver legacySessionAccessResolver;
 
-  public AdminDashboardController(AdminDashboardService adminDashboardService) {
+  public AdminDashboardController(
+      AdminDashboardService adminDashboardService,
+      LegacySessionAccessResolver legacySessionAccessResolver) {
     this.adminDashboardService = adminDashboardService;
+    this.legacySessionAccessResolver = legacySessionAccessResolver;
   }
 
   record SyncRequest(String mode, Boolean force) {}
@@ -51,15 +56,18 @@ public class AdminDashboardController {
   }
 
   private ResponseEntity<Map<String, Object>> ensureAdmin(HttpServletRequest request) {
-    HttpSession session = request.getSession(false);
-    if (session == null) {
-      return error(HttpStatus.UNAUTHORIZED, "未登录或会话已失效");
+    try {
+      legacySessionAccessResolver.requireAdmin(request);
+      return null;
+    } catch (ResponseStatusException e) {
+      if (e.getStatusCode() == HttpStatus.UNAUTHORIZED) {
+        return error(HttpStatus.UNAUTHORIZED, "authentication required");
+      }
+      if (e.getStatusCode() == HttpStatus.FORBIDDEN) {
+        return error(HttpStatus.FORBIDDEN, "admin role required");
+      }
+      return error(HttpStatus.BAD_REQUEST, e.getReason() == null ? "admin access failed" : e.getReason());
     }
-    Object role = session.getAttribute("userRole");
-    if (role == null || !"admin".equalsIgnoreCase(String.valueOf(role))) {
-      return error(HttpStatus.FORBIDDEN, "仅管理员可访问该接口");
-    }
-    return null;
   }
 
   private ResponseEntity<Map<String, Object>> error(HttpStatus status, String message) {

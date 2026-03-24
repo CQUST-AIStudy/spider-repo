@@ -76,6 +76,15 @@ public class LegacySessionAccessResolver {
         return user;
     }
 
+    public UserEntity requireAdmin(HttpServletRequest request) {
+        UserEntity user = requireAuthenticated(request);
+        String role = normalize(user.getRole());
+        if (!"admin".equals(role)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "admin role required");
+        }
+        return user;
+    }
+
     private String normalize(String value) {
         if (value == null) {
             return null;
