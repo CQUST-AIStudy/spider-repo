@@ -2,7 +2,9 @@ package com.cqust.ai_server.controller;
 
 import com.cqust.ai_server.entity.AIRemarks;
 import com.cqust.ai_server.entity.Student;
+import com.cqust.ai_server.entity.UserEntity;
 import com.cqust.ai_server.security.LegacySessionAccessResolver;
+import com.cqust.ai_server.security.TeacherSessionResolver;
 import com.cqust.ai_server.service.AIRemarksService;
 import com.cqust.ai_server.service.StudentService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -37,6 +39,9 @@ public class StudentController {
 
     @Autowired
     private LegacySessionAccessResolver legacySessionAccessResolver;
+
+    @Autowired
+    private TeacherSessionResolver teacherSessionResolver;
 
     @GetMapping("students/id/{username}")
     public ResponseEntity<Map<String, Object>> findStudentIdByUsername(
@@ -136,8 +141,30 @@ public class StudentController {
 
     @GetMapping("/students")
     public ResponseEntity<Map<String, Object>> getAllStudents(HttpServletRequest request) {
-        legacySessionAccessResolver.requireTeacherOrAdmin(request);
-        return getAllStudents();
+        UserEntity user = legacySessionAccessResolver.requireTeacherOrAdmin(request);
+        if ("admin".equals(normalize(user.getRole()))) {
+            return getAllStudents();
+        }
+
+        Map<String, Object> response = new HashMap<>();
+        try {
+            Integer teacherId = teacherSessionResolver.requireCurrentTeacher(request).getTeacher_id();
+            List<Student> students = studentService.getStudentsByTeacherId(teacherId);
+            if (students != null && !students.isEmpty()) {
+                response.put("success", true);
+                response.put("students", sanitizeStudents(students));
+                return ResponseEntity.ok(response);
+            }
+
+            response.put("success", false);
+            response.put("message", "students not found");
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            logger.error("query scoped students failed", e);
+            response.put("success", false);
+            response.put("message", "failed to query students: " + e.getMessage());
+            return ResponseEntity.ok(response);
+        }
     }
 
     public ResponseEntity<Map<String, Object>> getAllStudents() {
@@ -286,5 +313,13 @@ public class StudentController {
         sanitized.setClass_name(student.getClass_name());
         sanitized.setCreatedAt(student.getCreatedAt());
         return sanitized;
+    }
+
+    private String normalize(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 }
