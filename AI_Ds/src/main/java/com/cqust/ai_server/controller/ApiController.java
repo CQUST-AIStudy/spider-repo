@@ -925,22 +925,9 @@ public class ApiController {
     @GetMapping("/api/student/learning-analysis")
     public ResponseEntity<?> getLearningAnalysis(HttpServletRequest request) {
         try {
-            HttpSession session = request.getSession(false);
-            String username = studentSessionResolver.requireStudentId(request);
-            if (username == null) {
-                return ResponseEntity.ok(Map.of("success", false, "message", "用户未登录"));
-            }
-            // 通过username查找studentId
-            StudentController studentController = applicationContext.getBean(StudentController.class);
-            ResponseEntity<Map<String, Object>> sidResp = ResponseEntity.ok(Map.of("success", true, "studentId", username));
-            Map<String, Object> sidData = sidResp.getBody();
-            String studentId = null;
-            if (sidData != null && Boolean.TRUE.equals(sidData.get("success"))) {
-                Object sid = sidData.get("studentId");
-                studentId = sid != null ? String.valueOf(sid) : null;
-            }
+            String studentId = studentSessionResolver.requireStudentId(request);
             if (studentId == null) {
-                return ResponseEntity.ok(Map.of("success", false, "message", "未找到学生信息"));
+                return ResponseEntity.ok(Map.of("success", false, "message", "用户未登录"));
             }
             Map<String, Object> profile = profileService.getStudentProfile(studentId);
             if (profile.containsKey("error")) {
@@ -964,27 +951,14 @@ public class ApiController {
 
         Map<String, Object> response = new HashMap<>();
         try {
-            HttpSession session = request.getSession(false);
-            String currentUsername = studentSessionResolver.requireStudentId(request);
-            if (currentUsername == null) {
+            String currentStudentId = studentSessionResolver.requireStudentId(request);
+            if (currentStudentId == null) {
                 response.put("success", false);
                 response.put("message", "用户未登录");
                 return ResponseEntity.ok(response);
             }
 
-            // 获取studentId
-            StudentController studentController = applicationContext.getBean(StudentController.class);
-            ResponseEntity<Map<String, Object>> sidResp = ResponseEntity.ok(Map.of("success", true, "studentId", Integer.valueOf(currentUsername)));
-            Map<String, Object> sidData = sidResp.getBody();
-            Integer studentId = null;
-            if (sidData != null && Boolean.TRUE.equals(sidData.get("success"))) {
-                studentId = (Integer) sidData.get("studentId");
-            }
-            if (studentId == null) {
-                response.put("success", false);
-                response.put("message", "未找到学生信息");
-                return ResponseEntity.ok(response);
-            }
+            Integer studentId = Integer.valueOf(currentStudentId);
 
             // 如果不是强制刷新，先查DB缓存
             if (!force) {
