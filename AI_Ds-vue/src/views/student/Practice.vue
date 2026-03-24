@@ -373,14 +373,12 @@ const recordRecommendationFeedback = async (practice, action) => {
     return true
   }
 
-  const studentId = getCurrentStudentId()
   const problemId = getPracticeProblemId(practice)
-  if (!studentId || !problemId) return false
+  if (!problemId) return false
 
   try {
     await api.recordLeetCodeRecommendationFeedback({
       requestId: practice.requestId || recommendationRequestId.value,
-      studentId,
       problemId,
       action,
       sessionId: ensureRecommendationSessionId()

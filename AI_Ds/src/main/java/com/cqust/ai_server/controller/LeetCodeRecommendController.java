@@ -1,26 +1,39 @@
 package com.cqust.ai_server.controller;
 
-import com.cqust.ai_server.entity.LeetCodeRecommendRequest;
 import com.cqust.ai_server.entity.LeetCodeRecommendItem;
+import com.cqust.ai_server.entity.LeetCodeRecommendRequest;
+import com.cqust.ai_server.entity.UserEntity;
+import com.cqust.ai_server.security.LegacySessionAccessResolver;
+import com.cqust.ai_server.security.StudentSessionResolver;
 import com.cqust.ai_server.service.LeetCodeRecommendationService;
 import com.cqust.ai_server.service.LeetCodeSyncService;
+import jakarta.servlet.http.HttpServletRequest;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.CrossOrigin;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
-/**
- * LeetCode推荐系统API控制器
- */
 @RestController
 @RequestMapping("/api/recommendations/leetcode")
-@CrossOrigin(origins = "*")
+@CrossOrigin(
+        origins = {"http://localhost:8080", "http://127.0.0.1:8080", "http://localhost:5173", "http://127.0.0.1:5173"},
+        allowCredentials = "true",
+        allowedHeaders = "*"
+)
 public class LeetCodeRecommendController {
 
     private static final Logger logger = LoggerFactory.getLogger(LeetCodeRecommendController.class);
@@ -32,205 +45,228 @@ public class LeetCodeRecommendController {
     @Autowired
     private LeetCodeSyncService syncService;
 
-    /**
-     * 生成推荐请求
-     * TODO: 从JWT token中获取学生ID，而不是从参数获取
-     */
+    @Autowired
+    private StudentSessionResolver studentSessionResolver;
+
+    @Autowired
+    private LegacySessionAccessResolver legacySessionAccessResolver;
+
     @PostMapping("/generate")
     public ResponseEntity<Map<String, Object>> generateRecommendation(
             @RequestParam(defaultValue = "20") Integer limit,
             @RequestParam(defaultValue = "default") String scene,
-            @RequestParam Integer studentId) { // 临时从参数获取，生产环境应从JWT获取
-        
+            @RequestParam(required = false) Integer studentId,
+            HttpServletRequest request
+    ) {
         try {
-            logger.info("收到推荐生成请求: studentId={}, limit={}, scene={}", studentId, limit, scene);
-            
-            String requestId = recommendationService.generateRecommendation(studentId, limit, scene);
-            
+            Integer currentStudentId = requireCurrentStudentId(studentId, request);
+            logger.info("Generate recommendation request received. studentId={}, limit={}, scene={}",
+                    currentStudentId, limit, scene);
+
+            String requestId = recommendationService.generateRecommendation(currentStudentId, limit, scene);
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("requestId", requestId);
             response.put("status", "pending");
-            response.put("message", "推荐请求已提交");
-            
+            response.put("message", "recommendation request accepted");
             return ResponseEntity.ok(response);
-            
+        } catch (ResponseStatusException e) {
+            return error(e.getStatusCode(), e.getReason());
         } catch (Exception e) {
-            logger.error("生成推荐请求失败", e);
-            
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", false);
-            response.put("message", "生成推荐失败: " + e.getMessage());
-            
-            return ResponseEntity.status(500).body(response);
+            logger.error("Failed to generate recommendation", e);
+            return error(HttpStatus.INTERNAL_SERVER_ERROR, "failed to generate recommendation: " + e.getMessage());
         }
     }
 
-    /**
-     * 查询推荐结果
-     */
     @GetMapping("/result/{requestId}")
-    public ResponseEntity<Map<String, Object>> getRecommendationResult(@PathVariable String requestId) {
+    public ResponseEntity<Map<String, Object>> getRecommendationResult(
+            @PathVariable String requestId,
+            HttpServletRequest request
+    ) {
         try {
-            logger.info("查询推荐结果: requestId={}", requestId);
-            
-            LeetCodeRecommendRequest request = recommendationService.getRecommendationResult(requestId);
-            if (request == null) {
-                Map<String, Object> response = new HashMap<>();
-                response.put("success", false);
-                response.put("message", "推荐请求不存在");
-                return ResponseEntity.status(404).body(response);
+            logger.info("Load recommendation result. requestId={}", requestId);
+            LeetCodeRecommendRequest recommendationRequest = recommendationService.getRecommendationResult(requestId);
+            if (recommendationRequest == null) {
+                return error(HttpStatus.NOT_FOUND, "recommendation request not found");
             }
-            
+
+            authorizeRecommendationAccess(recommendationRequest.getStudentId(), request);
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
-            response.put("requestId", request.getRequestId());
-            response.put("status", request.getStatus());
-            response.put("studentId", request.getStudentId());
-            response.put("scene", request.getScene());
-            response.put("requestLimit", request.getRequestLimit());
-            response.put("createdAt", request.getCreatedAt());
-            response.put("finishedAt", request.getFinishedAt());
-            
-            if (request.isCompleted()) {
+            response.put("requestId", recommendationRequest.getRequestId());
+            response.put("status", recommendationRequest.getStatus());
+            response.put("studentId", recommendationRequest.getStudentId());
+            response.put("scene", recommendationRequest.getScene());
+            response.put("requestLimit", recommendationRequest.getRequestLimit());
+            response.put("createdAt", recommendationRequest.getCreatedAt());
+            response.put("finishedAt", recommendationRequest.getFinishedAt());
+
+            if (recommendationRequest.isCompleted()) {
                 List<LeetCodeRecommendItem> items = recommendationService.getRecommendationItems(requestId);
                 response.put("items", items);
                 response.put("itemCount", items.size());
-            } else if (request.isFailed()) {
-                response.put("errorMessage", request.getErrorMessage());
+            } else if (recommendationRequest.isFailed()) {
+                response.put("errorMessage", recommendationRequest.getErrorMessage());
             }
-            
+
             return ResponseEntity.ok(response);
-            
+        } catch (ResponseStatusException e) {
+            return error(e.getStatusCode(), e.getReason());
         } catch (Exception e) {
-            logger.error("查询推荐结果失败", e);
-            
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", false);
-            response.put("message", "查询推荐结果失败: " + e.getMessage());
-            
-            return ResponseEntity.status(500).body(response);
+            logger.error("Failed to load recommendation result", e);
+            return error(HttpStatus.INTERNAL_SERVER_ERROR, "failed to load recommendation result: " + e.getMessage());
         }
     }
-    /**
-     * 同步生成推荐（兼容旧接口）
-     */
+
     @GetMapping("/sync")
     public ResponseEntity<Map<String, Object>> generateRecommendationSync(
-            @RequestParam Integer studentId,
-            @RequestParam(defaultValue = "20") Integer limit) {
-        
+            @RequestParam(defaultValue = "20") Integer limit,
+            @RequestParam(required = false) Integer studentId,
+            HttpServletRequest request
+    ) {
         try {
-            logger.info("收到同步推荐请求: studentId={}, limit={}", studentId, limit);
-            
-            List<LeetCodeRecommendItem> items = recommendationService.generateRecommendationSync(studentId, limit);
-            
+            Integer currentStudentId = requireCurrentStudentId(studentId, request);
+            logger.info("Generate sync recommendation request received. studentId={}, limit={}",
+                    currentStudentId, limit);
+
+            List<LeetCodeRecommendItem> items = recommendationService.generateRecommendationSync(currentStudentId, limit);
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("items", items);
             response.put("itemCount", items.size());
-            response.put("message", "推荐生成成功");
-            
+            response.put("message", "recommendation generated");
             return ResponseEntity.ok(response);
-            
+        } catch (ResponseStatusException e) {
+            return error(e.getStatusCode(), e.getReason());
         } catch (Exception e) {
-            logger.error("同步生成推荐失败", e);
-            
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", false);
-            response.put("message", "生成推荐失败: " + e.getMessage());
-            
-            return ResponseEntity.status(500).body(response);
+            logger.error("Failed to generate sync recommendation", e);
+            return error(HttpStatus.INTERNAL_SERVER_ERROR, "failed to generate recommendation: " + e.getMessage());
         }
     }
 
-    /**
-     * 记录推荐反馈
-     */
     @PostMapping("/feedback")
     public ResponseEntity<Map<String, Object>> recordFeedback(
             @RequestParam String requestId,
-            @RequestParam Integer studentId,
+            @RequestParam(required = false) Integer studentId,
             @RequestParam Long problemId,
             @RequestParam String action,
-            @RequestParam(required = false) String sessionId) {
-        
+            @RequestParam(required = false) String sessionId,
+            HttpServletRequest request
+    ) {
         try {
-            logger.info("收到推荐反馈: requestId={}, studentId={}, problemId={}, action={}", 
-                       requestId, studentId, problemId, action);
-            
-            boolean success = recommendationService.recordFeedback(requestId, studentId, problemId, action, sessionId);
-            
+            Integer currentStudentId = requireCurrentStudentId(studentId, request);
+            logger.info("Record recommendation feedback. requestId={}, studentId={}, problemId={}, action={}",
+                    requestId, currentStudentId, problemId, action);
+
+            boolean success = recommendationService.recordFeedback(
+                    requestId,
+                    currentStudentId,
+                    problemId,
+                    action,
+                    sessionId
+            );
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", success);
-            response.put("message", success ? "反馈记录成功" : "反馈记录失败");
-            
+            response.put("message", success ? "feedback recorded" : "feedback rejected");
             return ResponseEntity.ok(response);
-            
+        } catch (ResponseStatusException e) {
+            return error(e.getStatusCode(), e.getReason());
         } catch (Exception e) {
-            logger.error("记录推荐反馈失败", e);
-            
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", false);
-            response.put("message", "记录反馈失败: " + e.getMessage());
-            
-            return ResponseEntity.status(500).body(response);
+            logger.error("Failed to record recommendation feedback", e);
+            return error(HttpStatus.INTERNAL_SERVER_ERROR, "failed to record feedback: " + e.getMessage());
         }
     }
 
-    /**
-     * 数据同步接口（管理员使用）
-     */
     @PostMapping("/admin/sync")
-    public ResponseEntity<Map<String, Object>> syncLeetCodeData() {
+    public ResponseEntity<Map<String, Object>> syncLeetCodeData(HttpServletRequest request) {
         try {
-            logger.info("开始同步LeetCode数据");
-            
-            // 使用相对路径指向清洗后的数据文件
+            requireAdmin(request);
+            logger.info("Start LeetCode dataset sync");
             String jsonFilePath = "datasets/leetcode/solutions_cleaned.json";
             int syncCount = syncService.syncProblemsFromJson(jsonFilePath);
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("syncCount", syncCount);
-            response.put("message", "数据同步完成");
+            response.put("message", "dataset sync completed");
             response.put("stats", syncService.getSyncStats());
-            
             return ResponseEntity.ok(response);
-            
+        } catch (ResponseStatusException e) {
+            return error(e.getStatusCode(), e.getReason());
         } catch (Exception e) {
-            logger.error("同步LeetCode数据失败", e);
-            
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", false);
-            response.put("message", "数据同步失败: " + e.getMessage());
-            
-            return ResponseEntity.status(500).body(response);
+            logger.error("Failed to sync LeetCode dataset", e);
+            return error(HttpStatus.INTERNAL_SERVER_ERROR, "failed to sync dataset: " + e.getMessage());
         }
     }
 
-    /**
-     * 获取同步统计信息
-     */
     @GetMapping("/admin/stats")
-    public ResponseEntity<Map<String, Object>> getSyncStats() {
+    public ResponseEntity<Map<String, Object>> getSyncStats(HttpServletRequest request) {
         try {
-            String stats = syncService.getSyncStats();
-            
+            requireAdmin(request);
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
-            response.put("stats", stats);
-            
+            response.put("stats", syncService.getSyncStats());
             return ResponseEntity.ok(response);
-            
+        } catch (ResponseStatusException e) {
+            return error(e.getStatusCode(), e.getReason());
         } catch (Exception e) {
-            logger.error("获取同步统计信息失败", e);
-            
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", false);
-            response.put("message", "获取统计信息失败: " + e.getMessage());
-            
-            return ResponseEntity.status(500).body(response);
+            logger.error("Failed to load sync stats", e);
+            return error(HttpStatus.INTERNAL_SERVER_ERROR, "failed to load sync stats: " + e.getMessage());
         }
+    }
+
+    private Integer requireCurrentStudentId(Integer requestedStudentId, HttpServletRequest request) {
+        String sessionStudentId = studentSessionResolver.requireStudentId(request);
+        Integer currentStudentId = parseStudentId(sessionStudentId);
+        if (requestedStudentId != null && !requestedStudentId.equals(currentStudentId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "forbidden");
+        }
+        return currentStudentId;
+    }
+
+    private void authorizeRecommendationAccess(Integer recommendationStudentId, HttpServletRequest request) {
+        UserEntity user = legacySessionAccessResolver.requireAuthenticated(request);
+        String role = normalize(user.getRole());
+        if ("admin".equals(role)) {
+            return;
+        }
+        Integer currentStudentId = requireCurrentStudentId(null, request);
+        if (recommendationStudentId == null || !recommendationStudentId.equals(currentStudentId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "forbidden");
+        }
+    }
+
+    private void requireAdmin(HttpServletRequest request) {
+        UserEntity user = legacySessionAccessResolver.requireAuthenticated(request);
+        if (!"admin".equals(normalize(user.getRole()))) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "admin role required");
+        }
+    }
+
+    private Integer parseStudentId(String value) {
+        try {
+            return Integer.valueOf(value);
+        } catch (NumberFormatException e) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "invalid student id");
+        }
+    }
+
+    private ResponseEntity<Map<String, Object>> error(HttpStatusCode status, String message) {
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", false);
+        response.put("message", message);
+        return ResponseEntity.status(status).body(response);
+    }
+
+    private String normalize(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 }
