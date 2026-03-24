@@ -206,7 +206,7 @@ public class StudentController {
                     "message", "studentId is required"
             ));
         }
-        legacySessionAccessResolver.requireStudentReadAccess(String.valueOf(aiRemarks.getStudentId()), request);
+        legacySessionAccessResolver.requireTeacherOrAdmin(request);
         return saveOrUpdateAIRemark(aiRemarks);
     }
 
@@ -239,7 +239,7 @@ public class StudentController {
             @RequestParam("experimentId") Integer experimentId,
             HttpServletRequest request
     ) {
-        legacySessionAccessResolver.requireStudentReadAccess(String.valueOf(studentId), request);
+        legacySessionAccessResolver.requireTeacherOrAdmin(request);
         return deleteAIRemark(studentId, experimentId);
     }
 
