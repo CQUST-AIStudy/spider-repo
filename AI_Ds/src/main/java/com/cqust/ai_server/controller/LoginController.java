@@ -25,8 +25,26 @@ public class LoginController {
     private LegacySessionAccessResolver legacySessionAccessResolver;
 
     @GetMapping("/api/user/{username}")
-    public UserEntity findUserByUsername(@PathVariable String username) {
-        return userService.findByUsername(username);
+    public ResponseEntity<Map<String, Object>> findUserByUsername(
+            @PathVariable String username,
+            HttpServletRequest request) {
+        Map<String, Object> response = new HashMap<>();
+        try {
+            String authorizedUsername = legacySessionAccessResolver.requireUsernameReadAccess(username, request);
+            UserEntity user = userService.findByUsername(authorizedUsername);
+            if (user == null) {
+                response.put("success", false);
+                response.put("message", "user not found");
+                return ResponseEntity.ok(response);
+            }
+            response.put("success", true);
+            response.put("user", toUserInfo(user));
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            response.put("success", false);
+            response.put("message", "load user failed: " + e.getMessage());
+            return ResponseEntity.ok(response);
+        }
     }
 
     @PostMapping("/api/login")
@@ -48,14 +66,6 @@ public class LoginController {
                 return ResponseEntity.ok(response);
             }
 
-            Map<String, Object> userInfo = new HashMap<>();
-            userInfo.put("id", user.getId());
-            userInfo.put("username", user.getUsername());
-            userInfo.put("role", user.getRole());
-            userInfo.put("email", user.getEmail());
-            userInfo.put("usernum", user.getUsernum());
-            userInfo.put("class", user.getClassname());
-
             HttpSession session = request.getSession(true);
             session.setAttribute("currentUser", user);
             session.setAttribute("username", user.getUsername());
@@ -64,7 +74,7 @@ public class LoginController {
 
             response.put("success", true);
             response.put("message", "login success");
-            response.put("user", userInfo);
+            response.put("user", toUserInfo(user));
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             response.put("success", false);
@@ -195,5 +205,16 @@ public class LoginController {
 
     private boolean isBlank(String value) {
         return value == null || value.isBlank();
+    }
+
+    private Map<String, Object> toUserInfo(UserEntity user) {
+        Map<String, Object> userInfo = new HashMap<>();
+        userInfo.put("id", user.getId());
+        userInfo.put("username", user.getUsername());
+        userInfo.put("role", user.getRole());
+        userInfo.put("email", user.getEmail());
+        userInfo.put("usernum", user.getUsernum());
+        userInfo.put("class", user.getClassname());
+        return userInfo;
     }
 }
