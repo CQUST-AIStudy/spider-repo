@@ -1,0 +1,55 @@
+package com.cqust.ai_server.security;
+
+import com.cqust.ai_server.entity.UserEntity;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpSession;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Component;
+import org.springframework.web.server.ResponseStatusException;
+
+@Component
+public class LegacySessionAccessResolver {
+
+    public UserEntity requireAuthenticated(HttpServletRequest request) {
+        HttpSession session = request.getSession(false);
+        if (session == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "authentication required");
+        }
+
+        Object currentUser = session.getAttribute("currentUser");
+        if (!(currentUser instanceof UserEntity user)) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "authentication required");
+        }
+        return user;
+    }
+
+    public String requireStudentReadAccess(String requestedStudentId, HttpServletRequest request) {
+        UserEntity user = requireAuthenticated(request);
+        String role = normalize(user.getRole());
+        String normalizedStudentId = normalize(requestedStudentId);
+        if (normalizedStudentId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "student id required");
+        }
+
+        if ("teacher".equals(role) || "admin".equals(role)) {
+            return normalizedStudentId;
+        }
+        if (!"student".equals(role)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "forbidden");
+        }
+
+        String currentStudentId = normalize(user.getUsernum());
+        if (!normalizedStudentId.equals(currentStudentId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "forbidden");
+        }
+        return normalizedStudentId;
+    }
+
+    private String normalize(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+}

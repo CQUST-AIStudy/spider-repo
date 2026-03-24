@@ -1,5 +1,6 @@
 package com.cqust.ai_server.controller;
 
+import com.cqust.ai_server.security.LegacySessionAccessResolver;
 import com.cqust.ai_server.security.StudentSessionResolver;
 import com.cqust.ai_server.service.ProfileService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -23,9 +24,16 @@ public class ProfileController {
     @Autowired
     private StudentSessionResolver studentSessionResolver;
 
+    @Autowired
+    private LegacySessionAccessResolver legacySessionAccessResolver;
+
     @GetMapping("/student/{studentId}")
-    public ResponseEntity<Map<String, Object>> getStudentProfile(@PathVariable String studentId) {
-        Map<String, Object> profile = profileService.getStudentProfile(studentId);
+    public ResponseEntity<Map<String, Object>> getStudentProfile(
+            @PathVariable String studentId,
+            HttpServletRequest request
+    ) {
+        String authorizedStudentId = legacySessionAccessResolver.requireStudentReadAccess(studentId, request);
+        Map<String, Object> profile = profileService.getStudentProfile(authorizedStudentId);
         return ResponseEntity.ok(profile);
     }
 
@@ -58,8 +66,12 @@ public class ProfileController {
     }
 
     @PostMapping("/feedback/refresh/{studentId}")
-    public ResponseEntity<Map<String, Object>> refreshFeedback(@PathVariable String studentId) {
-        Map<String, Object> result = profileService.refreshFeedback(studentId);
+    public ResponseEntity<Map<String, Object>> refreshFeedback(
+            @PathVariable String studentId,
+            HttpServletRequest request
+    ) {
+        String authorizedStudentId = legacySessionAccessResolver.requireStudentReadAccess(studentId, request);
+        Map<String, Object> result = profileService.refreshFeedback(authorizedStudentId);
         return ResponseEntity.ok(result);
     }
 
