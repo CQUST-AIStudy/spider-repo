@@ -72,6 +72,15 @@ public class CourseSpaceService {
                 .orElseThrow(() -> new IllegalArgumentException("course space not found"));
     }
 
+    @Transactional(readOnly = true)
+    public CourseSpaceEntity requireOwnedSpace(Long id, Long teacherId) {
+        CourseSpaceEntity cs = getSpace(id);
+        if (!cs.getTeacherId().equals(teacherId)) {
+            throw new IllegalArgumentException("not your course space");
+        }
+        return cs;
+    }
+
     @Transactional
     public CourseSpaceEntity updateSpace(Long id, Long teacherId, String name, String term,
                                           String courseName, String description,

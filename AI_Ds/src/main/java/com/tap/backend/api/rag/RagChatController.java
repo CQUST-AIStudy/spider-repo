@@ -8,12 +8,15 @@ import com.tap.backend.domain.rag.CourseSpaceEntity;
 import com.tap.backend.domain.rag.DocChunkAnnotationEntity;
 import com.tap.backend.domain.rag.DocChunkEntity;
 import com.tap.backend.domain.rag.QaLogEntity;
+import com.tap.backend.security.PrincipalResolver;
+import com.tap.backend.security.UserPrincipal;
 import com.tap.backend.rag.*;
 import com.tap.backend.repo.CourseSpaceDocumentRepository;
 import com.tap.backend.repo.CourseSpaceRepository;
 import com.tap.backend.repo.DocChunkRepository;
 import com.tap.backend.repo.DocumentRepository;
 import com.tap.backend.repo.QaLogRepository;
+import com.tap.backend.service.CourseSpaceService;
 import com.tap.backend.domain.document.DocumentEntity;
 import com.tap.backend.domain.rag.CourseSpaceDocumentEntity;
 import okhttp3.OkHttpClient;
@@ -63,6 +66,8 @@ public class RagChatController {
     private final CourseSpaceDocumentRepository csDocRepo;
     private final DocChunkRepository docChunkRepo;
     private final DocumentRepository documentRepo;
+    private final CourseSpaceService courseSpaceService;
+    private final PrincipalResolver principalResolver;
 
     private final OkHttpClient httpClient = new OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
@@ -87,7 +92,9 @@ public class RagChatController {
                              CourseSpaceRepository courseSpaceRepo,
                              CourseSpaceDocumentRepository csDocRepo,
                              DocChunkRepository docChunkRepo,
-                             DocumentRepository documentRepo) {
+                             DocumentRepository documentRepo,
+                             CourseSpaceService courseSpaceService,
+                             PrincipalResolver principalResolver) {
         this.embeddingClient = embeddingClient;
         this.milvusSearch = milvusSearch;
         this.luceneBm25 = luceneBm25;
@@ -106,13 +113,17 @@ public class RagChatController {
         this.csDocRepo = csDocRepo;
         this.docChunkRepo = docChunkRepo;
         this.documentRepo = documentRepo;
+        this.courseSpaceService = courseSpaceService;
+        this.principalResolver = principalResolver;
     }
 
     record RagChatRequest(Long courseSpaceId, String query, String mode) {}
 
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public ResponseEntity<StreamingResponseBody> chat(@RequestBody RagChatRequest request) {
+    public ResponseEntity<StreamingResponseBody> chat(@AuthenticationPrincipal UserPrincipal principal,
+                                                      @RequestBody RagChatRequest request) {
         log.info("[RAG] chat request: courseSpaceId={}, query={}, mode={}", request.courseSpaceId(), request.query(), request.mode());
+        var resolved = principalResolver.resolve(principal);
 
         if (request.query() == null || request.query().isBlank()) {
             return ResponseEntity.ok().body(out -> {
@@ -137,7 +148,7 @@ public class RagChatController {
             List<CitationInfo> citations = new ArrayList<>();
 
             try {
-                CourseSpaceEntity cs = courseSpaceRepo.findById(request.courseSpaceId()).orElse(null);
+                CourseSpaceEntity cs = courseSpaceService.requireOwnedSpace(request.courseSpaceId(), resolved.userId());
                 if (cs == null) {
                     outputStream.write("课程空间不存在".getBytes(StandardCharsets.UTF_8));
                     outputStream.flush();
@@ -361,7 +372,9 @@ public class RagChatController {
             } finally {
                 CourseSpaceEntity cs = courseSpaceRepo.findById(request.courseSpaceId()).orElse(null);
                 if (cs != null) {
-                    saveQaLog(request, cs, fullAnswer.toString(), coverageScore, effectiveMode, usedWeb, intentType, citations);
+                    if (Objects.equals(cs.getTeacherId(), resolved.userId())) {
+                        saveQaLog(request, cs, fullAnswer.toString(), coverageScore, effectiveMode, usedWeb, intentType, citations);
+                    }
                 }
             }
         };
@@ -378,7 +391,9 @@ public class RagChatController {
     record FeedbackRequest(Long qaLogId, Integer feedback) {}
 
     @PostMapping("/feedback")
-    public ResponseEntity<?> submitFeedback(@RequestBody FeedbackRequest request) {
+    public ResponseEntity<?> submitFeedback(@AuthenticationPrincipal UserPrincipal principal,
+                                            @RequestBody FeedbackRequest request) {
+        var resolved = principalResolver.resolve(principal);
         if (request.qaLogId() == null || request.feedback() == null) {
             return ResponseEntity.badRequest().body(Map.of("error", "qaLogId and feedback are required"));
         }
@@ -386,6 +401,7 @@ public class RagChatController {
         if (log == null) {
             return ResponseEntity.status(404).body(Map.of("error", "qa_log not found"));
         }
+        courseSpaceService.requireOwnedSpace(log.getCourseSpaceId(), resolved.userId());
         log.setFeedback(request.feedback());
         qaLogRepo.save(log);
         return ResponseEntity.ok(Map.of("success", true));

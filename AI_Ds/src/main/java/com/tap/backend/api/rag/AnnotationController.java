@@ -2,6 +2,7 @@ package com.tap.backend.api.rag;
 
 import com.tap.backend.domain.rag.DocChunkAnnotationEntity;
 import com.tap.backend.rag.DocChunkAnnotationService;
+import com.tap.backend.service.CourseSpaceService;
 import com.tap.backend.security.PrincipalResolver;
 import com.tap.backend.security.UserPrincipal;
 import com.tap.common.api.ApiResponse;
@@ -16,11 +17,14 @@ import java.util.Map;
 public class AnnotationController {
 
     private final DocChunkAnnotationService annotationService;
+    private final CourseSpaceService courseSpaceService;
     private final PrincipalResolver principalResolver;
 
     public AnnotationController(DocChunkAnnotationService annotationService,
+                                 CourseSpaceService courseSpaceService,
                                  PrincipalResolver principalResolver) {
         this.annotationService = annotationService;
+        this.courseSpaceService = courseSpaceService;
         this.principalResolver = principalResolver;
     }
 
@@ -32,6 +36,7 @@ public class AnnotationController {
             @PathVariable("id") Long courseSpaceId,
             @RequestBody CreateAnnotationRequest req) {
         var resolved = principalResolver.resolve(principal);
+        courseSpaceService.requireOwnedSpace(courseSpaceId, resolved.userId());
         DocChunkAnnotationEntity entity = annotationService.create(
                 req.chunkId(), req.annotationType(), req.note(), resolved.userId());
         return ApiResponse.of(toMap(entity));
@@ -41,7 +46,8 @@ public class AnnotationController {
     public ApiResponse<List<Map<String, Object>>> listAnnotations(
             @AuthenticationPrincipal UserPrincipal principal,
             @PathVariable("id") Long courseSpaceId) {
-        principalResolver.resolve(principal); // ensure auth
+        var resolved = principalResolver.resolve(principal);
+        courseSpaceService.requireOwnedSpace(courseSpaceId, resolved.userId());
         List<DocChunkAnnotationEntity> annotations = annotationService.listByCourseSpace(courseSpaceId);
         return ApiResponse.of(annotations.stream().map(this::toMap).toList());
     }

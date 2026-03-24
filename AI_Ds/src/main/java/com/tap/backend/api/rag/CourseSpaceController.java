@@ -71,8 +71,8 @@ public class CourseSpaceController {
     public ApiResponse<Map<String, Object>> getSpace(
             @AuthenticationPrincipal UserPrincipal principal,
             @PathVariable("id") Long id) {
-        principalResolver.resolve(principal); // ensure auth
-        CourseSpaceEntity cs = courseSpaceService.getSpace(id);
+        var resolved = principalResolver.resolve(principal);
+        CourseSpaceEntity cs = courseSpaceService.requireOwnedSpace(id, resolved.userId());
         return ApiResponse.of(spaceToMap(cs));
     }
 
@@ -114,6 +114,8 @@ public class CourseSpaceController {
     public ApiResponse<List<Map<String, Object>>> listDocuments(
             @AuthenticationPrincipal UserPrincipal principal,
             @PathVariable("id") Long courseSpaceId) {
+        var resolved = principalResolver.resolve(principal);
+        courseSpaceService.requireOwnedSpace(courseSpaceId, resolved.userId());
         List<CourseSpaceDocumentEntity> docs = courseSpaceService.listDocuments(courseSpaceId);
         return ApiResponse.of(docs.stream().map(this::docToMap).toList());
     }
@@ -122,6 +124,8 @@ public class CourseSpaceController {
     public ApiResponse<List<Map<String, Object>>> listChunks(
             @AuthenticationPrincipal UserPrincipal principal,
             @PathVariable("id") Long courseSpaceId) {
+        var resolved = principalResolver.resolve(principal);
+        courseSpaceService.requireOwnedSpace(courseSpaceId, resolved.userId());
         List<com.tap.backend.domain.rag.DocChunkEntity> chunks = docChunkRepo.findAllByCourseSpaceId(courseSpaceId);
         return ApiResponse.of(chunks.stream()
                 .filter(c -> "parent".equals(c.getChunkType()))

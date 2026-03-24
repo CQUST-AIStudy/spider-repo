@@ -75,9 +75,10 @@ public class SecurityConfig {
         .requestMatchers(HttpMethod.PUT, "/api/pta-cookie/status").permitAll()
         .requestMatchers("/api/pta-cookie/**").authenticated()
         .requestMatchers("/api/grading/**").authenticated()
-        .requestMatchers("/api/rag/**").permitAll()
+        .requestMatchers("/api/rag/**").authenticated()
         .requestMatchers("/api/classes/**").authenticated()
-        .requestMatchers("/api/analytics/**").permitAll()
+        .requestMatchers("/api/analytics/student/**").permitAll()
+        .requestMatchers("/api/analytics/**").authenticated()
         .anyRequest().authenticated()
     );
     http.addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
