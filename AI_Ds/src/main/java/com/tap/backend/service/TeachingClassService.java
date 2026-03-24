@@ -5,10 +5,10 @@ import com.tap.backend.domain.classroom.TeachingClassEntity;
 import com.tap.backend.domain.user.UserEntity;
 import com.tap.backend.repo.ClassStudentRepository;
 import com.tap.backend.repo.TeachingClassRepository;
+import java.util.List;
+import java.util.NoSuchElementException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
-import java.util.*;
 
 @Service
 public class TeachingClassService {
@@ -32,52 +32,77 @@ public class TeachingClassService {
     }
 
     @Transactional
-    public TeachingClassEntity createClass(UserEntity teacher, String name, String classCode,
-                                           String joinPassword, String grade, String courseName, String description,
-                                           String ptaKeyword, Boolean syncEnabled) {
+    public TeachingClassEntity createClass(
+            UserEntity teacher,
+            String name,
+            String classCode,
+            String joinPassword,
+            String grade,
+            String courseName,
+            String description,
+            String ptaKeyword,
+            Boolean syncEnabled
+    ) {
         if (classRepo.existsByClassCode(classCode)) {
-            throw new IllegalArgumentException("班级号已存在: " + classCode);
+            throw new IllegalArgumentException("class code already exists: " + classCode);
         }
-        TeachingClassEntity tc = new TeachingClassEntity();
-        tc.setTeacher(teacher);
-        tc.setName(name);
-        tc.setClassCode(classCode);
-        tc.setJoinPassword(joinPassword);
-        tc.setGrade(grade);
-        tc.setCourseName(courseName);
-        tc.setDescription(description);
-        if (ptaKeyword != null && !ptaKeyword.isBlank()) tc.setPtaKeyword(ptaKeyword);
-        if (syncEnabled != null) tc.setSyncEnabled(syncEnabled);
-        return classRepo.save(tc);
+        TeachingClassEntity teachingClass = new TeachingClassEntity();
+        teachingClass.setTeacher(teacher);
+        teachingClass.setName(name);
+        teachingClass.setClassCode(classCode);
+        teachingClass.setJoinPassword(joinPassword);
+        teachingClass.setGrade(grade);
+        teachingClass.setCourseName(courseName);
+        teachingClass.setDescription(description);
+        if (ptaKeyword != null && !ptaKeyword.isBlank()) {
+            teachingClass.setPtaKeyword(ptaKeyword);
+        }
+        if (syncEnabled != null) {
+            teachingClass.setSyncEnabled(syncEnabled);
+        }
+        return classRepo.save(teachingClass);
     }
 
     @Transactional
-    public TeachingClassEntity updateClass(Long classId, Long teacherId, String name,
-                                           String joinPassword, String grade, String courseName, String description,
-                                           String ptaKeyword, Boolean syncEnabled) {
-        TeachingClassEntity tc = classRepo.findById(classId)
-                .orElseThrow(() -> new NoSuchElementException("班级不存在"));
-        if (!tc.getTeacherId().equals(teacherId)) {
-            throw new SecurityException("无权修改此班级");
+    public TeachingClassEntity updateClass(
+            Long classId,
+            Long teacherId,
+            String name,
+            String joinPassword,
+            String grade,
+            String courseName,
+            String description,
+            String ptaKeyword,
+            Boolean syncEnabled
+    ) {
+        TeachingClassEntity teachingClass = requireOwnedClass(classId, teacherId);
+        if (name != null) {
+            teachingClass.setName(name);
         }
-        if (name != null) tc.setName(name);
-        if (joinPassword != null) tc.setJoinPassword(joinPassword);
-        if (grade != null) tc.setGrade(grade);
-        if (courseName != null) tc.setCourseName(courseName);
-        if (description != null) tc.setDescription(description);
-        if (ptaKeyword != null) tc.setPtaKeyword(ptaKeyword);
-        if (syncEnabled != null) tc.setSyncEnabled(syncEnabled);
-        return classRepo.save(tc);
+        if (joinPassword != null) {
+            teachingClass.setJoinPassword(joinPassword);
+        }
+        if (grade != null) {
+            teachingClass.setGrade(grade);
+        }
+        if (courseName != null) {
+            teachingClass.setCourseName(courseName);
+        }
+        if (description != null) {
+            teachingClass.setDescription(description);
+        }
+        if (ptaKeyword != null) {
+            teachingClass.setPtaKeyword(ptaKeyword);
+        }
+        if (syncEnabled != null) {
+            teachingClass.setSyncEnabled(syncEnabled);
+        }
+        return classRepo.save(teachingClass);
     }
 
     @Transactional
     public void deleteClass(Long classId, Long teacherId) {
-        TeachingClassEntity tc = classRepo.findById(classId)
-                .orElseThrow(() -> new NoSuchElementException("班级不存在"));
-        if (!tc.getTeacherId().equals(teacherId)) {
-            throw new SecurityException("无权删除此班级");
-        }
-        classRepo.delete(tc);
+        classRepo.delete(requireOwnedClass(classId, teacherId));
     }
 
     @Transactional(readOnly = true)
@@ -85,19 +110,37 @@ public class TeachingClassService {
         return studentRepo.findAllByClassId(classId);
     }
 
+    @Transactional(readOnly = true)
+    public List<ClassStudentEntity> listStudentsForTeacher(Long classId, Long teacherId) {
+        requireOwnedClass(classId, teacherId);
+        return studentRepo.findAllByClassId(classId);
+    }
+
     @Transactional
     public ClassStudentEntity addStudent(Long classId, String studentName, String studentNum, Long userId) {
         if (studentNum != null && studentRepo.existsByClassIdAndStudentNum(classId, studentNum)) {
-            throw new IllegalArgumentException("该学号已在班级中");
+            throw new IllegalArgumentException("student number already exists in this class");
         }
-        TeachingClassEntity tc = classRepo.findById(classId)
-                .orElseThrow(() -> new NoSuchElementException("班级不存在"));
-        ClassStudentEntity cs = new ClassStudentEntity();
-        cs.setTeachingClass(tc);
-        cs.setStudentName(studentName);
-        cs.setStudentNum(studentNum);
-        cs.setUserId(userId);
-        return studentRepo.save(cs);
+        TeachingClassEntity teachingClass = classRepo.findById(classId)
+                .orElseThrow(() -> new NoSuchElementException("class not found"));
+        ClassStudentEntity student = new ClassStudentEntity();
+        student.setTeachingClass(teachingClass);
+        student.setStudentName(studentName);
+        student.setStudentNum(studentNum);
+        student.setUserId(userId);
+        return studentRepo.save(student);
+    }
+
+    @Transactional
+    public ClassStudentEntity addStudentForTeacher(
+            Long classId,
+            Long teacherId,
+            String studentName,
+            String studentNum,
+            Long userId
+    ) {
+        requireOwnedClass(classId, teacherId);
+        return addStudent(classId, studentName, studentNum, userId);
     }
 
     @Transactional
@@ -105,23 +148,39 @@ public class TeachingClassService {
         studentRepo.deleteById(studentRecordId);
     }
 
-    /** 学生通过班级号+密码加入班级 */
     @Transactional
-    public ClassStudentEntity joinClass(String classCode, String password, String studentName, String studentNum, Long userId) {
-        TeachingClassEntity tc = classRepo.findByClassCode(classCode)
-                .orElseThrow(() -> new NoSuchElementException("班级号不存在"));
-        if (!tc.getJoinPassword().equals(password)) {
-            throw new SecurityException("班级密码错误");
+    public void removeStudentForTeacher(Long classId, Long studentRecordId, Long teacherId) {
+        requireOwnedClass(classId, teacherId);
+        ClassStudentEntity student = studentRepo.findById(studentRecordId)
+                .orElseThrow(() -> new NoSuchElementException("student not found"));
+        if (!classId.equals(student.getClassId())) {
+            throw new NoSuchElementException("student not found");
         }
-        if (studentNum != null && studentRepo.existsByClassIdAndStudentNum(tc.getId(), studentNum)) {
-            throw new IllegalArgumentException("你已加入该班级");
+        studentRepo.delete(student);
+    }
+
+    @Transactional
+    public ClassStudentEntity joinClass(
+            String classCode,
+            String password,
+            String studentName,
+            String studentNum,
+            Long userId
+    ) {
+        TeachingClassEntity teachingClass = classRepo.findByClassCode(classCode)
+                .orElseThrow(() -> new NoSuchElementException("class code not found"));
+        if (!teachingClass.getJoinPassword().equals(password)) {
+            throw new SecurityException("invalid class password");
         }
-        ClassStudentEntity cs = new ClassStudentEntity();
-        cs.setTeachingClass(tc);
-        cs.setStudentName(studentName);
-        cs.setStudentNum(studentNum);
-        cs.setUserId(userId);
-        return studentRepo.save(cs);
+        if (studentNum != null && studentRepo.existsByClassIdAndStudentNum(teachingClass.getId(), studentNum)) {
+            throw new IllegalArgumentException("student already joined this class");
+        }
+        ClassStudentEntity student = new ClassStudentEntity();
+        student.setTeachingClass(teachingClass);
+        student.setStudentName(studentName);
+        student.setStudentNum(studentNum);
+        student.setUserId(userId);
+        return studentRepo.save(student);
     }
 
     @Transactional(readOnly = true)
@@ -132,5 +191,14 @@ public class TeachingClassService {
     @Transactional(readOnly = true)
     public List<ClassStudentEntity> listClassesByUser(Long userId) {
         return studentRepo.findAllByUserId(userId);
+    }
+
+    private TeachingClassEntity requireOwnedClass(Long classId, Long teacherId) {
+        TeachingClassEntity teachingClass = classRepo.findById(classId)
+                .orElseThrow(() -> new NoSuchElementException("class not found"));
+        if (!teacherId.equals(teachingClass.getTeacherId())) {
+            throw new SecurityException("forbidden");
+        }
+        return teachingClass;
     }
 }

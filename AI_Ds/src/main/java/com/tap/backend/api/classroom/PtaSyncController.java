@@ -1,64 +1,64 @@
 package com.tap.backend.api.classroom;
 
-import com.tap.backend.domain.user.UserEntity;
-import com.tap.backend.repo.UserRepository;
+import com.tap.backend.security.TeacherPrincipalResolver;
+import com.tap.backend.security.UserPrincipal;
 import com.tap.backend.service.PtaSyncService;
 import com.tap.common.api.ApiResponse;
-import org.springframework.http.HttpStatus;
+import java.util.Map;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.core.userdetails.UserDetails;
-import org.springframework.web.server.ResponseStatusException;
-import org.springframework.web.bind.annotation.*;
-
-import java.util.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api/classes/{classId}/pta-sync")
 public class PtaSyncController {
 
     private final PtaSyncService syncService;
-    private final UserRepository userRepo;
+    private final TeacherPrincipalResolver teacherPrincipalResolver;
 
-    public PtaSyncController(PtaSyncService syncService, UserRepository userRepo) {
+    public PtaSyncController(
+            PtaSyncService syncService,
+            TeacherPrincipalResolver teacherPrincipalResolver
+    ) {
         this.syncService = syncService;
-        this.userRepo = userRepo;
-    }
-
-    private Long resolveUserId(UserDetails principal) {
-        if (principal != null) {
-            return userRepo.findByUsername(principal.getUsername())
-                    .orElseThrow(() -> new NoSuchElementException("user not found"))
-                    .getId();
-        }
-        throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "authentication required");
+        this.teacherPrincipalResolver = teacherPrincipalResolver;
     }
 
     record SyncConfigRequest(String ptaKeyword, Boolean syncEnabled) {}
 
     @PutMapping
     public ApiResponse<Map<String, Object>> updateConfig(
-            @AuthenticationPrincipal UserDetails principal,
+            @AuthenticationPrincipal UserPrincipal principal,
             @PathVariable Long classId,
-            @RequestBody SyncConfigRequest req) {
-        Long userId = resolveUserId(principal);
-        return ApiResponse.of(syncService.updateSyncConfig(classId, userId, req.ptaKeyword(), req.syncEnabled()));
+            @RequestBody SyncConfigRequest req
+    ) {
+        Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
+        return ApiResponse.of(syncService.updateSyncConfig(classId, teacherId, req.ptaKeyword(), req.syncEnabled()));
     }
 
     @PostMapping("/trigger")
-    public ApiResponse<Map<String, Object>> trigger(@AuthenticationPrincipal UserDetails principal,
-                                                    @PathVariable Long classId) {
-        resolveUserId(principal);
-        return ApiResponse.of(syncService.triggerSync(classId));
+    public ApiResponse<Map<String, Object>> trigger(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long classId
+    ) {
+        Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
+        return ApiResponse.of(syncService.triggerSync(classId, teacherId));
     }
 
     @GetMapping("/status")
-    public ApiResponse<Map<String, Object>> status(@AuthenticationPrincipal UserDetails principal,
-                                                   @PathVariable Long classId) {
-        resolveUserId(principal);
-        return ApiResponse.of(syncService.getSyncStatus(classId));
+    public ApiResponse<Map<String, Object>> status(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long classId
+    ) {
+        Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
+        return ApiResponse.of(syncService.getSyncStatus(classId, teacherId));
     }
 
-    /** 鐖櫕鏈嶅姟鍥炶皟锛氫换鍔″畬鎴愬悗鏇存柊鍚屾鐘舵€?*/
     record CallbackRequest(String status) {}
 
     @PutMapping("/callback")
