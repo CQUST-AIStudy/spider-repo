@@ -25,6 +25,8 @@ public class SecurityDefaultsWarningRunner implements CommandLineRunner {
     warnIfUsingDefaultDbPassword();
     warnIfUsingDefaultJwtSecret();
     warnIfUsingDefaultMinioCredentials();
+    warnIfAiProviderIsMock();
+    warnIfTranslationWillFallBackToMock();
     warnIfSchemaManagementIsSplit();
   }
 
@@ -47,6 +49,21 @@ public class SecurityDefaultsWarningRunner implements CommandLineRunner {
     String secretKey = environment.getProperty("tap.storage.minio.secret-key", "");
     if (DEFAULT_MINIO_CREDENTIAL.equals(accessKey) || DEFAULT_MINIO_CREDENTIAL.equals(secretKey)) {
       log.warn("MinIO credentials are still using default values; set MINIO_ACCESS_KEY and MINIO_SECRET_KEY");
+    }
+  }
+
+  private void warnIfAiProviderIsMock() {
+    String provider = environment.getProperty("tap.ai.provider", "mock");
+    if ("mock".equalsIgnoreCase(provider)) {
+      log.warn("AI provider is running in mock mode; set AI_PROVIDER=openai for real model responses");
+    }
+  }
+
+  private void warnIfTranslationWillFallBackToMock() {
+    String provider = environment.getProperty("tap.translation.provider", "deepl");
+    String deeplKey = environment.getProperty("tap.translation.deepl.api-key", "");
+    if ("deepl".equalsIgnoreCase(provider) && (deeplKey == null || deeplKey.isBlank())) {
+      log.warn("Translation is configured for DeepL but no API key is set; runtime will fall back to mock translation");
     }
   }
 
