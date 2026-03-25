@@ -79,6 +79,9 @@ def summarize_chapter(chapter_content: str, chapter_path: str) -> str:
     content = chapter_content[:3000] if len(chapter_content) > 3000 else chapter_content
     if not content.strip():
         return ""
+    if not config.DEEPSEEK_API_KEY:
+        logger.warning("Skip chapter summary because DEEPSEEK_API_KEY is not configured")
+        return ""
 
     try:
         resp = requests.post(

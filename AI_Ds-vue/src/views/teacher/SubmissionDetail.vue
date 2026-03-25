@@ -420,7 +420,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, ElLoading } from 'element-plus'
 import api from '../../api'
@@ -508,6 +508,10 @@ const reportData = ref({})
 const reportGeneratorRef = ref(null)
 const isEditingComment = ref(false)
 const editingTeacherComment = ref('')
+const allStudentExperiments = ref([])
+const allStudentExperimentsLoaded = ref(false)
+let allStudentExperimentsPromise = null
+let reportComponentInitialized = false
 
 
 
@@ -755,37 +759,94 @@ const getScoreClass = (score) => {
   return 'score-fail'
 }
 
+const refreshReportPreview = (withRetry = false) => {
+  nextTick(() => {
+    const updateReport = reportGeneratorRef.value?.updateReport
+    if (typeof updateReport === 'function') {
+      updateReport.call(reportGeneratorRef.value)
+      reportComponentInitialized = true
+      return
+    }
+    if (withRetry) {
+      setTimeout(() => refreshReportPreview(false), 500)
+    }
+  })
+}
+
+const applySubmissionDetail = (data) => {
+  submission.value = data || {}
+  gradeForm.score = submission.value.score || 0
+  gradeForm.plagiarismRate = submission.value.plagiarismRate || 0
+  gradeForm.aiComment = submission.value.aiComment || ''
+  gradeForm.teacherComment = submission.value.teacherComment || ''
+  parseQuestionCode()
+  splitAiRemarksToQuestions()
+  prepareReportData()
+}
+
+const ensureAllStudentExperiments = async () => {
+  if (allStudentExperimentsLoaded.value) {
+    return allStudentExperiments.value
+  }
+  if (!allStudentExperimentsPromise) {
+    allStudentExperimentsPromise = api.getAllStudentExperiments()
+      .then((data) => {
+        allStudentExperiments.value = Array.isArray(data) ? data : []
+        allStudentExperimentsLoaded.value = true
+        return allStudentExperiments.value
+      })
+      .finally(() => {
+        allStudentExperimentsPromise = null
+      })
+  }
+  return allStudentExperimentsPromise
+}
+
+const getCurrentStudentExperiments = (allData) => {
+  const studentId = submission.value.studentId
+  if (!Array.isArray(allData) || !studentId) {
+    return []
+  }
+  return allData.filter(s => String(s.studentId) === String(studentId))
+}
+
+const generateInitialCommentImages = async () => {
+  for (const question of parsedQuestions.value) {
+    if (!question.comment) continue
+    try {
+      await generateCommentImage(question)
+    } catch (error) {
+      console.error('生成题目评语图片失败:', error)
+    }
+  }
+  if (parsedQuestions.value.length > 0) {
+    updateReportWithComments()
+  }
+}
+
+const loadSubmissionInsights = async () => {
+  try {
+    const allData = await ensureAllStudentExperiments()
+    const studentSubs = getCurrentStudentExperiments(allData)
+    loadSubmissionHistory(studentSubs)
+    loadLearningRecommendations(allData, studentSubs)
+    await nextTick()
+    initCharts()
+    loadStudentPerformance(allData, studentSubs)
+  } catch (error) {
+    console.error('加载提交附属数据失败:', error)
+  }
+}
+
 
 // 鑾峰彇鎻愪氦璇︽儏
 const loadSubmissionDetail = async () => {
   loading.value = true
   try {
     const data = await api.getSubmissionDetail(submissionId.value)
-    submission.value = data
-    gradeForm.score = submission.value.score || 0
-    gradeForm.plagiarismRate = submission.value.plagiarismRate || 0
-    gradeForm.aiComment = submission.value.aiComment || ''
-    gradeForm.teacherComment = submission.value.teacherComment || ''
-    parseQuestionCode()
-
-    // 1. 鍒嗗壊AI璇勮骞惰祴鍊间负姣忛鍒濆璇勮
-    splitAiRemarksToQuestions();
-
-    // 2. 鑷姩鐢熸垚姣忛璇勮鍥剧墖
-    for (const q of parsedQuestions.value) {
-      if (q.comment) {
-        await generateCommentImage(q);
-      }
-    }
-
-    // ...existing code...
-    prepareReportData()
-    loadSubmissionHistory()
-    loadLearningRecommendations()
-    loadStudentPerformance()
-    nextTick(() => {
-      initCharts()
-    })
+    applySubmissionDetail(data)
+    void generateInitialCommentImages()
+    void loadSubmissionInsights()
   } catch (error) {
     console.error('鍔犺浇鎻愪氦璇︽儏澶辫触:', error)
     ElMessage.error(error?.message || '鍔犺浇鎻愪氦璇︽儏澶辫触')
@@ -794,19 +855,19 @@ const loadSubmissionDetail = async () => {
   }
 }
 
-// 鍔犺浇鎻愪氦鍘嗗彶 - 浠庣湡瀹濧PI鑾峰彇璇ュ鐢熺殑鎵€鏈夋彁浜よ褰?const loadSubmissionHistory = async () => {
+// 鍔犺浇鎻愪氦鍘嗗彶 - 浠庣湡瀹濧PI鑾峰彇璇ュ鐢熺殑鎵€鏈夋彁浜よ褰?const loadSubmissionHistory = async (studentSubs = null) => {
   try {
-    const allData = await api.getAllStudentExperiments()
-    const studentId = submission.value.studentId
-    if (!allData || !studentId) {
+    const currentStudentSubs = Array.isArray(studentSubs)
+      ? [...studentSubs]
+      : getCurrentStudentExperiments(await ensureAllStudentExperiments())
+    if (!currentStudentSubs.length) {
       submissionHistory.value = []
       return
     }
-    // 绛涢€夎瀛︾敓鐨勬墍鏈夋彁浜わ紝鎸夋椂闂存帓搴?    const studentSubs = allData
-      .filter(s => String(s.studentId) === String(studentId))
+    // 绛涢€夎瀛︾敓鐨勬墍鏈夋彁浜わ紝鎸夋椂闂存帓搴?    const sortedSubs = currentStudentSubs
       .sort((a, b) => new Date(a.submitTime || a.date || 0) - new Date(b.submitTime || b.date || 0))
 
-    submissionHistory.value = studentSubs.map((s, idx) => ({
+    submissionHistory.value = sortedSubs.map((s, idx) => ({
       time: s.submitTime || s.date || '鏈煡鏃堕棿',
       type: s.status === 'completed' ? 'submit' : 'edit',
       title: s.experimentName || `瀹為獙${idx + 1}`,
@@ -820,15 +881,16 @@ const loadSubmissionDetail = async () => {
 }
 
 // 鍔犺浇瀛︿範寤鸿
-const loadLearningRecommendations = async () => {
+const loadLearningRecommendations = async (allData = null, studentSubs = null) => {
   try {
     // 鍩轰簬瀛︾敓鐪熷疄鎻愪氦鏁版嵁鐢熸垚瀛︿範寤鸿
-    const allData = await api.getAllStudentExperiments()
-    const studentId = submission.value.studentId
-    if (!allData || !studentId) { learningRecommendations.value = []; return }
+    const experimentData = Array.isArray(allData) ? allData : await ensureAllStudentExperiments()
+    const currentStudentSubs = Array.isArray(studentSubs)
+      ? studentSubs
+      : getCurrentStudentExperiments(experimentData)
+    if (!experimentData || !currentStudentSubs.length) { learningRecommendations.value = []; return }
 
-    const studentSubs = allData.filter(s => String(s.studentId) === String(studentId))
-    const scored = studentSubs.filter(s => s.score > 0)
+    const scored = currentStudentSubs.filter(s => s.score > 0)
     const avgScore = scored.length > 0 ? scored.reduce((a, b) => a + b.score, 0) / scored.length : 0
     const lowScoreExps = scored.filter(s => s.score < 70)
 
@@ -847,8 +909,8 @@ const loadLearningRecommendations = async () => {
         resources: []
       })
     }
-    const completed = studentSubs.filter(s => s.status === 'completed').length
-    const total = studentSubs.length
+    const completed = currentStudentSubs.filter(s => s.status === 'completed').length
+    const total = currentStudentSubs.length
     if (total > 0 && completed / total < 0.8) {
       recs.push({
         title: '鎻愰珮瀹為獙瀹屾垚鐜?,
@@ -870,16 +932,18 @@ const loadLearningRecommendations = async () => {
   }
 }
 
-// 浠庣湡瀹炴暟鎹绠楀鐢熻〃鐜?const loadStudentPerformance = async () => {
+// 浠庣湡瀹炴暟鎹绠楀鐢熻〃鐜?const loadStudentPerformance = async (allData = null, studentSubs = null) => {
   try {
-    const allData = await api.getAllStudentExperiments()
+    const experimentData = Array.isArray(allData) ? allData : await ensureAllStudentExperiments()
     const studentId = submission.value.studentId
-    if (!allData || !studentId) return
+    if (!experimentData || !studentId) return
 
-    const studentSubs = allData.filter(s => String(s.studentId) === String(studentId))
-    const scored = studentSubs.filter(s => s.score > 0)
-    const completed = studentSubs.filter(s => s.status === 'completed')
-    const total = studentSubs.length
+    const currentStudentSubs = Array.isArray(studentSubs)
+      ? studentSubs
+      : getCurrentStudentExperiments(experimentData)
+    const scored = currentStudentSubs.filter(s => s.score > 0)
+    const completed = currentStudentSubs.filter(s => s.status === 'completed')
+    const total = currentStudentSubs.length
 
     // 骞冲潎鎴愮哗
     studentPerformance.averageScore = scored.length > 0
@@ -889,7 +953,7 @@ const loadLearningRecommendations = async () => {
 
     // 鐝骇鎺掑悕锛氳绠楁墍鏈夊鐢熺殑骞冲潎鍒嗗苟鎺掑簭
     const studentScores = {}
-    allData.filter(s => s.score > 0).forEach(s => {
+    experimentData.filter(s => s.score > 0).forEach(s => {
       if (!studentScores[s.studentId]) studentScores[s.studentId] = []
       studentScores[s.studentId].push(s.score)
     })
@@ -903,10 +967,10 @@ const loadLearningRecommendations = async () => {
 
     // 浠ｇ爜璐ㄩ噺璇勫垎锛堝熀浜庡钩鍧囧垎锛?鍒嗗埗锛?    studentPerformance.codeQuality = Math.min(5, Math.round(studentPerformance.averageScore / 20 * 10) / 10)
 
-    // 鍙備笌搴︼紙鍩轰簬鎻愪氦鏁伴噺鍗犳€诲疄楠屾瘮渚嬶紝5鍒嗗埗锛?    studentPerformance.participation = Math.min(5, Math.round(studentSubs.length / Math.max(1, new Set(allData.map(s => s.experimentId)).size) * 5 * 10) / 10)
+    // 鍙備笌搴︼紙鍩轰簬鎻愪氦鏁伴噺鍗犳€诲疄楠屾瘮渚嬶紝5鍒嗗埗锛?    studentPerformance.participation = Math.min(5, Math.round(currentStudentSubs.length / Math.max(1, new Set(experimentData.map(s => s.experimentId)).size) * 5 * 10) / 10)
 
     // 鏇存柊鍥捐〃
-    updatePerformanceCharts(studentSubs, allData)
+    updatePerformanceCharts(currentStudentSubs, experimentData)
   } catch (error) {
     console.error('鍔犺浇瀛︾敓琛ㄧ幇鏁版嵁澶辫触:', error)
   }
@@ -962,7 +1026,9 @@ const loadLearningRecommendations = async () => {
 // 鍥捐〃鍒濆鍖?const initCharts = () => {
 
   // 鎴愮哗瓒嬪娍鍥?  if (scoreChartContainer.value) {
-    scoreChart = echarts.init(scoreChartContainer.value)
+    if (!scoreChart) {
+      scoreChart = echarts.init(scoreChartContainer.value)
+    }
     const scoreOption = {
       tooltip: {
         trigger: 'axis'
@@ -1003,7 +1069,9 @@ const loadLearningRecommendations = async () => {
   }
 
   // 瀹屾垚鎯呭喌鍥?  if (completionChartContainer.value) {
-    completionChart = echarts.init(completionChartContainer.value)
+    if (!completionChart) {
+      completionChart = echarts.init(completionChartContainer.value)
+    }
     const completionOption = {
 
       tooltip: {
@@ -1454,71 +1522,49 @@ const downloadPDF = async () => {
   completionChart?.resize()
 }
 
+const disposeCharts = () => {
+  scoreChart?.dispose()
+  completionChart?.dispose()
+  scoreChart = null
+  completionChart = null
+}
+
+watch(() => activeTab.value, (newTab) => {
+  if (newTab === 'report' && submission.value) {
+    prepareReportData()
+    refreshReportPreview(true)
+  }
+}, { immediate: true })
+
+watch(() => submission.value.score, (newScore) => {
+  if (reportData.value) {
+    reportData.value.score = newScore
+    if (activeTab.value === 'report') {
+      refreshReportPreview()
+    }
+  }
+})
+
+watch(() => reportGeneratorRef.value, (newRef) => {
+  if (newRef && !reportComponentInitialized && activeTab.value === 'report' && reportData.value) {
+    refreshReportPreview()
+  }
+})
+
+watch(() => parsedQuestions.value, () => {
+  if (parsedQuestions.value.length > 0) {
+    updateReportWithComments()
+  }
+}, { deep: true })
+
 onMounted(() => {
   loadSubmissionDetail()
   window.addEventListener('resize', handleResize)
+})
 
-  // 娣诲姞涓€涓垵濮嬪寲鏍囪锛岀敤浜庤拷韪粍浠舵槸鍚﹀凡鍒濆鍖?  let reportComponentInitialized = false;
-
-  // 鐩戝惉鏍囩椤靛彉鍖栵紝褰撳垏鎹㈠埌鎶ュ憡鏍囩椤垫椂鍔犺浇鎶ュ憡鏁版嵁
-  watch(() => activeTab.value, (newTab) => {
-    if (newTab === 'report' && submission.value) {
-      // 寮哄埗閲嶆柊鍑嗗鎶ュ憡鏁版嵁锛岀‘淇濆寘鍚渶鏂版垚缁╁拰璇勮
-      prepareReportData();
-
-      // 纭繚ReportGenerator缁勪欢鏇存柊
-      nextTick(() => {
-        if (reportGeneratorRef.value && typeof reportGeneratorRef.value.updateReport === 'function') {
-          console.log('鍒囨崲鍒版姤鍛婃爣绛鹃〉锛屾洿鏂版姤鍛婏紝褰撳墠鎴愮哗:', reportData.value.score);
-          reportGeneratorRef.value.updateReport();
-          reportComponentInitialized = true;
-        } else {
-          console.warn('ReportGenerator缁勪欢缂哄皯updateReport鏂规硶鎴栫粍浠舵湭鎸傝浇');
-          // 缁勪欢鏈氨缁紝璁剧疆寤惰繜閲嶈瘯
-          setTimeout(() => {
-            if (reportGeneratorRef.value && typeof reportGeneratorRef.value.updateReport === 'function') {
-              reportGeneratorRef.value.updateReport();
-              reportComponentInitialized = true;
-            }
-          }, 500);
-        }
-      });
-    }
-  }, { immediate: true }); // 娣诲姞immediate:true纭繚鍒濆鍔犺浇鏃朵篃鎵ц
-
-  // 鐩戝惉鎴愮哗鍙樺寲锛岀‘淇濇姤鍛婃暟鎹悓姝ユ洿鏂?  watch(() => submission.value.score, (newScore) => {
-    if (reportData.value) {
-      console.log('鎴愮哗宸插彉鏇翠负:', newScore);
-      reportData.value.score = newScore;
-      // 濡傛灉褰撳墠鍦ㄦ姤鍛婇瑙堥〉闈紝鍒锋柊鎶ュ憡瑙嗗浘
-      if (activeTab.value === 'report' && reportGeneratorRef.value) {
-        nextTick(() => {
-          if (typeof reportGeneratorRef.value.updateReport === 'function') {
-            reportGeneratorRef.value.updateReport();
-          }
-        });
-      }
-    }
-  });
-
-  // 鐩戝惉 reportGeneratorRef 浠ュ鐞嗙粍浠跺悗鏈熸寕杞界殑鎯呭喌
-  watch(() => reportGeneratorRef.value, (newRef) => {
-    if (newRef && !reportComponentInitialized && activeTab.value === 'report' && reportData.value) {
-      console.log('ReportGenerator缁勪欢宸叉寕杞斤紝鍒濆鍖栨姤鍛婃暟鎹?);
-      nextTick(() => {
-        if (typeof newRef.updateReport === 'function') {
-          newRef.updateReport();
-          reportComponentInitialized = true;
-        }
-      });
-    }
-  });
-
-  // 鐩戝惉棰樼洰璇勮鍙樺寲锛屽悓姝ユ洿鏂版姤鍛婂唴瀹?  watch(() => parsedQuestions.value, () => {
-    if (parsedQuestions.value.length > 0) {
-      updateReportWithComments();
-    }
-  }, { deep: true });
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', handleResize)
+  disposeCharts()
 })
 </script>
 

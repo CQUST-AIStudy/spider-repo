@@ -37,6 +37,10 @@ public class DashScopeEmbeddingClient {
      * 调用 DashScope embedding API，将 query 文本转为向量。
      */
     public List<Float> embedQuery(String text) {
+        if (props.dashscope() == null || props.dashscope().apiKey() == null || props.dashscope().apiKey().isBlank()) {
+            throw new IllegalStateException("DASHSCOPE_API_KEY is empty");
+        }
+
         JsonObject body = new JsonObject();
         body.addProperty("model", props.dashscope().embeddingModel());
         body.addProperty("dimensions", props.dashscope().embeddingDimensions());

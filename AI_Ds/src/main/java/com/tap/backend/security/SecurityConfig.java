@@ -51,12 +51,15 @@ public class SecurityConfig {
    * 匹配 /api/auth/**, /api/documents/**, /api/uploads/**, /api/papers/**,
    *       /api/chat, /api/agent/**, /api/admin/**, /api/hello, /actuator/**
    */
+  /**
+   * TAP API chain — JWT-only, fully stateless.
+   * No legacy session fallback; TAP clients must use Bearer tokens.
+   */
   @Bean
   @Order(1)
   public SecurityFilterChain tapSecurityFilterChain(
       HttpSecurity http,
-      JwtAuthFilter jwtAuthFilter,
-      LegacySessionAuthFilter legacySessionAuthFilter) throws Exception {
+      JwtAuthFilter jwtAuthFilter) throws Exception {
     http.securityMatcher(TAP_API_MATCHERS);
     http.csrf(csrf -> csrf.disable());
     http.cors(cors -> {});
@@ -86,12 +89,12 @@ public class SecurityConfig {
         .anyRequest().authenticated()
     );
     http.addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
-    http.addFilterAfter(legacySessionAuthFilter, JwtAuthFilter.class);
     return http.build();
   }
 
   /**
-   * AI_Ds 原有路径全部放行 (session-based, 由原有 LoginController 管理)
+   * Legacy AI_Ds chain — session-based auth managed by the original LoginController.
+   * Covers all paths not matched by the TAP API chain above.
    */
   @Bean
   @Order(2)

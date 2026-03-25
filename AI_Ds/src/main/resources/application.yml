@@ -5,7 +5,7 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: jdbc:mysql://localhost:3306/ptadatabase?useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&cachePrepStmts=true&prepStmtCacheSize=250&prepStmtCacheSqlLimit=2048&useServerPrepStmts=true&rewriteBatchedStatements=true
     username: ${DB_USERNAME:root}
-    password: ${DB_PASSWORD:${DB_PASS:123456}}
+    password: ${DB_PASSWORD:${DB_PASS:}}
     hikari:
       connection-timeout: 20000
       maximum-pool-size: ${DB_POOL_MAX:30}
@@ -18,7 +18,7 @@ spring:
     database-platform: org.hibernate.dialect.MySQL8Dialect
     show-sql: false
     hibernate:
-      ddl-auto: update
+      ddl-auto: validate
     open-in-view: false
     properties:
       hibernate:
@@ -123,13 +123,13 @@ management:
     health:
       show-details: always
 
-apk:
+ark:
   api:
-    key: cd5f887d-6484-47b9-afbd-dd1c66646e89
+    key: ${ARK_API_KEY:}
 
 volcano:
   api:
-    key: cd5f887d-6484-47b9-afbd-dd1c66646e89
+    key: ${VOLCANO_API_KEY:}
     model: deepseek-r1-250120
 
 # ========== LeetCode 推荐系统配置 ==========
@@ -161,17 +161,17 @@ tap:
   security:
     jwt:
       issuer: ${JWT_ISSUER:tap}
-      secret: ${JWT_SECRET:CHANGE_ME_PLEASE_CHANGE_ME_32_BYTES_MINIMUM_123456}
+      secret: ${JWT_SECRET:}
       access-token-ttl-seconds: ${JWT_TTL_SECONDS:3600}
   quota:
     translation-chars-per-day: ${QUOTA_TRANSLATION_CHARS_PER_DAY:200000}
     ai-requests-per-day: ${QUOTA_AI_REQUESTS_PER_DAY:200}
     admin-unlimited: ${QUOTA_ADMIN_UNLIMITED:true}
   ai:
-    provider: ${AI_PROVIDER:openai}
+    provider: ${AI_PROVIDER:mock}
     openai:
       base-url: ${OPENAI_BASE_URL:https://api.deepseek.com/v1}
-      api-key: ${OPENAI_API_KEY:sk-a61d8a8deb854cc59581734b4fc35bc3}
+      api-key: ${OPENAI_API_KEY:}
       model: ${OPENAI_MODEL:deepseek-chat}
   documents:
     extracted-text-max-chars: ${DOC_EXTRACT_MAX_CHARS:20000}
@@ -185,7 +185,7 @@ tap:
     cache-ttl-seconds: ${TRANS_CACHE_TTL_SECONDS:604800}
     provider: ${TRANS_PROVIDER:deepl}
     deepl:
-      api-key: ${DEEPL_API_KEY:a552bcdc-b62c-4c14-a3fc-7c4fd6955d09:fx}
+      api-key: ${DEEPL_API_KEY:}
       base-url: ${DEEPL_BASE_URL:https://api-free.deepl.com}
       max-batch-size: ${DEEPL_MAX_BATCH_SIZE:40}
       min-interval-ms: ${DEEPL_MIN_INTERVAL_MS:0}
@@ -197,7 +197,7 @@ tap:
       bucket: ${MINIO_BUCKET:tap-files}
   rag:
     dashscope:
-      api-key: ${DASHSCOPE_API_KEY:sk-6a01147d106643a79a9a6a738cc6d993}
+      api-key: ${DASHSCOPE_API_KEY:}
       embedding-model: text-embedding-v3
       embedding-dimensions: 1024
     milvus:
@@ -250,7 +250,7 @@ pta:
   scheduler:
     max-concurrency: ${PTA_SYNC_MAX_CONCURRENCY:3}
     submit-interval-ms: ${PTA_SYNC_SUBMIT_INTERVAL_MS:200}
-  auto-start: ${PTA_SPIDER_AUTO_START:true}
+  auto-start: ${PTA_SPIDER_AUTO_START:false}
   start-script: ${PTA_SPIDER_START_SCRIPT:../.kiro/start_spider_api.ps1}
   start-timeout-seconds: ${PTA_SPIDER_START_TIMEOUT_SECONDS:25}
   auto-stop: ${PTA_SPIDER_AUTO_STOP:true}

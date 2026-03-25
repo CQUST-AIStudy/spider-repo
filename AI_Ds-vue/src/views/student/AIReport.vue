@@ -47,7 +47,7 @@
                       <div class="info-row report-status">
                         <template v-if="experiment.report">
                           <el-icon class="success-icon">
-                            <DocumentCheck />
+                            <DocumentChecked />
                           </el-icon>
                           <span>已生成报告</span>
                         </template>
@@ -88,7 +88,7 @@
                   <el-button type="primary" :loading="experimentStore.generatingReport"
                              :disabled="experimentStore.generatingReport" @click="generateReport">
                     <el-icon>
-                      <Magic />
+                      <MagicStick />
                     </el-icon>
                     {{ selectedExperiment.report ? '重新生成报告' : '生成AI报告' }}
                   </el-button>
@@ -126,7 +126,7 @@
               <div v-else-if="!selectedExperiment.report && !isReportViewVisible" class="no-report">
                 <div class="ai-feature">
                   <el-icon class="ai-feature-icon">
-                    <Magic />
+                    <MagicStick />
                   </el-icon>
                   <h2>AI实验报告智能生成</h2>
                   <p>基于您的实验代码和数据，AI可以快速生成一份完整的专业报告</p>
@@ -160,7 +160,7 @@
                   <el-button type="primary" size="large" :loading="experimentStore.generatingReport"
                              :disabled="experimentStore.generatingReport" @click="generateReport">
                     <el-icon>
-                      <Magic />
+                      <MagicStick />
                     </el-icon>
                     开始生成AI报告
                   </el-button>
@@ -292,7 +292,7 @@ import LoadingState from '../../components/LoadingState.vue'
 import ReportGenerator from '../../components/ReportGenerator.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Magic, View, Download, Timer, Calendar, DocumentCheck, Warning,
+  MagicStick, View, Download, Timer, Calendar, DocumentChecked, Warning,
   WarningFilled, Stopwatch, DataLine, Reading, Back, Select, ChatLineRound
 } from '@element-plus/icons-vue'
 import { DocxGenerator } from '../../utils/docxGenerator'

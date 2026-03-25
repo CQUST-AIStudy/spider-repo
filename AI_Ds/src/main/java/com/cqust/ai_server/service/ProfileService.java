@@ -1,5 +1,6 @@
 package com.cqust.ai_server.service;
 
+import com.cqust.ai_server.config.SkillTreeConfig;
 import com.cqust.ai_server.dao.ProfileDao;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
@@ -8,6 +9,8 @@ import com.google.gson.JsonParser;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -24,8 +27,13 @@ import org.springframework.cache.annotation.CacheEvict;
 @Service
 public class ProfileService {
 
+    private static final Logger log = LoggerFactory.getLogger(ProfileService.class);
+
     @Autowired
     private ProfileDao profileDao;
+
+    @Autowired
+    private SkillTreeConfig skillTreeConfig;
 
     @Value("${tap.ai.openai.api-key:}")
     private String deepseekApiKey;
@@ -42,51 +50,6 @@ public class ProfileService {
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .build();
-
-    // ========== 技能树定义 ==========
-    // 一级维度 → 实验ID列表
-    private static final Map<String, List<Integer>> SKILL_TREE = new LinkedHashMap<>();
-    private static final Map<String, String> SKILL_DESCRIPTIONS = new LinkedHashMap<>();
-
-    static {
-        SKILL_TREE.put("线性表", List.of(1, 2, 3, 4, 5, 6, 7));
-        SKILL_TREE.put("栈与队列", List.of(8, 9, 15));
-        SKILL_TREE.put("树", List.of(10, 11, 12));
-        SKILL_TREE.put("图", List.of(14, 16));
-        SKILL_TREE.put("哈希", List.of(13));
-        SKILL_TREE.put("综合", List.of(17, 18, 19));
-
-        SKILL_DESCRIPTIONS.put("线性表", "顺序表、单链表、双向链表、循环链表等线性数据结构");
-        SKILL_DESCRIPTIONS.put("栈与队列", "栈的实现与应用、队列的实现");
-        SKILL_DESCRIPTIONS.put("树", "二叉搜索树、二叉树遍历、Huffman树");
-        SKILL_DESCRIPTIONS.put("图", "DFS/BFS、Dijkstra/Prim最短路径与最小生成树");
-        SKILL_DESCRIPTIONS.put("哈希", "哈希表的实现与冲突处理");
-        SKILL_DESCRIPTIONS.put("综合", "综合练习与期中复习");
-    }
-
-    // 实验ID → 实验名称映射（从数据库动态获取更好，但MVP先硬编码）
-    private static final Map<Integer, String> EXPERIMENT_NAMES = new LinkedHashMap<>();
-    static {
-        EXPERIMENT_NAMES.put(1, "第1次作业");
-        EXPERIMENT_NAMES.put(2, "第1次实验");
-        EXPERIMENT_NAMES.put(3, "第2次作业(单链表)");
-        EXPERIMENT_NAMES.put(4, "第2次实验(单链表)");
-        EXPERIMENT_NAMES.put(5, "第3次作业(单链表)");
-        EXPERIMENT_NAMES.put(6, "第3次实验(链表应用)");
-        EXPERIMENT_NAMES.put(7, "第4次作业(双向循环链表)");
-        EXPERIMENT_NAMES.put(8, "第4次实验(栈)");
-        EXPERIMENT_NAMES.put(9, "第5次实验(队列)");
-        EXPERIMENT_NAMES.put(10, "第6次作业(BST)");
-        EXPERIMENT_NAMES.put(11, "第6次实验(二叉树遍历)");
-        EXPERIMENT_NAMES.put(12, "第7次实验(Huffman)");
-        EXPERIMENT_NAMES.put(13, "第8次实验(HashTable)");
-        EXPERIMENT_NAMES.put(14, "第9次实验(DFS/BFS)");
-        EXPERIMENT_NAMES.put(15, "第10次实验(栈应用)");
-        EXPERIMENT_NAMES.put(16, "第11次实验(Dijkstra/Prim)");
-        EXPERIMENT_NAMES.put(17, "第12次实验");
-        EXPERIMENT_NAMES.put(18, "期中复习");
-        EXPERIMENT_NAMES.put(19, "例题");
-    }
 
     // ========== 学生画像 ==========
 
@@ -181,7 +144,7 @@ public class ProfileService {
         List<Double> scores = new ArrayList<>();
         List<Double> confidences = new ArrayList<>();
 
-        for (var entry : SKILL_TREE.entrySet()) {
+        for (var entry : skillTreeConfig.getDimensions().entrySet()) {
             String dim = entry.getKey();
             List<Integer> expIds = entry.getValue();
             double sumScore = 0, sumConf = 0;
@@ -211,7 +174,7 @@ public class ProfileService {
             Map<Integer, Map<String, Object>> statsByExp) {
 
         List<Map<String, Object>> tree = new ArrayList<>();
-        for (var entry : SKILL_TREE.entrySet()) {
+        for (var entry : skillTreeConfig.getDimensions().entrySet()) {
             String dim = entry.getKey();
             List<Integer> expIds = entry.getValue();
 
@@ -221,7 +184,7 @@ public class ProfileService {
             for (int eid : expIds) {
                 Map<String, Object> child = new LinkedHashMap<>();
                 child.put("experimentId", eid);
-                child.put("name", EXPERIMENT_NAMES.getOrDefault(eid, "实验" + eid));
+                child.put("name", skillTreeConfig.getExperimentName(eid));
                 double m = expMastery.getOrDefault(eid, 0.0);
                 double c = expConfidence.getOrDefault(eid, 0.0);
                 child.put("mastery", m);
@@ -243,7 +206,7 @@ public class ProfileService {
 
             Map<String, Object> node = new LinkedHashMap<>();
             node.put("dimension", dim);
-            node.put("description", SKILL_DESCRIPTIONS.get(dim));
+            node.put("description", skillTreeConfig.getDescriptions().get(dim));
             node.put("avgMastery", count > 0 ? Math.round(sumScore / count * 10.0) / 10.0 : 0);
             node.put("level", (count > 0 ? sumScore / count : 0) >= 70 ? "good" :
                               (count > 0 ? sumScore / count : 0) >= 40 ? "medium" : "weak");
@@ -273,17 +236,14 @@ public class ProfileService {
             Map<String, Object> stats = statsByExp.get(expId);
 
             // 找到所属维度
-            String dimension = SKILL_TREE.entrySet().stream()
-                    .filter(e -> e.getValue().contains(expId))
-                    .map(Map.Entry::getKey)
-                    .findFirst().orElse("未知");
+            String dimension = skillTreeConfig.getDimensionForExperiment(expId);
 
             // 获取薄弱题目
             List<Map<String, Object>> weakQs = profileDao.getStudentWeakQuestions(studentId, expId);
 
             Map<String, Object> w = new LinkedHashMap<>();
             w.put("experimentId", expId);
-            w.put("experimentName", EXPERIMENT_NAMES.getOrDefault(expId, "实验" + expId));
+            w.put("experimentName", skillTreeConfig.getExperimentName(expId));
             w.put("dimension", dimension);
             w.put("mastery", mastery);
             w.put("confidence", expConfidence.getOrDefault(expId, 0.0));
@@ -319,7 +279,7 @@ public class ProfileService {
         for (var entry : expMastery.entrySet()) {
             series.add(Map.of(
                     "experimentId", entry.getKey(),
-                    "name", EXPERIMENT_NAMES.getOrDefault(entry.getKey(), "exp" + entry.getKey()),
+                    "name", skillTreeConfig.getExperimentName(entry.getKey()),
                     "mastery", entry.getValue()
             ));
         }
@@ -426,7 +386,7 @@ public class ProfileService {
         overview.put("totalAc", totalAc);
         overview.put("overallAcRate", totalSub > 0 ? Math.round((double) totalAc / totalSub * 1000.0) / 10.0 : 0);
         overview.put("experimentsCovered", expCount);
-        overview.put("totalExperiments", 19);
+        overview.put("totalExperiments", skillTreeConfig.getExperimentNames().size());
         return overview;
     }
 
@@ -490,7 +450,7 @@ public class ProfileService {
                     }
                 }
             } catch (Exception e) {
-                System.err.println("[ProfileService] 查询缓存失败: " + e.getMessage());
+                log.warn("查询缓存失败: {}", e.getMessage());
             }
         }
 
@@ -507,13 +467,13 @@ public class ProfileService {
                         try {
                             profileDao.saveAiFeedback(studentId, llmFeedback, profileJson);
                         } catch (Exception e) {
-                            System.err.println("[ProfileService] 保存缓存失败: " + e.getMessage());
+                            log.warn("保存缓存失败: {}", e.getMessage());
                         }
                     }
                     return llmFeedback;
                 }
             } catch (Exception e) {
-                System.err.println("[ProfileService] DeepSeek调用失败，使用模板: " + e.getMessage());
+                log.warn("DeepSeek调用失败，使用模板: {}", e.getMessage());
             }
         }
 
@@ -524,6 +484,7 @@ public class ProfileService {
     /**
      * 强制刷新：重新调用DeepSeek分析，更新DB缓存，返回新反馈
      */
+    @CacheEvict(value = "studentProfile", key = "#studentId")
     public Map<String, Object> refreshFeedback(String studentId) {
         // 重新计算完整画像
         Map<String, Object> studentInfo = profileDao.getStudentInfo(studentId);
@@ -561,7 +522,7 @@ public class ProfileService {
             try {
                 feedback = callDeepSeek(profileJson, name);
             } catch (Exception e) {
-                System.err.println("[ProfileService] 刷新时DeepSeek调用失败: " + e.getMessage());
+                log.warn("刷新时DeepSeek调用失败: {}", e.getMessage());
             }
         }
 
@@ -573,7 +534,7 @@ public class ProfileService {
         try {
             profileDao.saveAiFeedback(studentId, feedback, profileJson);
         } catch (Exception e) {
-            System.err.println("[ProfileService] 刷新保存缓存失败: " + e.getMessage());
+            log.warn("刷新保存缓存失败: {}", e.getMessage());
         }
 
         Map<String, Object> result = new LinkedHashMap<>();
@@ -641,8 +602,8 @@ public class ProfileService {
 
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
-                System.err.println("[DeepSeek] API错误: " + response.code() + " " +
-                        (response.body() != null ? response.body().string() : ""));
+                log.warn("DeepSeek API错误: {} {}", response.code(),
+                        response.body() != null ? response.body().string() : "");
                 return null;
             }
             String respStr = response.body() != null ? response.body().string() : "";
@@ -765,7 +726,7 @@ public class ProfileService {
             Map<String, Double> dimScores = new LinkedHashMap<>();
             double totalScore = 0;
             int dimCount = 0;
-            for (var dim : SKILL_TREE.entrySet()) {
+            for (var dim : skillTreeConfig.getDimensions().entrySet()) {
                 double sum = 0; int cnt = 0;
                 for (int eid : dim.getValue()) {
                     if (expMastery.containsKey(eid)) { sum += expMastery.get(eid); cnt++; }
@@ -783,7 +744,7 @@ public class ProfileService {
         Map<String, Double> classDimAvg = new LinkedHashMap<>();
         Map<String, Double> classDimMin = new LinkedHashMap<>();
         Map<String, Integer> classDimWeakCount = new LinkedHashMap<>();
-        for (String dim : SKILL_TREE.keySet()) {
+        for (String dim : skillTreeConfig.getDimensions().keySet()) {
             double sum = 0; int cnt = 0; double min = 100; int weakCnt = 0;
             for (var ds : studentDimScores.values()) {
                 double v = ds.getOrDefault(dim, 0.0);
@@ -799,7 +760,7 @@ public class ProfileService {
         // 2. 薄弱维度排行（按低分人数占比排序）
         List<Map<String, Object>> weakRanking = new ArrayList<>();
         int totalStudents = studentDimScores.size();
-        for (String dim : SKILL_TREE.keySet()) {
+        for (String dim : skillTreeConfig.getDimensions().keySet()) {
             Map<String, Object> wr = new LinkedHashMap<>();
             wr.put("dimension", dim);
             wr.put("avgScore", classDimAvg.get(dim));
@@ -839,7 +800,7 @@ public class ProfileService {
         result.put("dimensionAvg", classDimAvg);
         result.put("weakRanking", weakRanking);
         result.put("tiers", tiers);
-        result.put("dimensions", new ArrayList<>(SKILL_TREE.keySet()));
+        result.put("dimensions", new ArrayList<>(skillTreeConfig.getDimensions().keySet()));
         return result;
     }
 
@@ -849,23 +810,23 @@ public class ProfileService {
     public Map<String, Object> getSkillTreeConfig() {
         Map<String, Object> result = new LinkedHashMap<>();
         List<Map<String, Object>> tree = new ArrayList<>();
-        for (var entry : SKILL_TREE.entrySet()) {
+        for (var entry : skillTreeConfig.getDimensions().entrySet()) {
             Map<String, Object> node = new LinkedHashMap<>();
             node.put("dimension", entry.getKey());
-            node.put("description", SKILL_DESCRIPTIONS.get(entry.getKey()));
+            node.put("description", skillTreeConfig.getDescriptions().get(entry.getKey()));
             List<Map<String, Object>> children = new ArrayList<>();
             for (int eid : entry.getValue()) {
                 children.add(Map.of(
                         "experimentId", eid,
-                        "name", EXPERIMENT_NAMES.getOrDefault(eid, "实验" + eid)
+                        "name", skillTreeConfig.getExperimentName(eid)
                 ));
             }
             node.put("experiments", children);
             tree.add(node);
         }
         result.put("skillTree", tree);
-        result.put("totalDimensions", SKILL_TREE.size());
-        result.put("totalExperiments", EXPERIMENT_NAMES.size());
+        result.put("totalDimensions", skillTreeConfig.getDimensions().size());
+        result.put("totalExperiments", skillTreeConfig.getExperimentNames().size());
         return result;
     }
 }

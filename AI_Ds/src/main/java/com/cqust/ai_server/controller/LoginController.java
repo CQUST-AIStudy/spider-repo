@@ -19,6 +19,8 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 public class LoginController {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(LoginController.class);
+
     @Autowired
     private UserService userService;
 
@@ -133,7 +135,7 @@ public class LoginController {
             try {
                 userService.bindStudentByUsernum(username, usernum, classname);
             } catch (Exception e) {
-                System.out.println("student binding warning: " + e.getMessage());
+                log.warn("student binding warning: {}", e.getMessage());
             }
 
             response.put("success", true);

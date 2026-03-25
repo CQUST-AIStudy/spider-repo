@@ -44,7 +44,6 @@ import java.util.stream.Collectors;
  */
 @RestController
 @RequestMapping("/api/rag")
-@CrossOrigin(origins = "*", allowedHeaders = "*")
 public class RagChatController {
 
     private static final Logger log = LoggerFactory.getLogger(RagChatController.class);

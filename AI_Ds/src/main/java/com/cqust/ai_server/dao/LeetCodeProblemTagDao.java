@@ -26,6 +26,11 @@ public interface LeetCodeProblemTagDao {
      * 根据多个标签查找题目ID
      */
     List<Long> findProblemIdsByTags(@Param("tagType") String tagType, @Param("tagValues") List<String> tagValues);
+
+    /**
+     * 跨标签类型根据标签值查找题目ID
+     */
+    List<Long> findProblemIdsByTagValues(@Param("tagValues") List<String> tagValues);
     
     /**
      * 获取所有标签类型

@@ -38,6 +38,16 @@
         ORDER BY confidence DESC
     </select>
 
+    <!-- 跨标签类型根据标签值查找题目ID -->
+    <select id="findProblemIdsByTagValues" resultType="java.lang.Long">
+        SELECT DISTINCT problem_id FROM leetcode_problem_tag
+        WHERE tag_value IN
+        <foreach collection="tagValues" item="tagValue" open="(" separator="," close=")">
+            #{tagValue}
+        </foreach>
+        ORDER BY confidence DESC
+    </select>
+
     <!-- 获取所有标签类型 -->
     <select id="findAllTagTypes" resultType="java.lang.String">
         SELECT DISTINCT tag_type FROM leetcode_problem_tag 

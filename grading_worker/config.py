@@ -22,7 +22,7 @@ MINIO_BUCKET = os.getenv("MINIO_BUCKET", "tap-files")
 MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
 
 # DeepSeek API
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "sk-a61d8a8deb854cc59581734b4fc35bc3")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 DEEPSEEK_RATE_LIMIT = int(os.getenv("DEEPSEEK_RATE_LIMIT", "30"))  # requests per minute
@@ -45,7 +45,7 @@ TASK_QUEUE_KEY = "grading:tasks"
 RESULT_CHANNEL = "grading:results"
 
 # DashScope Embedding
-DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "sk-6a01147d106643a79a9a6a738cc6d993")
+DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
 DASHSCOPE_EMBEDDING_MODEL = "text-embedding-v3"
 DASHSCOPE_EMBEDDING_DIM = 1024
 DASHSCOPE_EMBEDDING_ENDPOINT = "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"

@@ -89,7 +89,7 @@ public class LegacySessionAccessResolver {
         if (value == null) {
             return null;
         }
-        String trimmed = value.trim();
+        String trimmed = value.trim().toLowerCase();
         return trimmed.isEmpty() ? null : trimmed;
     }
 }

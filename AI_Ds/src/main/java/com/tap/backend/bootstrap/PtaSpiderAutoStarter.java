@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.annotation.Profile;
 import org.springframework.context.event.EventListener;
 import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.http.ResponseEntity;
@@ -20,13 +21,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * Auto-starts the PTA spider process on application startup.
+ * Only active when the "dev" profile is enabled to prevent side effects
+ * during tests and production deployments.
+ */
 @Component
+@Profile("dev")
 public class PtaSpiderAutoStarter {
 
     private static final Logger log = LoggerFactory.getLogger(PtaSpiderAutoStarter.class);
     private final RestTemplate restTemplate = new RestTemplate();
 
-    @Value("${pta.auto-start:true}")
+    @Value("${pta.auto-start:false}")
     private boolean autoStart;
 
     @Value("${pta.spider-url:http://127.0.0.1:8100}")

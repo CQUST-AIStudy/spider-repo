@@ -52,6 +52,9 @@ def embed_texts(texts: List[str]) -> List[List[float]]:
 
 def _call_api(batch: List[str]) -> List[List[float]]:
     """Send a single batch request to DashScope embedding endpoint."""
+    if not config.DASHSCOPE_API_KEY:
+        raise RuntimeError("DASHSCOPE_API_KEY is not configured")
+
     payload = {
         "model": config.DASHSCOPE_EMBEDDING_MODEL,
         "input": batch,

@@ -1,21 +1,21 @@
+# ============================================================
+# Dev-only overrides — activate with: --spring.profiles.active=dev
+# These values are ONLY safe for local development.
+# Production MUST set real values via environment variables.
+# ============================================================
+
 spring:
-  # 禁用Redis自动配置
-  autoconfigure:
-    exclude:
-      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
-      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
+  datasource:
+    password: ${DB_PASSWORD:${DB_PASS:123456}}
 
-# 禁用Redis相关功能
 tap:
-  grading:
-    export:
-      max-concurrency: 1
-      submit-interval-ms: 100
+  security:
+    jwt:
+      secret: ${JWT_SECRET:dev_only_jwt_secret_not_for_production_use_1234567890}
 
-server:
-  port: 8082
+pta:
+  auto-start: ${PTA_SPIDER_AUTO_START:true}
 
 logging:
   level:
-    org.springframework.data.redis: OFF
-    io.lettuce: OFF
+    com.tap.backend.bootstrap: debug

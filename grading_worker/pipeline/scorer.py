@@ -76,6 +76,9 @@ def _extract_json_object(content: str) -> dict:
 
 def _post_chat_json(prompt: str, max_tokens: int) -> tuple[dict, dict]:
     """Call DeepSeek chat completion and parse the first JSON object in the reply."""
+    if not DEEPSEEK_API_KEY:
+        raise RuntimeError("DEEPSEEK_API_KEY is not configured")
+
     resp = httpx.post(
         f"{DEEPSEEK_BASE_URL}/chat/completions",
         json={

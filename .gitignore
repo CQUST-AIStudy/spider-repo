@@ -16,6 +16,7 @@ __pycache__/
 *.pyo
 *.egg-info/
 .env
+local.env.ps1
 
 # === Kiro internal ===
 .kiro/settings/

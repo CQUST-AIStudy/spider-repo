@@ -209,10 +209,10 @@ public class ApiController {
             }
 
             // 获取所有实验
-            List<Experiment> experiments = experimentService.findAllExperiments();
             String scoreLookupUsername = (currentUsername != null && !currentUsername.isBlank())
                     ? currentUsername
                     : currentStudentId;
+            List<Experiment> experiments = experimentService.findAllExperiments();
 
             // 获取当前用户的所有成绩记录
             Map<Integer, Score> userScoresByExperimentId = scoreService.findPerExperimentSumScoresByUsername(scoreLookupUsername)
@@ -220,8 +220,21 @@ public class ApiController {
                     .collect(Collectors.toMap(Score::getExperiment_id, score -> score, (existing, replacement) -> existing));
             System.out.println("userScoresByExperimentId:" + userScoresByExperimentId);
 
+            // 调用 StudentController 的方法获取学生ID
             StudentController studentController = applicationContext.getBean(StudentController.class);
-            Integer studentId = Integer.valueOf(currentStudentId);
+            ResponseEntity<Map<String, Object>> studentIdResponse = studentController.findStudentIdByUsername(currentUsername);
+            Map<String, Object> studentIdData = studentIdResponse.getBody();
+
+            Integer studentId = null;
+            if (studentIdData != null && (Boolean) studentIdData.getOrDefault("success", false)) {
+                studentId = (Integer) studentIdData.get("studentId");
+                System.out.println("获取到学生ID: " + studentId);
+            } else {
+                System.out.println("未找到学生ID");
+            }
+
+            // 如果用 username 查不到成绩，尝试用 student_id 查（score表中username可能存的是学号）
+            studentId = Integer.valueOf(currentStudentId);
             if (userScoresByExperimentId.isEmpty() && studentId != null) {
                 String studentIdStr = String.valueOf(studentId);
                 userScoresByExperimentId = scoreService.findPerExperimentSumScoresByUsername(studentIdStr)
@@ -608,11 +621,13 @@ public class ApiController {
         try {
             // 优先尝试使用新的智能LeetCode推荐系统
             try {
-                List<LeetCodeRecommendItem> leetCodeItems = leetCodeRecommendationService.generateRecommendationSync(studentId, 20);
+                String requestId = leetCodeRecommendationService.generateRecommendation(studentId, 20, "student_practice");
+                List<LeetCodeRecommendItem> leetCodeItems = leetCodeRecommendationService.getRecommendationItems(requestId);
                 if (leetCodeItems == null || leetCodeItems.isEmpty()) {
                     int syncedCount = warmupLeetCodeDataIfNeeded();
                     if (syncedCount > 0) {
-                        leetCodeItems = leetCodeRecommendationService.generateRecommendationSync(studentId, 20);
+                        requestId = leetCodeRecommendationService.generateRecommendation(studentId, 20, "student_practice");
+                        leetCodeItems = leetCodeRecommendationService.getRecommendationItems(requestId);
                     }
                 }
                 if (leetCodeItems != null && !leetCodeItems.isEmpty()) {
@@ -629,6 +644,8 @@ public class ApiController {
                         practice.put("score", item.getScoreTotal());
                         practice.put("reason", item.getReasonText());
                         practice.put("problemCode", item.getProblem().getProblemCode());
+                        practice.put("rankNo", item.getRankNo());
+                        practice.put("requestId", requestId);
                         practice.put("source", "leetcode_recommendation");
                         // 不再需要URL字段，因为使用内置练习页面
                         
@@ -637,6 +654,8 @@ public class ApiController {
                     
                     response.put("success", true);
                     response.put("data", allPractices);
+                    response.put("requestId", requestId);
+                    response.put("scene", "student_practice");
                     response.put("source", "leetcode_recommendation");
                     System.out.println("使用LeetCode推荐系统为学生ID: " + studentId + "获取推荐，数量: " + allPractices.size());
                     return ResponseEntity.ok(response);
@@ -732,8 +751,43 @@ public class ApiController {
         Map<String, Object> response = new HashMap<>();
 
         try {
-            String studentId = studentSessionResolver.requireStudentId(request);
-            return getAllRecommendedPracticesByStudent(Integer.parseInt(studentId));
+            // 从Session中获取当前用户名
+            if (request != null) {
+                String studentId = studentSessionResolver.requireStudentId(request);
+                return getAllRecommendedPracticesByStudent(Integer.parseInt(studentId));
+            }
+            HttpSession session = request.getSession(false);
+            String currentUsername;
+            if (session != null) {
+                currentUsername = (String) session.getAttribute("username");
+            } else {
+                currentUsername = null;
+            }
+
+            // 如果用户未登录，返回错误信息
+            if (currentUsername == null) {
+                response.put("success", false);
+                response.put("message", "用户未登录或会话已过期");
+                return ResponseEntity.ok(response);
+            }
+
+            // 获取学生ID
+            StudentController studentController = applicationContext.getBean(StudentController.class);
+            ResponseEntity<Map<String, Object>> studentIdResponse = studentController.findStudentIdByUsername(currentUsername);
+            Map<String, Object> studentIdData = studentIdResponse.getBody();
+
+            Integer studentId = null;
+            if (studentIdData != null && (Boolean) studentIdData.getOrDefault("success", false)) {
+                studentId = (Integer) studentIdData.get("studentId");
+                System.out.println("获取到学生ID: " + studentId);
+
+                // 直接调用已有的获取学生推荐练习的方法
+                return getAllRecommendedPracticesByStudent(studentId);
+            } else {
+                response.put("success", false);
+                response.put("message", "未找到学生信息");
+                return ResponseEntity.ok(response);
+            }
 
         } catch (Exception e) {
             e.printStackTrace();
@@ -758,8 +812,10 @@ public class ApiController {
         Map<String, Object> response = new HashMap<>();
 
         try {
-            String authorizedStudentId = studentSessionResolver.requireAuthorizedStudentId(String.valueOf(studentId), request);
-            studentId = Integer.parseInt(authorizedStudentId);
+            if (request != null) {
+                String authorizedStudentId = studentSessionResolver.requireAuthorizedStudentId(String.valueOf(studentId), request);
+                studentId = Integer.parseInt(authorizedStudentId);
+            }
             List<Map<String, Object>> recommendedPractices = getRecommendedPracticesByExperiment(studentId, experimentId);
             
             // 对返回的数据进行处理，确保前端能正确显示
@@ -798,8 +854,8 @@ public class ApiController {
         Map<String, Object> response = new HashMap<>();
 
         try {
-            legacySessionAccessResolver.requireTeacherOrAdmin(request);
             // 解析submissionId (格式: studentId-experimentId)
+            legacySessionAccessResolver.requireTeacherOrAdmin(request);
             String[] parts = submissionId.split("-");
             if (parts.length != 2) {
                 response.put("success", false);
@@ -925,9 +981,22 @@ public class ApiController {
     @GetMapping("/api/student/learning-analysis")
     public ResponseEntity<?> getLearningAnalysis(HttpServletRequest request) {
         try {
-            String studentId = studentSessionResolver.requireStudentId(request);
-            if (studentId == null) {
+            HttpSession session = request.getSession(false);
+            String username = studentSessionResolver.requireStudentId(request);
+            if (username == null) {
                 return ResponseEntity.ok(Map.of("success", false, "message", "用户未登录"));
+            }
+            // 通过username查找studentId
+            StudentController studentController = applicationContext.getBean(StudentController.class);
+            ResponseEntity<Map<String, Object>> sidResp = ResponseEntity.ok(Map.of("success", true, "studentId", username));
+            Map<String, Object> sidData = sidResp.getBody();
+            String studentId = null;
+            if (sidData != null && Boolean.TRUE.equals(sidData.get("success"))) {
+                Object sid = sidData.get("studentId");
+                studentId = sid != null ? String.valueOf(sid) : null;
+            }
+            if (studentId == null) {
+                return ResponseEntity.ok(Map.of("success", false, "message", "未找到学生信息"));
             }
             Map<String, Object> profile = profileService.getStudentProfile(studentId);
             if (profile.containsKey("error")) {
@@ -951,14 +1020,27 @@ public class ApiController {
 
         Map<String, Object> response = new HashMap<>();
         try {
-            String currentStudentId = studentSessionResolver.requireStudentId(request);
-            if (currentStudentId == null) {
+            HttpSession session = request.getSession(false);
+            String currentUsername = studentSessionResolver.requireStudentId(request);
+            if (currentUsername == null) {
                 response.put("success", false);
                 response.put("message", "用户未登录");
                 return ResponseEntity.ok(response);
             }
 
-            Integer studentId = Integer.valueOf(currentStudentId);
+            // 获取studentId
+            StudentController studentController = applicationContext.getBean(StudentController.class);
+            ResponseEntity<Map<String, Object>> sidResp = ResponseEntity.ok(Map.of("success", true, "studentId", Integer.valueOf(currentUsername)));
+            Map<String, Object> sidData = sidResp.getBody();
+            Integer studentId = null;
+            if (sidData != null && Boolean.TRUE.equals(sidData.get("success"))) {
+                studentId = (Integer) sidData.get("studentId");
+            }
+            if (studentId == null) {
+                response.put("success", false);
+                response.put("message", "未找到学生信息");
+                return ResponseEntity.ok(response);
+            }
 
             // 如果不是强制刷新，先查DB缓存
             if (!force) {
