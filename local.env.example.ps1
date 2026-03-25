@@ -14,6 +14,11 @@ $env:ARK_API_KEY = ""
 # Optional migration flag: keep false unless you explicitly need the old standalone tap-backend.
 # $env:START_LEGACY_TAP_BACKEND = "true"
 
+# Optional TAP development seed users.
+# $env:TAP_DEV_SEED_USERS_ENABLED = "true"
+# $env:TAP_DEV_ADMIN_PASSWORD = "change-me"
+# $env:TAP_DEV_TEACHER_PASSWORD = "change-me"
+
 # Optional local service credentials
 # $env:DB_USERNAME = "root"
 # $env:DB_PASSWORD = "123456"
