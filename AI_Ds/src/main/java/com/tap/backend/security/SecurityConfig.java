@@ -53,7 +53,10 @@ public class SecurityConfig {
    */
   @Bean
   @Order(1)
-  public SecurityFilterChain tapSecurityFilterChain(HttpSecurity http, JwtAuthFilter jwtAuthFilter) throws Exception {
+  public SecurityFilterChain tapSecurityFilterChain(
+      HttpSecurity http,
+      JwtAuthFilter jwtAuthFilter,
+      LegacySessionAuthFilter legacySessionAuthFilter) throws Exception {
     http.securityMatcher(TAP_API_MATCHERS);
     http.csrf(csrf -> csrf.disable());
     http.cors(cors -> {});
@@ -78,11 +81,12 @@ public class SecurityConfig {
         .requestMatchers("/api/grading/**").authenticated()
         .requestMatchers("/api/rag/**").authenticated()
         .requestMatchers("/api/classes/**").authenticated()
-        .requestMatchers("/api/analytics/student/**").permitAll()
+        .requestMatchers("/api/analytics/student/**").authenticated()
         .requestMatchers("/api/analytics/**").authenticated()
         .anyRequest().authenticated()
     );
     http.addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
+    http.addFilterAfter(legacySessionAuthFilter, JwtAuthFilter.class);
     return http.build();
   }
 
