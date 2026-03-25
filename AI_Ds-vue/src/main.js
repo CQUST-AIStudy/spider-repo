@@ -10,7 +10,9 @@ import './assets/styles/google-theme.css'
 // 导入工具
 import './utils'
 // 导入模拟数据
-import './mock'
+if (process.env.NODE_ENV === 'development') {
+  import('./mock')
+}
 
 // 引入Element Plus
 import * as ElementPlusComponents from 'element-plus'
