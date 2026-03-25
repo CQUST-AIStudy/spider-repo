@@ -13,7 +13,6 @@ import java.util.*;
  */
 @RestController
 @RequestMapping("/api/analytics")
-@CrossOrigin(origins = "*")
 public class ExperimentAnalyticsController {
 
     @PersistenceContext
