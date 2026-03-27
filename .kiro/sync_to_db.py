@@ -53,7 +53,7 @@ for _env in _env_candidates:
 else:
     load_dotenv()
 
-CRAWL_DIR = Path(__file__).resolve().parent.parent / "爬取结果"
+CRAWL_DIR = Path(os.getenv("PTA_CRAWL_DIR", str(Path(__file__).resolve().parent.parent / "爬取结果"))).resolve()
 
 
 # ==================== ZIP 编码兼容工具 ====================

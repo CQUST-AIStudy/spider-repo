@@ -54,6 +54,14 @@ BASE_URL = "https://pintia.cn"
 API_BASE = "https://pintia.cn/api"
 # Track crawled problem set IDs for incremental detection
 HISTORY_FILE = "crawl_history.json"
+CRAWL_DIR = Path(os.getenv("PTA_CRAWL_DIR", str(Path(__file__).resolve().parent.parent / "爬取结果"))).resolve()
+
+
+def _env_flag(name, default=False):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 class TokenBucketRateLimiter:
@@ -155,6 +163,8 @@ class PTAClient:
     def __init__(self, username=None, password=None):
         self.username = username or os.getenv("PTA_USERNAME")
         self.password = password or os.getenv("PTA_PASSPORT")
+        self.crawl_dir = CRAWL_DIR
+        self.force_selenium_login = _env_flag("PTA_FORCE_SELENIUM_LOGIN", False)
         # Per-account cookie file, supports multi-account
         safe_name = re.sub(r'[^\w]', '_', self.username)
         self.cookie_file = f"pta_cookies_{safe_name}.pkl"
@@ -172,6 +182,7 @@ class PTAClient:
         })
         self.driver = None
         self.history = CrawlHistory()
+        self.crawl_dir.mkdir(parents=True, exist_ok=True)
 
     # ==================== Cookie Management ====================
 
@@ -212,17 +223,20 @@ class PTAClient:
     def ensure_login(self):
         """登录流程：缓存cookie → Selenium重试(3次递增间隔) → 手动cookie文件 → 通知后端告警"""
         # 1) 尝试缓存 cookie
-        cached = self._load_cookies()
-        if cached:
-            for c in cached:
-                self.session.cookies.set(
-                    c["name"], c["value"],
-                    domain=c.get("domain", ".pintia.cn")
-                )
-            if self._check_cookie_valid():
-                self._notify_cookie_status("OK")
-                return True
-            print("Cookie 已过期，尝试 Selenium 重新登录...")
+        if self.force_selenium_login:
+            print("PTA_FORCE_SELENIUM_LOGIN=true，跳过缓存 Cookie，强制打开浏览器登录...")
+        else:
+            cached = self._load_cookies()
+            if cached:
+                for c in cached:
+                    self.session.cookies.set(
+                        c["name"], c["value"],
+                        domain=c.get("domain", ".pintia.cn")
+                    )
+                if self._check_cookie_valid():
+                    self._notify_cookie_status("OK")
+                    return True
+                print("Cookie 已过期，尝试 Selenium 重新登录...")
 
         # 2) Selenium 重试（最多3次，间隔递增 30s/60s/120s）
         retry_delays = [30, 60, 120]
@@ -270,6 +284,11 @@ class PTAClient:
         print("教师可在「班级管理 → PTA同步设置」中手动更新 Cookie。")
         print("=" * 50)
         return False
+
+    def _problem_set_dir(self, ps_name):
+        base_dir = self.crawl_dir / ps_name
+        base_dir.mkdir(parents=True, exist_ok=True)
+        return base_dir
 
     def _notify_cookie_status(self, status: str, error: str = ""):
         """通知 Java 后端 cookie 状态（OK / EXPIRED），用于前端告警"""
@@ -751,15 +770,14 @@ class PTAClient:
 
     def _crawl_one_problem_set(self, ps_id, ps_name):
         """Crawl all data for a single problem set, save to ./爬取结果/"""
-        base_dir = f"./爬取结果/{ps_name}"
-        os.makedirs(base_dir, exist_ok=True)
+        base_dir = self._problem_set_dir(ps_name)
 
         # 1. Crawl problem content
         try:
             problems = self.get_problems(ps_id)
             print(f"  题目数量: {len(problems)}")
             if problems:
-                with open(f"{base_dir}/题目内容.txt", "w", encoding="utf-8") as f:
+                with open(base_dir / "题目内容.txt", "w", encoding="utf-8") as f:
                     for p in problems:
                         pid = p.get("id", "")
                         title = p.get("title", "")
@@ -783,7 +801,7 @@ class PTAClient:
             submissions = self.get_all_submissions(ps_id)
             if submissions:
                 import csv
-                with open(f"{base_dir}/提交记录.csv", "w", encoding="utf-8", newline="") as f:
+                with open(base_dir / "提交记录.csv", "w", encoding="utf-8", newline="") as f:
                     writer = csv.writer(f)
                     writer.writerow(["用户ID", "题目ID", "状态", "分数", "编译器", "用时", "内存", "提交时间"])
                     for sub in submissions:
@@ -802,7 +820,7 @@ class PTAClient:
             print(f"  获取提交记录失败: {e}")
 
         # 3. Export essential types only (PAPER/PAPER_ACCURATE/PAPER_ANALYSIS are redundant/computable)
-        export_dir = f"{base_dir}/导出"
+        export_dir = base_dir / "导出"
         export_configs = [
             ("ANSWER_SHEET",     "答题卡"),
             ("PAPER_TRANSCRIPT", "成绩单"),
@@ -810,7 +828,7 @@ class PTAClient:
         ]
         for export_type, cn_name in export_configs:
             try:
-                self.export_and_download(ps_id, ps_name, export_type, export_dir)
+                self.export_and_download(ps_id, ps_name, export_type, str(export_dir))
                 time.sleep(random.uniform(3, 5))  # Export is heavy, longer interval
             except requests.exceptions.HTTPError as e:
                 if e.response is not None and e.response.status_code == 403:
@@ -830,9 +848,9 @@ class PTAClient:
         刷新已爬取题目集的导出数据（不重新爬取题目内容和提交记录）。
         只重新导出: PAPER_TRANSCRIPT, ANSWER_SHEET, SCORED_CODE
         """
-        base_dir = f"./爬取结果/{ps_name}"
-        export_dir = f"{base_dir}/导出"
-        os.makedirs(export_dir, exist_ok=True)
+        base_dir = self._problem_set_dir(ps_name)
+        export_dir = base_dir / "导出"
+        export_dir.mkdir(parents=True, exist_ok=True)
 
         export_configs = [
             ("PAPER_TRANSCRIPT", "成绩单"),
@@ -841,7 +859,7 @@ class PTAClient:
         ]
         for export_type, cn_name in export_configs:
             try:
-                self.export_and_download(ps_id, ps_name, export_type, export_dir)
+                self.export_and_download(ps_id, ps_name, export_type, str(export_dir))
                 time.sleep(random.uniform(3, 5))
             except requests.exceptions.HTTPError as e:
                 if e.response is not None and e.response.status_code == 403:

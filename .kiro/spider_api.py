@@ -214,9 +214,8 @@ def _run_crawl(task):
                         try:
                             subs = client.get_all_submissions(ps["id"])
                             if subs:
-                                base_dir = f"./\u722c\u53d6\u7ed3\u679c/{ps.get('name','')}"
-                                os.makedirs(base_dir, exist_ok=True)
-                                with open(f"{base_dir}/\u63d0\u4ea4\u8bb0\u5f55.csv", "w", encoding="utf-8", newline="") as f:
+                                base_dir = client._problem_set_dir(ps.get("name", ""))
+                                with open(base_dir / "\u63d0\u4ea4\u8bb0\u5f55.csv", "w", encoding="utf-8", newline="") as f:
                                     w = csv.writer(f)
                                     w.writerow(["\u7528\u6237ID","\u9898\u76eeID","\u72b6\u6001","\u5206\u6570","\u7f16\u8bd1\u5668","\u7528\u65f6","\u5185\u5b58","\u63d0\u4ea4\u65f6\u95f4"])
                                     for s in subs:
