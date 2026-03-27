@@ -27,6 +27,7 @@ public class PtaSyncService {
     private static final Duration COOLDOWN = Duration.ofHours(24);
 
     private final TeachingClassRepository classRepo;
+    private final TeachingClassService teachingClassService;
     private final RestTemplate restTemplate;
 
     @Value("${pta.spider-url:http://127.0.0.1:8100}")
@@ -34,10 +35,12 @@ public class PtaSyncService {
 
     public PtaSyncService(
             TeachingClassRepository classRepo,
+            TeachingClassService teachingClassService,
             @Value("${pta.connect-timeout-ms:5000}") int connectTimeoutMs,
             @Value("${pta.read-timeout-ms:20000}") int readTimeoutMs
     ) {
         this.classRepo = classRepo;
+        this.teachingClassService = teachingClassService;
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(Math.max(1000, connectTimeoutMs));
         requestFactory.setReadTimeout(Math.max(1000, readTimeoutMs));
@@ -76,6 +79,11 @@ public class PtaSyncService {
     public Map<String, Object> getSyncStatus(Long classId, Long teacherId) {
         TeachingClassEntity teachingClass = requireOwnedClass(classId, teacherId);
         return toStatusMap(teachingClass);
+    }
+
+    @Transactional
+    public Map<String, Object> importStudents(Long classId, Long teacherId) {
+        return teachingClassService.importStudentsFromPta(classId, teacherId);
     }
 
     @Transactional

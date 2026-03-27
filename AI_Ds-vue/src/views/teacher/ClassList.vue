@@ -105,6 +105,14 @@
             <div class="card-actions">
               <el-button type="primary" @click="enterClassSpace(cls)">进入教学班</el-button>
               <el-button @click="manageStudents(cls)">学生管理</el-button>
+              <el-button
+                type="success"
+                plain
+                :loading="importingMap[cls.id]"
+                @click="importStudentsForClass(cls)"
+              >
+                导入 PTA 学生
+              </el-button>
               <el-button @click="viewAnalysis(cls)">班级分析</el-button>
               <el-button
                 v-if="hasPtaConfig(cls)"
@@ -284,6 +292,7 @@ import {
   getClassStudents,
   getPtaCookieStatus,
   getTeachingClasses,
+  importPtaStudents,
   removeClassStudent,
   submitPtaCookie,
   triggerPtaSync,
@@ -318,6 +327,7 @@ const classRules = {
 }
 
 const syncingMap = reactive({})
+const importingMap = reactive({})
 
 const studentDialogVisible = ref(false)
 const currentClass = ref(null)
@@ -557,6 +567,33 @@ const manageStudents = async (cls) => {
     ElMessage.error(error.message || '加载学生列表失败')
   } finally {
     studentsLoading.value = false
+  }
+}
+
+const importStudentsForClass = async (cls) => {
+  importingMap[cls.id] = true
+  try {
+    const res = await importPtaStudents(cls.id)
+    const data = extract(res) || {}
+    const matched = Number(data.matchedStudentCount || 0)
+    const created = Number(data.createdCount || 0)
+    const updated = Number(data.updatedCount || 0)
+
+    if (matched === 0) {
+      ElMessage.warning(`未找到 ${displayClassName(cls)} 的已同步 PTA 学生数据`)
+    } else {
+      ElMessage.success(`已导入 ${created} 人，更新 ${updated} 人`)
+    }
+
+    if (currentClass.value?.id === cls.id && studentDialogVisible.value) {
+      const studentRes = await getClassStudents(cls.id)
+      students.value = extract(studentRes) || []
+    }
+    await loadClasses()
+  } catch (error) {
+    ElMessage.error(error.message || '导入 PTA 学生失败')
+  } finally {
+    importingMap[cls.id] = false
   }
 }
 

@@ -5,6 +5,7 @@ import com.tap.backend.domain.classroom.TeachingClassEntity;
 import com.tap.backend.domain.user.UserEntity;
 import com.tap.backend.repo.ClassStudentRepository;
 import com.tap.backend.repo.TeachingClassRepository;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.LinkedHashSet;
 import java.util.NoSuchElementException;
@@ -17,10 +18,16 @@ public class TeachingClassService {
 
     private final TeachingClassRepository classRepo;
     private final ClassStudentRepository studentRepo;
+    private final LegacyPtaRosterService legacyPtaRosterService;
 
-    public TeachingClassService(TeachingClassRepository classRepo, ClassStudentRepository studentRepo) {
+    public TeachingClassService(
+            TeachingClassRepository classRepo,
+            ClassStudentRepository studentRepo,
+            LegacyPtaRosterService legacyPtaRosterService
+    ) {
         this.classRepo = classRepo;
         this.studentRepo = studentRepo;
+        this.legacyPtaRosterService = legacyPtaRosterService;
     }
 
     @Transactional(readOnly = true)
@@ -219,6 +226,53 @@ public class TeachingClassService {
             return List.of();
         }
         return classRepo.findAllById(classIds);
+    }
+
+    @Transactional
+    public java.util.Map<String, Object> importStudentsFromPta(Long classId, Long teacherId) {
+        TeachingClassEntity teachingClass = requireOwnedClass(classId, teacherId);
+        List<LegacyPtaRosterService.RosterStudent> roster = legacyPtaRosterService.findRoster(
+                teachingClass.getName(),
+                teachingClass.getPtaKeyword()
+        );
+
+        int createdCount = 0;
+        int updatedCount = 0;
+        int unchangedCount = 0;
+
+        for (LegacyPtaRosterService.RosterStudent item : roster) {
+            var existing = studentRepo.findByClassIdAndStudentNum(classId, item.studentNum());
+            if (existing.isPresent()) {
+                ClassStudentEntity student = existing.get();
+                if (item.studentName() != null
+                        && !item.studentName().isBlank()
+                        && !item.studentName().equals(student.getStudentName())) {
+                    student.setStudentName(item.studentName());
+                    studentRepo.save(student);
+                    updatedCount++;
+                } else {
+                    unchangedCount++;
+                }
+                continue;
+            }
+
+            ClassStudentEntity student = new ClassStudentEntity();
+            student.setTeachingClass(teachingClass);
+            student.setStudentNum(item.studentNum());
+            student.setStudentName(item.studentName());
+            studentRepo.save(student);
+            createdCount++;
+        }
+
+        java.util.Map<String, Object> result = new LinkedHashMap<>();
+        result.put("classId", teachingClass.getId());
+        result.put("className", teachingClass.getName());
+        result.put("ptaKeyword", teachingClass.getPtaKeyword());
+        result.put("matchedStudentCount", roster.size());
+        result.put("createdCount", createdCount);
+        result.put("updatedCount", updatedCount);
+        result.put("unchangedCount", unchangedCount);
+        return result;
     }
 
     private TeachingClassEntity requireOwnedClass(Long classId, Long teacherId) {

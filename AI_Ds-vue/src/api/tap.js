@@ -468,6 +468,10 @@ export function triggerPtaSync(classId) {
   return tapClient.post(`/api/classes/${classId}/pta-sync/trigger`)
 }
 
+export function importPtaStudents(classId) {
+  return tapClient.post(`/api/classes/${classId}/pta-sync/import-students`)
+}
+
 export function getPtaSyncStatus(classId) {
   return tapClient.get(`/api/classes/${classId}/pta-sync/status`)
 }

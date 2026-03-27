@@ -15,7 +15,7 @@ if (Test-Path $localEnvScript) {
 }
 
 Write-Host "`n[1/2] Starting unified AI_Ds backend on :8081..." -ForegroundColor Yellow
-Start-Process -FilePath "cmd.exe" -ArgumentList "/k", "cd /d G:\myapps\AI_Ds && mvnw.cmd spring-boot:run" -WindowStyle Normal
+Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "G:\myapps\scripts\run_backend_dev.ps1" -WindowStyle Normal
 
 Start-Sleep -Seconds 3
 
@@ -28,7 +28,7 @@ if ($env:START_LEGACY_TAP_BACKEND -eq "true") {
 }
 
 Write-Host "[2/2] Starting Vue frontend..." -ForegroundColor Yellow
-Start-Process -FilePath "cmd.exe" -ArgumentList "/k", "cd /d G:\myapps\AI_Ds-vue && npm run serve" -WindowStyle Normal
+Start-Process -FilePath "cmd.exe" -ArgumentList "/k", "G:\myapps\scripts\run_frontend_dev.cmd" -WindowStyle Normal
 
 Write-Host "`n========================================" -ForegroundColor Green
 Write-Host "  All services have been started." -ForegroundColor Green

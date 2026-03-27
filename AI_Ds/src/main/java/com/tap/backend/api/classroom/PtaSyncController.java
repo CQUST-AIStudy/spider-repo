@@ -59,6 +59,15 @@ public class PtaSyncController {
         return ApiResponse.of(syncService.getSyncStatus(classId, teacherId));
     }
 
+    @PostMapping("/import-students")
+    public ApiResponse<Map<String, Object>> importStudents(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long classId
+    ) {
+        Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
+        return ApiResponse.of(syncService.importStudents(classId, teacherId));
+    }
+
     record CallbackRequest(String status) {}
 
     @PutMapping("/callback")
