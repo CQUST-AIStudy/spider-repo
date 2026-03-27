@@ -95,6 +95,19 @@ public class GradingSubmissionController {
         }
     }
 
+    @PostMapping("/{id}/publish-report")
+    public ResponseEntity<?> publishToStudentReport(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserPrincipal principal
+    ) {
+        Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
+        try {
+            return ResponseEntity.ok(ApiResponse.of(submissionService.publishToStudentReport(id, teacherId)));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+        }
+    }
+
     public record OverrideRequest(
             Long dimensionId,
             BigDecimal newScore,

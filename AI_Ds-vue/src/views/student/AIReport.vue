@@ -455,7 +455,10 @@ const selectExperiment = (experiment) => {
 
     // 保存到本地存储
     try {
+      const report = correctedExperiment.report
       localStorage.setItem(`experiment_report_${experiment.id}`, correctedExperiment.report);
+      const teacherCommentMatch = report.match(/##\s*教师评语[^\n]*\n+([\s\S]+?)(?=\n##|\s*$)/i)
+      if (teacherCommentMatch) reportData.value.teacherComment = teacherCommentMatch[1].trim()
     } catch (e) {
       console.error('保存报告到本地存储失败:', e);
     }
@@ -483,6 +486,7 @@ const generateReport = async () => {
     experimentId: selectedExperiment.value.id,
     code: selectedExperiment.value.code,
     score: selectedExperiment.value.score,
+    teacherComment: selectedExperiment.value.teacherComment || '',
     submitTime: selectedExperiment.value.submitTime,
     deadline: selectedExperiment.value.deadline,
     plagiarismRate: selectedExperiment.value.plagiarismRate,

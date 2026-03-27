@@ -29,22 +29,32 @@
 
             <el-menu-item index="/student/learning-analysis">
               <el-icon><DataAnalysis /></el-icon>
-              <template #title>学习分析</template>
+              <template #title>学情分析</template>
             </el-menu-item>
 
             <el-menu-item index="/student/ai-report">
               <el-icon><Document /></el-icon>
-              <template #title>AI报告生成</template>
+              <template #title>AI 报告生成</template>
             </el-menu-item>
 
             <el-menu-item index="/student/ai-assistant">
               <el-icon><ChatDotRound /></el-icon>
-              <template #title>AI学习助手</template>
+              <template #title>AI 学习助手</template>
+            </el-menu-item>
+
+            <el-menu-item index="/student/class-join">
+              <el-icon><UserFilled /></el-icon>
+              <template #title>教学班</template>
             </el-menu-item>
 
             <el-menu-item index="/student/practice">
               <el-icon><Collection /></el-icon>
               <template #title>推荐练习</template>
+            </el-menu-item>
+
+            <el-menu-item index="/student/weakness-training">
+              <el-icon><Finished /></el-icon>
+              <template #title>错题本/专项训练</template>
             </el-menu-item>
 
             <el-menu-item index="/student/ability-profile">
@@ -95,10 +105,12 @@
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item command="profile">
-                    <el-icon><Setting /></el-icon> 个人信息
+                    <el-icon><Setting /></el-icon>
+                    个人信息
                   </el-dropdown-item>
                   <el-dropdown-item command="logout" divided>
-                    <el-icon><SwitchButton /></el-icon> 退出登录
+                    <el-icon><SwitchButton /></el-icon>
+                    退出登录
                   </el-dropdown-item>
                 </el-dropdown-menu>
               </template>
@@ -123,15 +135,27 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useUserStore } from '../../store'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  HomeFilled, Notebook, DataAnalysis, Document, ChatDotRound,
-  Collection, TrendCharts, Setting, Fold, Expand, FullScreen,
-  ArrowDown, SwitchButton
+  HomeFilled,
+  Notebook,
+  DataAnalysis,
+  Document,
+  ChatDotRound,
+  Collection,
+  Finished,
+  TrendCharts,
+  Setting,
+  Fold,
+  Expand,
+  FullScreen,
+  UserFilled,
+  ArrowDown,
+  SwitchButton
 } from '@element-plus/icons-vue'
+import { useUserStore } from '../../store'
 
 const route = useRoute()
 const router = useRouter()
@@ -147,41 +171,57 @@ const activeMenu = computed(() => {
 
 const breadcrumbs = computed(() => {
   const pathMap = {
-    dashboard: '首页', experiments: '实验列表', 'experiment-detail': '实验详情',
-    'learning-analysis': '学习分析', 'ai-report': 'AI报告生成',
-    'ai-assistant': 'AI学习助手', practice: '推荐练习',
-    'ability-profile': '能力画像', profile: '个人设置'
+    dashboard: '首页',
+    experiments: '实验列表',
+    'experiment-detail': '实验详情',
+    'learning-analysis': '学情分析',
+    'ai-report': 'AI 报告生成',
+    'ai-assistant': 'AI 学习助手',
+    'class-join': '教学班',
+    practice: '推荐练习',
+    'weakness-training': '错题本/专项训练',
+    'ability-profile': '能力画像',
+    profile: '个人设置'
   }
   const paths = route.path.split('/').filter(Boolean)
-  return paths[0] === 'student' ? paths.slice(1).map(p => pathMap[p.split('/')[0]] || p) : []
+  return paths[0] === 'student' ? paths.slice(1).map((part) => pathMap[part] || part) : []
 })
 
-const toggleSidebar = () => { collapsed.value = !collapsed.value }
-
-const toggleFullScreen = () => {
-  if (!document.fullscreenElement) document.documentElement.requestFullscreen()
-  else document.exitFullscreen?.()
+function toggleSidebar() {
+  collapsed.value = !collapsed.value
 }
 
-const handleCommand = (cmd) => {
-  if (cmd === 'profile') router.push('/student/profile')
-  else if (cmd === 'logout') {
-    ElMessageBox.confirm('确定要退出登录吗?', '提示', {
-      confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning'
-    }).then(() => {
-      userStore.logout()
-      sessionStorage.clear()
-      router.push('/login')
-      ElMessage.success('已成功退出登录')
-    }).catch(() => {})
+function toggleFullScreen() {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen()
+    return
   }
+  document.exitFullscreen?.()
+}
+
+function handleCommand(command) {
+  if (command === 'profile') {
+    router.push('/student/profile')
+    return
+  }
+  if (command !== 'logout') return
+
+  ElMessageBox.confirm('确定要退出登录吗？', '提示', {
+    confirmButtonText: '确定',
+    cancelButtonText: '取消',
+    type: 'warning'
+  }).then(() => {
+    userStore.logout()
+    sessionStorage.clear()
+    router.push('/login')
+    ElMessage.success('已退出登录')
+  }).catch(() => {})
 }
 
 onMounted(() => {
-  if (!userStore.isLoggedIn) {
-    router.push('/login')
-    ElMessage.warning('请先登录')
-  }
+  if (userStore.isLoggedIn) return
+  router.push('/login')
+  ElMessage.warning('请先登录')
 })
 </script>
 
@@ -189,12 +229,11 @@ onMounted(() => {
 .student-layout { height: 100vh; width: 100%; }
 .layout-container { height: 100%; }
 
-/* ===== Sidebar ===== */
 .layout-aside {
   background: linear-gradient(180deg, #1a1a2e 0%, #202134 100%);
   transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   overflow: hidden;
-  border-right: 1px solid rgba(255,255,255,0.06);
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .logo-container {
@@ -203,12 +242,12 @@ onMounted(() => {
   align-items: center;
   padding: 0 16px;
   gap: 12px;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .logo {
   border-radius: 12px;
-  border: 2px solid rgba(26,115,232,0.5);
+  border: 2px solid rgba(26, 115, 232, 0.5);
   height: 40px;
   width: 40px;
   flex-shrink: 0;
@@ -218,7 +257,7 @@ onMounted(() => {
 .logo-title {
   font-size: 15px;
   font-weight: 700;
-  color: rgba(255,255,255,0.9);
+  color: rgba(255, 255, 255, 0.9);
   white-space: nowrap;
   letter-spacing: 0.5px;
 }
@@ -226,7 +265,7 @@ onMounted(() => {
 .menu-scrollbar { height: calc(100vh - 64px); }
 
 .menu-scrollbar :deep(.el-scrollbar__bar.is-vertical) { width: 4px; right: 2px; }
-.menu-scrollbar :deep(.el-scrollbar__thumb) { background: rgba(255,255,255,0.15); border-radius: 4px; }
+.menu-scrollbar :deep(.el-scrollbar__thumb) { background: rgba(255, 255, 255, 0.15); border-radius: 4px; }
 
 .layout-menu {
   border-right: none;
@@ -234,7 +273,7 @@ onMounted(() => {
   --el-menu-bg-color: transparent;
   --el-menu-text-color: #9aa0a6;
   --el-menu-active-color: #8ab4f8;
-  --el-menu-hover-bg-color: rgba(26,115,232,0.1);
+  --el-menu-hover-bg-color: rgba(26, 115, 232, 0.1);
   --el-menu-hover-text-color: #d2e3fc;
   padding: 8px;
 }
@@ -249,7 +288,7 @@ onMounted(() => {
 }
 
 .layout-menu :deep(.el-menu-item.is-active) {
-  background: linear-gradient(135deg, rgba(26,115,232,0.2), rgba(66,133,244,0.15)) !important;
+  background: linear-gradient(135deg, rgba(26, 115, 232, 0.2), rgba(66, 133, 244, 0.15)) !important;
   color: #aecbfa !important;
   font-weight: 600;
 }
@@ -267,18 +306,17 @@ onMounted(() => {
 }
 
 .layout-menu :deep(.el-menu-item:hover) {
-  background: rgba(26,115,232,0.1) !important;
+  background: rgba(26, 115, 232, 0.1) !important;
 }
 
 .layout-menu :deep(.el-icon) { font-size: 18px; }
 
 .menu-divider {
   height: 1px;
-  background: rgba(255,255,255,0.06);
+  background: rgba(255, 255, 255, 0.06);
   margin: 8px 12px;
 }
 
-/* ===== Header ===== */
 .layout-main { background: #f8f9fa; }
 
 .layout-header {
@@ -286,7 +324,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  box-shadow: 0 1px 2px rgba(60,64,67,0.1);
+  box-shadow: 0 1px 2px rgba(60, 64, 67, 0.1);
   padding: 0 24px;
   height: 56px;
   border-bottom: 1px solid #dadce0;
@@ -302,6 +340,7 @@ onMounted(() => {
   border-radius: 8px;
   transition: all 0.2s;
 }
+
 .fold-icon:hover { background: #f1f3f4; color: #202124; }
 
 .header-right { display: flex; align-items: center; gap: 12px; }
@@ -314,6 +353,7 @@ onMounted(() => {
   border-radius: 8px;
   transition: all 0.2s;
 }
+
 .header-icon:hover { background: #f1f3f4; color: #202124; }
 
 .user-info {
@@ -325,12 +365,12 @@ onMounted(() => {
   transition: background 0.2s;
   gap: 8px;
 }
+
 .user-info:hover { background: #f1f3f4; }
 
 .username { font-size: 14px; color: #202124; font-weight: 500; }
 .arrow-icon { font-size: 12px; color: #9aa0a6; }
 
-/* ===== Content ===== */
 .layout-content {
   background: #f8f9fa;
   padding: 24px;
@@ -347,16 +387,17 @@ onMounted(() => {
   border-top: 1px solid #dadce0;
 }
 
-/* ===== Transitions ===== */
 .page-slide-enter-active,
 .page-slide-leave-active {
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
+
 .page-slide-enter-from { opacity: 0; transform: translateY(8px); }
 .page-slide-leave-to { opacity: 0; transform: translateY(-4px); }
 
 .fade-text-enter-active,
 .fade-text-leave-active { transition: opacity 0.2s; }
+
 .fade-text-enter-from,
 .fade-text-leave-to { opacity: 0; }
 </style>

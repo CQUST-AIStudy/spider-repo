@@ -485,7 +485,12 @@ const downloadZip = async () => {
     URL.revokeObjectURL(url)
     ElMessage.success('下载完成')
   } catch (e) {
-    ElMessage.error(`下载失败: ${e?.message || 'unknown error'}`)
+    const message = String(e?.message || '')
+    if (message.includes('整理结果尚未生成') || message.includes('400')) {
+      ElMessage.warning('当前整理结果尚未生成，请等待任务完成后再下载。')
+    } else {
+      ElMessage.error(`下载失败: ${message || 'unknown error'}`)
+    }
   }
   downloading.value = false
 }
@@ -515,7 +520,12 @@ const downloadHistoryZip = async (id) => {
     a.click()
     URL.revokeObjectURL(url)
   } catch (e) {
-    ElMessage.error(`下载失败: ${e?.message || 'unknown error'}`)
+    const message = String(e?.message || '')
+    if (message.includes('整理结果尚未生成') || message.includes('400')) {
+      ElMessage.warning('该历史任务的整理结果尚未生成，暂时无法下载。')
+    } else {
+      ElMessage.error(`下载失败: ${message || 'unknown error'}`)
+    }
   }
   downloading.value = false
 }

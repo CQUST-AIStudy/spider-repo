@@ -6,6 +6,15 @@ import com.tap.backend.domain.grading.*;
 import com.tap.backend.domain.user.UserEntity;
 import com.tap.backend.repo.*;
 import com.tap.backend.ai.AiProvider;
+import com.cqust.ai_server.dao.ExperimentDao;
+import com.cqust.ai_server.dao.ScoreDao;
+import com.cqust.ai_server.dao.StudentDao;
+import com.cqust.ai_server.dao.SubmissionDao;
+import com.cqust.ai_server.entity.Experiment;
+import com.cqust.ai_server.entity.Score;
+import com.cqust.ai_server.entity.Student;
+import com.cqust.ai_server.entity.StudentCode;
+import com.cqust.ai_server.entity.Submission;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -23,6 +32,10 @@ public class GradingSubmissionService {
     private final UserRepository userRepo;
     private final AuditService auditService;
     private final AiProvider aiProvider;
+    private final ExperimentDao experimentDao;
+    private final StudentDao studentDao;
+    private final SubmissionDao submissionDao;
+    private final ScoreDao scoreDao;
 
     public GradingSubmissionService(GradingSubmissionRepository submissionRepo,
                                      ScoreItemRepository scoreItemRepo,
@@ -30,7 +43,11 @@ public class GradingSubmissionService {
                                      ScoreOverrideRepository overrideRepo,
                                      UserRepository userRepo,
                                      AuditService auditService,
-                                     AiProvider aiProvider) {
+                                     AiProvider aiProvider,
+                                     ExperimentDao experimentDao,
+                                     StudentDao studentDao,
+                                     SubmissionDao submissionDao,
+                                     ScoreDao scoreDao) {
         this.submissionRepo = submissionRepo;
         this.scoreItemRepo = scoreItemRepo;
         this.evidenceRepo = evidenceRepo;
@@ -38,6 +55,10 @@ public class GradingSubmissionService {
         this.userRepo = userRepo;
         this.auditService = auditService;
         this.aiProvider = aiProvider;
+        this.experimentDao = experimentDao;
+        this.studentDao = studentDao;
+        this.submissionDao = submissionDao;
+        this.scoreDao = scoreDao;
     }
 
     @Transactional(readOnly = true)
@@ -179,6 +200,55 @@ public class GradingSubmissionService {
         submissionRepo.save(sub);
     }
 
+    @Transactional
+    public Map<String, Object> publishToStudentReport(Long submissionId, Long teacherId) {
+        GradingSubmissionEntity sub = requireOwnedSubmission(submissionId, teacherId);
+        Long experimentIdValue = sub.getTask().getExperimentId();
+        if (experimentIdValue == null) {
+            throw new IllegalArgumentException("This grading task is not bound to an experiment");
+        }
+
+        int experimentId = Math.toIntExact(experimentIdValue);
+        Experiment experiment = experimentDao.findExperimentById(experimentId);
+        if (experiment == null) {
+            throw new IllegalArgumentException("Linked experiment was not found");
+        }
+
+        Student student = resolveStudent(sub);
+        if (student == null) {
+            throw new IllegalArgumentException("Matched student was not found in the legacy experiment system");
+        }
+
+        Submission latestSubmission = findLatestSubmission(student, experimentId);
+        StudentCode studentCode = studentDao.findCodeByStudentIdAndExperimentId(student.getStudent_id(), experimentId);
+        List<ScoreItemEntity> scores = scoreItemRepo.findAllBySubmissionId(submissionId);
+
+        String legacyUsername = resolveLegacyUsername(student, sub);
+        String report = buildPublishedReport(experiment, student, latestSubmission, sub, scores);
+
+        Submission publishedSubmission = new Submission();
+        publishedSubmission.setUsername(legacyUsername);
+        publishedSubmission.setExperiment_id(experimentId);
+        publishedSubmission.setCode(resolveCode(latestSubmission, studentCode));
+        publishedSubmission.setReport(report);
+        publishedSubmission.setSubmit_time(new Date());
+        submissionDao.saveSubmission(publishedSubmission);
+
+        Integer publishedScore = sub.getTotalScore() == null
+                ? null
+                : sub.getTotalScore().setScale(0, RoundingMode.HALF_UP).intValue();
+        upsertLegacyScore(student, sub, experiment, publishedScore);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("submissionId", submissionId);
+        result.put("experimentId", experimentId);
+        result.put("studentId", student.getStudent_id());
+        result.put("studentName", student.getName());
+        result.put("publishedScore", publishedScore);
+        result.put("report", report);
+        return result;
+    }
+
     private GradingSubmissionEntity requireOwnedSubmission(Long submissionId, Long teacherId) {
         GradingSubmissionEntity sub = submissionRepo.findById(submissionId)
                 .orElseThrow(() -> new IllegalArgumentException("Submission not found"));
@@ -232,5 +302,157 @@ public class GradingSubmissionService {
         m.put("confidence", eb.getConfidence());
         m.put("imageKey", eb.getImageKey());
         return m;
+    }
+
+    private Student resolveStudent(GradingSubmissionEntity sub) {
+        if (sub.getStudentId() != null) {
+            Student student = studentDao.findByStudentId(Math.toIntExact(sub.getStudentId()));
+            if (student != null) {
+                return student;
+            }
+        }
+        if (sub.getStudentNo() != null && sub.getStudentNo().matches("\\d+")) {
+            Student student = studentDao.findByStudentId(Integer.parseInt(sub.getStudentNo()));
+            if (student != null) {
+                return student;
+            }
+        }
+        return null;
+    }
+
+    private Submission findLatestSubmission(Student student, int experimentId) {
+        Submission submission = null;
+        if (student.getUsername() != null && !student.getUsername().isBlank()) {
+            submission = submissionDao.findByUsernameAndExperimentId(student.getUsername(), experimentId);
+        }
+        if (submission == null) {
+            submission = submissionDao.findByUsernameAndExperimentId(String.valueOf(student.getStudent_id()), experimentId);
+        }
+        return submission;
+    }
+
+    private String resolveLegacyUsername(Student student, GradingSubmissionEntity sub) {
+        if (student.getUsername() != null && !student.getUsername().isBlank()) {
+            return student.getUsername();
+        }
+        if (sub.getStudentNo() != null && !sub.getStudentNo().isBlank()) {
+            return sub.getStudentNo();
+        }
+        return String.valueOf(student.getStudent_id());
+    }
+
+    private String resolveCode(Submission latestSubmission, StudentCode studentCode) {
+        if (latestSubmission != null && latestSubmission.getCode() != null && !latestSubmission.getCode().isBlank()) {
+            return latestSubmission.getCode();
+        }
+        if (studentCode != null && studentCode.getCode() != null) {
+            return studentCode.getCode();
+        }
+        return "";
+    }
+
+    private void upsertLegacyScore(Student student, GradingSubmissionEntity gradingSubmission,
+                                   Experiment experiment, Integer publishedScore) {
+        String[] usernames = new String[] {
+                student.getUsername(),
+                gradingSubmission.getStudentNo(),
+                String.valueOf(student.getStudent_id())
+        };
+        Score score = null;
+        String matchedUsername = null;
+        for (String candidate : usernames) {
+            if (candidate == null || candidate.isBlank()) {
+                continue;
+            }
+            score = scoreDao.findByUsernameAndExperimentNum(candidate, experiment.getNum());
+            if (score != null) {
+                matchedUsername = candidate;
+                break;
+            }
+        }
+        if (matchedUsername == null) {
+            matchedUsername = resolveLegacyUsername(student, gradingSubmission);
+        }
+        if (score == null) {
+            score = new Score();
+            score.setUsername(matchedUsername);
+            score.setExperiment_id(experiment.getExperiment_id());
+            score.setNum(experiment.getNum());
+        }
+        score.setReal_name(student.getName());
+        score.setScore(publishedScore);
+        score.setSubmit_time(new Date());
+        score.setStatus("completed");
+        if (score.getPlagiarism_rate() == null || score.getPlagiarism_rate().isBlank()) {
+            score.setPlagiarism_rate("0.0");
+        }
+
+        if (score.getScore_id() > 0) {
+            scoreDao.updateScore(score);
+        } else {
+            scoreDao.saveScore(score);
+        }
+    }
+
+    private String buildPublishedReport(Experiment experiment,
+                                        Student student,
+                                        Submission latestSubmission,
+                                        GradingSubmissionEntity gradingSubmission,
+                                        List<ScoreItemEntity> scoreItems) {
+        String baseReport = latestSubmission != null ? latestSubmission.getReport() : null;
+        String normalizedBase = normalizeBaseReport(baseReport, experiment);
+        String teacherComment = buildTeacherComment(gradingSubmission, scoreItems);
+        String scoreText = gradingSubmission.getTotalScore() == null
+                ? "待评分"
+                : gradingSubmission.getTotalScore().setScale(1, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString() + " 分";
+
+        return normalizedBase.trim()
+                + "\n\n## 教师评分\n"
+                + "本次教师评分：" + scoreText + "\n\n"
+                + "## 教师评语\n"
+                + teacherComment.trim()
+                + "\n";
+    }
+
+    private String normalizeBaseReport(String baseReport, Experiment experiment) {
+        String fallback = "# " + experiment.getName() + "实验报告\n\n"
+                + "## 实验目的\n待补充。\n\n"
+                + "## 实验环境\n待补充。\n\n"
+                + "## 实验内容\n待补充。\n\n"
+                + "## 实验步骤\n待补充。\n\n"
+                + "## 实验结果\n待补充。\n\n"
+                + "## 实验总结\n待补充。";
+        String normalized = (baseReport == null || baseReport.isBlank()) ? fallback : baseReport.trim();
+        normalized = normalized.replaceAll("(?s)\\n*## 教师评分\\n.*?(?=\\n## |\\z)", "");
+        normalized = normalized.replaceAll("(?s)\\n*## 教师评语\\n.*?(?=\\n## |\\z)", "");
+        return normalized.trim();
+    }
+
+    private String buildTeacherComment(GradingSubmissionEntity gradingSubmission, List<ScoreItemEntity> scoreItems) {
+        StringBuilder builder = new StringBuilder();
+        if (gradingSubmission.getFinalReviewComment() != null && !gradingSubmission.getFinalReviewComment().isBlank()) {
+            builder.append(gradingSubmission.getFinalReviewComment().trim());
+        }
+
+        List<String> dimensionComments = scoreItems.stream()
+                .map(ScoreItemEntity::getComment)
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(comment -> !comment.isBlank())
+                .toList();
+        if (!dimensionComments.isEmpty()) {
+            if (builder.length() > 0) {
+                builder.append("\n\n");
+            }
+            builder.append("分项意见：\n");
+            for (String comment : dimensionComments) {
+                builder.append("- ").append(comment).append("\n");
+            }
+        }
+
+        if (builder.length() == 0) {
+            builder.append("教师暂未填写评语。");
+        }
+        return builder.toString().trim();
     }
 }

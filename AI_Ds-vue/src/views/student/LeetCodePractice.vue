@@ -233,6 +233,11 @@ import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import api from '@/api'
 import { getCurrentStudentId as readCurrentStudentId } from '../../constants/auth'
+import {
+  readWeaknessTrainingState,
+  recordWeaknessTrainingReview,
+  writeWeaknessTrainingState
+} from '../../utils/weaknessTraining'
 
 const route = useRoute()
 const router = useRouter()
@@ -478,6 +483,7 @@ async function submitCode() {
     if (response.success) {
       submitResult.value = response.data
       showSubmitResult.value = true
+      recordTrainingReview(!!response.data.accepted)
 
       if (response.data.status === 'unavailable') {
         ElMessage.warning('AI evaluation is temporarily unavailable. Fallback result is shown.')
@@ -549,6 +555,39 @@ function getRecommendationRequestId() {
 function getRecommendationSessionId() {
   const value = route.query.recommendationSessionId
   return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function getTrainingExperimentId() {
+  const value = Number(route.query.trainingExperimentId)
+  return Number.isFinite(value) ? value : null
+}
+
+function getTrainingDimension() {
+  const value = route.query.trainingDimension
+  return typeof value === 'string' ? value : ''
+}
+
+function getTrainingSource() {
+  const value = route.query.trainingSource
+  return typeof value === 'string' && value.trim() ? value.trim() : 'weakness_training'
+}
+
+function recordTrainingReview(accepted) {
+  const experimentId = getTrainingExperimentId()
+  const problemId = Number(problem.value?.id)
+  const studentId = getCurrentStudentId()
+
+  if (!experimentId || !Number.isFinite(problemId) || !studentId) return
+
+  const nextState = recordWeaknessTrainingReview(readWeaknessTrainingState(studentId), {
+    experimentId,
+    problemId,
+    problemTitle: problem.value?.title || `题目 ${problemId}`,
+    dimension: getTrainingDimension(),
+    accepted,
+    source: getTrainingSource()
+  })
+  writeWeaknessTrainingState(nextState, studentId)
 }
 
 function markProblemCompleted(problemId) {

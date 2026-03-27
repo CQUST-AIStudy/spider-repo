@@ -16,6 +16,9 @@
             <template #header>
               <div class="card-header">
                 <span class="card-title">{{ space.name }}</span>
+                <el-tag size="small" :type="visibilityTagType(space.docVisibility)">
+                  {{ visibilityLabel(space.docVisibility) }}
+                </el-tag>
                 <el-dropdown @click.stop trigger="click">
                   <el-icon class="card-more"><MoreFilled /></el-icon>
                   <template #dropdown>
@@ -30,6 +33,8 @@
             <div class="card-body">
               <p v-if="space.term"><el-icon><Calendar /></el-icon> {{ space.term }}</p>
               <p v-if="space.courseName"><el-icon><Reading /></el-icon> {{ space.courseName }}</p>
+              <p class="card-stats">Mode: {{ modeLabel(space.defaultMode) }}</p>
+              <p v-if="space.docVisibility === 'class'" class="card-stats">{{ (space.boundClassIds || []).length }} linked classes</p>
               <p class="card-stats">{{ space.docCount || 0 }} 个文档</p>
             </div>
           </el-card>
@@ -43,6 +48,9 @@
         <el-button @click="selectedSpace = null"><el-icon><ArrowLeft /></el-icon> 返回</el-button>
         <h2>{{ selectedSpace.name }}</h2>
         <span v-if="selectedSpace.term" class="detail-meta">{{ selectedSpace.term }}</span>
+        <el-tag size="small" :type="visibilityTagType(selectedSpace.docVisibility)">
+          {{ visibilityLabel(selectedSpace.docVisibility) }}
+        </el-tag>
       </div>
 
       <el-tabs v-model="activeTab" style="margin-top: 16px">
@@ -182,6 +190,35 @@
         <el-form-item label="描述">
           <el-input v-model="spaceForm.description" type="textarea" :rows="2" />
         </el-form-item>
+        <el-form-item label="Visibility">
+          <el-select v-model="spaceForm.docVisibility" style="width: 100%">
+            <el-option label="Public (students can use this RAG space)" value="public" />
+            <el-option label="Class scoped (only bound classes can use it)" value="class" />
+            <el-option label="Private (teacher only)" value="private" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="spaceForm.docVisibility === 'class'" label="Classes">
+          <el-select v-model="spaceForm.classIds" multiple collapse-tags collapse-tags-tooltip style="width: 100%">
+            <el-option
+              v-for="cls in teacherClasses"
+              :key="cls.id"
+              :label="`${cls.name}${cls.courseName ? ' / ' + cls.courseName : ''}`"
+              :value="cls.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="Mode">
+          <el-select v-model="spaceForm.defaultMode" style="width: 100%">
+            <el-option label="Strict" value="strict" />
+            <el-option label="Open" value="open" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="Web Search">
+          <el-switch v-model="spaceForm.allowWebSearch" />
+        </el-form-item>
+        <el-form-item label="Citation">
+          <el-switch v-model="spaceForm.requireCitation" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -199,12 +236,14 @@ import PageHeader from '../../components/PageHeader.vue'
 import {
   getCourseSpaces, createCourseSpace, updateCourseSpace, deleteCourseSpace,
   getCourseSpaceDocuments, uploadCourseSpaceDocument,
+  getTeachingClasses,
   getCourseSpaceChunks, getAnnotations, createAnnotation, deleteAnnotation,
   ragChatStream
 } from '@/api/tap'
 
 const spaces = ref([])
 const loading = ref(false)
+const teacherClasses = ref([])
 const selectedSpace = ref(null)
 const activeTab = ref('docs')
 
@@ -230,9 +269,31 @@ const suggestions = ['什么是二叉搜索树？', '链表和数组的区别？
 const dialogVisible = ref(false)
 const editingSpace = ref(null)
 const saving = ref(false)
-const spaceForm = ref({ name: '', term: '', courseName: '', description: '' })
+const spaceForm = ref({
+  name: '',
+  term: '',
+  courseName: '',
+  description: '',
+  defaultMode: 'strict',
+  allowWebSearch: false,
+  requireCitation: true,
+  docVisibility: 'public',
+  classIds: []
+})
 
 let refreshTimer = null
+
+const modeLabel = (mode) => mode === 'open' ? 'Open' : 'Strict'
+const visibilityLabel = (visibility) => {
+  if (visibility === 'public') return 'Public'
+  if (visibility === 'class') return 'Class Scoped'
+  return 'Private'
+}
+const visibilityTagType = (visibility) => {
+  if (visibility === 'public') return 'success'
+  if (visibility === 'class') return 'warning'
+  return 'info'
+}
 
 const statusTagType = (s) => ({ READY: 'success', PROCESSING: '', PENDING: 'warning', FAILED: 'danger' }[s] || 'info')
 const statusLabel = (s) => ({ READY: '已就绪', PROCESSING: '处理中', PENDING: '等待处理', FAILED: '失败' }[s] || s)
@@ -256,6 +317,15 @@ async function loadSpaces() {
   loading.value = false
 }
 
+async function loadTeachingClasses() {
+  try {
+    const res = await getTeachingClasses()
+    teacherClasses.value = res?.data || res || []
+  } catch (e) {
+    teacherClasses.value = []
+  }
+}
+
 function selectSpace(space) {
   selectedSpace.value = space
   activeTab.value = 'docs'
@@ -265,18 +335,42 @@ function selectSpace(space) {
 
 function showCreateDialog() {
   editingSpace.value = null
-  spaceForm.value = { name: '', term: '', courseName: '', description: '' }
+  spaceForm.value = {
+    name: '',
+    term: '',
+    courseName: '',
+    description: '',
+    defaultMode: 'strict',
+    allowWebSearch: false,
+    requireCitation: true,
+    docVisibility: 'public',
+    classIds: []
+  }
   dialogVisible.value = true
 }
 
 function editSpace(space) {
   editingSpace.value = space
-  spaceForm.value = { name: space.name, term: space.term || '', courseName: space.courseName || '', description: space.description || '' }
+  spaceForm.value = {
+    name: space.name,
+    term: space.term || '',
+    courseName: space.courseName || '',
+    description: space.description || '',
+    defaultMode: space.defaultMode || 'strict',
+    allowWebSearch: !!space.allowWebSearch,
+    requireCitation: space.requireCitation !== false,
+    docVisibility: space.docVisibility || 'private',
+    classIds: Array.isArray(space.boundClassIds) ? [...space.boundClassIds] : []
+  }
   dialogVisible.value = true
 }
 
 async function saveSpace() {
   if (!spaceForm.value.name) return
+  if (spaceForm.value.docVisibility === 'class' && (!spaceForm.value.classIds || spaceForm.value.classIds.length === 0)) {
+    ElMessage.warning('Please bind at least one teaching class for class-scoped access.')
+    return
+  }
   saving.value = true
   try {
     if (editingSpace.value) {
@@ -408,6 +502,7 @@ function scrollToBottom() {
 // ---- Lifecycle ----
 onMounted(() => {
   loadSpaces()
+  loadTeachingClasses()
   refreshTimer = setInterval(() => {
     if (selectedSpace.value && documents.value.some(d => d.status === 'PROCESSING' || d.status === 'PENDING')) {
       loadDocuments()

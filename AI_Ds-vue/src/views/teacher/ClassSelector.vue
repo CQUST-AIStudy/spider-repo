@@ -2,55 +2,56 @@
   <div class="class-selector-page">
     <div class="selector-card">
       <div class="selector-header">
-        <h1>选择班级</h1>
-        <p>请选择要管理的班级，后续所有数据将按班级隔离</p>
+        <h1>选择教学班</h1>
+        <p>教师端按教学班隔离管理。先选择当前教学班，或先创建新的教学班。</p>
       </div>
 
-      <div v-if="loading" style="text-align:center;padding:40px">
-        <el-icon class="is-loading" :size="32"><Loading /></el-icon>
-        <p style="color:#5f6368;margin-top:12px">加载班级列表...</p>
+      <div v-if="loading" class="loading-state">
+        <el-icon class="is-loading" :size="30"><Loading /></el-icon>
+        <p>正在加载教学班...</p>
       </div>
 
-      <div v-else class="class-grid">
-        <div v-for="cls in classList" :key="cls.id || cls.name"
-             class="class-item" :class="{ selected: selected === (cls.id || cls.name) }"
-             @click="selected = cls.id || cls.name">
-          <div class="class-icon">📚</div>
-          <div class="class-info">
-            <span class="class-name">{{ cls.name || cls.className || cls.class_name }}</span>
-            <span class="class-meta">{{ cls.studentCount || cls.student_count || '—' }} 名学生</span>
+      <template v-else>
+        <div v-if="classList.length" class="class-grid">
+          <div
+            v-for="cls in classList"
+            :key="cls.id"
+            class="class-item"
+            :class="{ selected: selected === cls.id }"
+            @click="selected = cls.id"
+          >
+            <div class="class-icon">班</div>
+            <div class="class-info">
+              <span class="class-name">{{ cls.name }}</span>
+              <span class="class-meta">{{ cls.courseName || '未设置课程' }} · {{ cls.studentCount || 0 }} 人</span>
+            </div>
+            <el-icon v-if="selected === cls.id" class="check-icon"><CircleCheckFilled /></el-icon>
           </div>
-          <el-icon v-if="selected === (cls.id || cls.name)" class="check-icon"><CircleCheckFilled /></el-icon>
         </div>
 
-        <!-- 如果没有班级数据，显示默认班级 -->
-        <div v-if="classList.length === 0" class="class-item"
-             :class="{ selected: selected === 'default' }"
-             @click="selected = 'default'">
-          <div class="class-icon">📚</div>
-          <div class="class-info">
-            <span class="class-name">{{ defaultClassName }}</span>
-            <span class="class-meta">默认班级</span>
-          </div>
-          <el-icon v-if="selected === 'default'" class="check-icon"><CircleCheckFilled /></el-icon>
-        </div>
-      </div>
+        <el-empty v-else description="你还没有创建任何教学班">
+          <el-button type="primary" @click="goCreateClass">去创建教学班</el-button>
+        </el-empty>
+      </template>
 
-      <el-button type="primary" size="large" class="confirm-btn"
-                 :disabled="!selected" @click="confirmSelect">
-        进入班级
-      </el-button>
+      <div class="selector-actions">
+        <el-button v-if="classList.length" type="primary" size="large" class="confirm-btn" :disabled="!selected" @click="confirmSelect">
+          进入当前教学班
+        </el-button>
+        <el-button v-if="classList.length" size="large" class="secondary-btn" @click="goCreateClass">
+          新建教学班
+        </el-button>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { CircleCheckFilled, Loading } from '@element-plus/icons-vue'
 import { useUserStore } from '../../store'
-import { Loading, CircleCheckFilled } from '@element-plus/icons-vue'
-import api from '../../api'
-import { getClassPrefixes } from '../../api/tap'
+import { getTeachingClasses } from '../../api/tap'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -58,56 +59,40 @@ const loading = ref(true)
 const classList = ref([])
 const selected = ref(null)
 
-const defaultClassName = computed(() => userStore.userInfo?.classroom || '计科23')
-
-// 班级学生数统计（从实验数据推算）
-const classStudentCounts = ref({})
-
 onMounted(async () => {
-  // 如果已经选了班级，直接跳转
   if (userStore.selectedClass) {
-    router.replace('/teacher/dashboard')
+    await router.replace('/teacher/dashboard')
     return
   }
 
   try {
-    // 从实验名称前缀获取班级列表（计科23、计科24 等）
-    const res = await getClassPrefixes()
-    const prefixes = res?.data || res || []
-    classList.value = prefixes.map(p => ({ id: p, name: p }))
-    // 如果只有一个班级，自动选中
+    const res = await getTeachingClasses()
+    const list = res?.data || res || []
+    classList.value = Array.isArray(list) ? list : []
     if (classList.value.length === 1) {
       selected.value = classList.value[0].id
     }
-  } catch (e) {
-    console.warn('获取班级前缀失败，尝试传统班级列表:', e)
-    try {
-      const res2 = await api.getClassList()
-      const list = Array.isArray(res2) ? res2 : (res2?.data || [])
-      classList.value = list
-      if (list.length === 1) selected.value = list[0].id || list[0].name
-    } catch (e2) {
-      console.warn('获取班级列表也失败:', e2)
-    }
+  } catch (error) {
+    console.warn('加载教学班失败:', error)
+    classList.value = []
+  } finally {
+    loading.value = false
   }
-  // 如果没有班级数据，自动选中默认
-  if (classList.value.length === 0) {
-    selected.value = 'default'
-  }
-  loading.value = false
 })
 
-const confirmSelect = () => {
-  if (!selected.value) return
-  let cls
-  if (selected.value === 'default') {
-    cls = { id: 'default', name: defaultClassName.value }
-  } else {
-    const found = classList.value.find(c => (c.id || c.name) === selected.value)
-    cls = found ? { id: found.id || found.name, name: found.name || found.className || found.class_name, ptaKeyword: found.ptaKeyword || '' } : { id: selected.value, name: selected.value }
-  }
-  userStore.setSelectedClass(cls)
+function confirmSelect() {
+  const found = classList.value.find(item => item.id === selected.value)
+  if (!found) return
+  userStore.setSelectedClass({
+    id: found.id,
+    name: found.name,
+    ptaKeyword: found.ptaKeyword || found.name
+  })
   router.replace('/teacher/dashboard')
+}
+
+function goCreateClass() {
+  router.push('/teacher/class-list')
 }
 </script>
 
@@ -117,37 +102,130 @@ const confirmSelect = () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f8f9fa;
+  padding: 24px;
+  background: #f5f7fb;
 }
+
 .selector-card {
-  width: 520px;
+  width: 100%;
+  max-width: 860px;
+  padding: 36px;
+  border-radius: 24px;
   background: #fff;
-  border-radius: 16px;
-  padding: 40px;
-  box-shadow: 0 1px 3px rgba(60,64,67,0.15), 0 4px 8px rgba(60,64,67,0.08);
-  border: 1px solid #dadce0;
+  border: 1px solid #e6eaf2;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.08);
 }
-.selector-header { text-align: center; margin-bottom: 28px; }
-.selector-header h1 { font-size: 24px; font-weight: 400; color: #202124; margin: 0 0 8px; }
-.selector-header p { font-size: 14px; color: #5f6368; margin: 0; }
 
-.class-grid { display: flex; flex-direction: column; gap: 12px; margin-bottom: 24px; }
+.selector-header {
+  margin-bottom: 24px;
+  text-align: center;
+}
+
+.selector-header h1 {
+  margin: 0 0 8px;
+  color: #1f2937;
+  font-size: 28px;
+}
+
+.selector-header p {
+  margin: 0;
+  color: #6b7280;
+}
+
+.loading-state {
+  padding: 40px 0;
+  text-align: center;
+  color: #6b7280;
+}
+
+.class-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
 .class-item {
-  display: flex; align-items: center; gap: 14px;
-  padding: 16px 20px; border-radius: 12px;
-  border: 2px solid #dadce0; cursor: pointer;
-  transition: all 0.2s;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  min-height: 112px;
+  padding: 20px 20px 18px;
+  border: 1px solid #dbe2ea;
+  border-radius: 18px;
+  cursor: pointer;
+  transition: 0.2s ease;
 }
-.class-item:hover { border-color: #bdc1c6; background: #f8f9fa; }
-.class-item.selected { border-color: #1a73e8; background: #e8f0fe; }
-.class-icon { font-size: 28px; }
-.class-info { flex: 1; display: flex; flex-direction: column; }
-.class-name { font-size: 16px; font-weight: 500; color: #202124; }
-.class-meta { font-size: 13px; color: #5f6368; margin-top: 2px; }
-.check-icon { font-size: 22px; color: #1a73e8; }
 
-.confirm-btn {
-  width: 100%; height: 46px; border-radius: 100px;
-  font-size: 15px; font-weight: 500;
+.class-item:hover {
+  border-color: #9fb3c8;
+  background: #f8fbff;
+}
+
+.class-item.selected {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.class-icon {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: #e0ecff;
+  color: #1d4ed8;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.class-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.class-name {
+  color: #111827;
+  font-weight: 700;
+  font-size: 20px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.class-meta {
+  margin-top: 6px;
+  color: #6b7280;
+  font-size: 14px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.check-icon {
+  color: #2563eb;
+  font-size: 20px;
+}
+
+.selector-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.confirm-btn,
+.secondary-btn {
+  flex: 1;
+  border-radius: 12px;
+}
+
+@media (max-width: 768px) {
+  .selector-card {
+    padding: 24px;
+  }
+
+  .class-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

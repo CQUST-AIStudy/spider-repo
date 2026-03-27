@@ -122,8 +122,16 @@ public class RagChatController {
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public ResponseEntity<StreamingResponseBody> chat(@AuthenticationPrincipal UserPrincipal principal,
                                                       @RequestBody RagChatRequest request) {
-        log.info("[RAG] chat request: courseSpaceId={}, query={}, mode={}", request.courseSpaceId(), request.query(), request.mode());
         var resolved = principalResolver.resolve(principal);
+        return chatForReadableSpace(request, resolved.userId(), false, null, null);
+    }
+
+    ResponseEntity<StreamingResponseBody> chatForReadableSpace(RagChatRequest request,
+                                                               Long requesterUserId,
+                                                               boolean allowPublicRead,
+                                                               String studentId,
+                                                               String studentNum) {
+        log.info("[RAG] chat request: courseSpaceId={}, query={}, mode={}", request.courseSpaceId(), request.query(), request.mode());
 
         if (request.query() == null || request.query().isBlank()) {
             return ResponseEntity.ok().body(out -> {
@@ -148,7 +156,10 @@ public class RagChatController {
             List<CitationInfo> citations = new ArrayList<>();
 
             try {
-                CourseSpaceEntity cs = courseSpaceService.requireOwnedSpace(request.courseSpaceId(), resolved.userId());
+                CourseSpaceEntity cs = studentNum != null
+                        ? courseSpaceService.requireReadableSpaceForStudent(request.courseSpaceId(), studentNum)
+                        : courseSpaceService.requireReadableSpace(
+                                request.courseSpaceId(), requesterUserId, allowPublicRead);
                 if (cs == null) {
                     outputStream.write("课程空间不存在".getBytes(StandardCharsets.UTF_8));
                     outputStream.flush();
@@ -211,7 +222,7 @@ public class RagChatController {
                 if (ranked.isEmpty()) {
                     outputStream.write("未找到相关课程资料，请尝试换个问法。".getBytes(StandardCharsets.UTF_8));
                     outputStream.flush();
-                    saveQaLog(request, cs, "", 0.0, "strict", false, null, Collections.emptyList());
+                    saveQaLog(request, cs, "", 0.0, "strict", false, null, Collections.emptyList(), studentId);
                     return;
                 }
 
@@ -274,7 +285,8 @@ public class RagChatController {
                     outputStream.write(decision.lowCoverageMessage().getBytes(StandardCharsets.UTF_8));
                     outputStream.flush();
                     fullAnswer.append(decision.lowCoverageMessage());
-                    saveQaLog(request, cs, fullAnswer.toString(), coverageScore, effectiveMode, false, intentType, Collections.emptyList());
+                    saveQaLog(request, cs, fullAnswer.toString(), coverageScore, effectiveMode, false, intentType,
+                            Collections.emptyList(), studentId);
                     return;
                 }
 
@@ -372,9 +384,8 @@ public class RagChatController {
             } finally {
                 CourseSpaceEntity cs = courseSpaceRepo.findById(request.courseSpaceId()).orElse(null);
                 if (cs != null) {
-                    if (Objects.equals(cs.getTeacherId(), resolved.userId())) {
-                        saveQaLog(request, cs, fullAnswer.toString(), coverageScore, effectiveMode, usedWeb, intentType, citations);
-                    }
+                    saveQaLog(request, cs, fullAnswer.toString(), coverageScore, effectiveMode, usedWeb, intentType,
+                            citations, studentId);
                 }
             }
         };
@@ -600,7 +611,8 @@ public class RagChatController {
 
     private void saveQaLog(RagChatRequest request, CourseSpaceEntity cs, String fullAnswer,
                            double coverageScore, String mode, boolean usedWeb,
-                           String intentType, List<CitationInfo> citations) {
+                           String intentType, List<CitationInfo> citations,
+                           String studentId) {
         try {
             String chunkIdsJson = citations.stream()
                     .map(c -> String.valueOf(c.index))
@@ -609,7 +621,7 @@ public class RagChatController {
 
             QaLogEntity logEntity = new QaLogEntity();
             logEntity.setCourseSpace(cs);
-            logEntity.setStudentId("anonymous");
+            logEntity.setStudentId(studentId == null || studentId.isBlank() ? "anonymous" : studentId);
             logEntity.setQuery(request.query());
             logEntity.setRetrievedChunkIds(chunkIdsJson);
             logEntity.setTop1Score(coverageScore);

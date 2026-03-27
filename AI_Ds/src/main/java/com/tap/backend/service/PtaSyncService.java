@@ -48,7 +48,7 @@ public class PtaSyncService {
     public Map<String, Object> updateSyncConfig(Long classId, Long teacherId, String ptaKeyword, Boolean syncEnabled) {
         TeachingClassEntity teachingClass = requireOwnedClass(classId, teacherId);
         if (ptaKeyword != null) {
-            teachingClass.setPtaKeyword(ptaKeyword);
+            teachingClass.setPtaKeyword(resolvePtaKeyword(teachingClass, ptaKeyword));
         }
         if (syncEnabled != null) {
             teachingClass.setSyncEnabled(syncEnabled);
@@ -163,5 +163,12 @@ public class PtaSyncService {
         result.put("ptaKeyword", teachingClass.getPtaKeyword());
         result.put("syncEnabled", teachingClass.getSyncEnabled());
         return result;
+    }
+
+    private String resolvePtaKeyword(TeachingClassEntity teachingClass, String ptaKeyword) {
+        if (ptaKeyword != null && !ptaKeyword.isBlank()) {
+            return ptaKeyword.trim();
+        }
+        return teachingClass.getName() == null ? null : teachingClass.getName().trim();
     }
 }

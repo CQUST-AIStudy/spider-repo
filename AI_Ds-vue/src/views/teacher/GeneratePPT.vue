@@ -1,38 +1,38 @@
-﻿<template>
+<template>
   <div class="generate-ppt">
     <page-header
-      class="my-page-header"
-      title="鐢熸垚鏁欏PPT"
-      description="鍩轰簬AI鏅鸿兘鐢熸垚鏁欏PPT鍐呭"
+      title="生成教学 PPT"
+      description="根据课程主题、知识点和难度要求，快速生成可直接整理成课件的教学大纲。"
     />
 
-    <div class="content-container">
+    <div class="page-layout">
       <el-card class="form-card">
         <template #header>
           <div class="card-header">
-            <span>PPT鐢熸垚閰嶇疆</span>
+            <span>生成配置</span>
           </div>
         </template>
 
-        <el-form :model="pptForm" label-position="top" :rules="pptRules" ref="pptFormRef">
-          <el-form-item label="璇句欢涓婚" prop="title">
-            <el-input v-model="pptForm.title" placeholder="璇疯緭鍏PT涓婚锛屽锛氫簩鍙夋爲鐨勯亶鍘? />
+        <el-form ref="pptFormRef" :model="pptForm" :rules="pptRules" label-position="top">
+          <el-form-item label="PPT 主题" prop="title">
+            <el-input v-model="pptForm.title" placeholder="例如：二叉树的遍历与应用" />
           </el-form-item>
 
-          <el-form-item label="璇句欢绫诲瀷" prop="type">
+          <el-form-item label="课件类型" prop="type">
             <el-radio-group v-model="pptForm.type">
-              <el-radio label="lecture">鏁欏璁蹭箟</el-radio>
-              <el-radio label="review">澶嶄範璧勬枡</el-radio>
-              <el-radio label="lab">瀹為獙鎸囧</el-radio>
+              <el-radio label="lecture">课堂讲授</el-radio>
+              <el-radio label="review">复习梳理</el-radio>
+              <el-radio label="lab">实验指导</el-radio>
             </el-radio-group>
           </el-form-item>
 
-          <el-form-item label="鐭ヨ瘑鐐归€夋嫨" prop="topics">
+          <el-form-item label="知识点" prop="topics">
             <el-select
               v-model="pptForm.topics"
               multiple
               collapse-tags
-              placeholder="閫夋嫨瑕佸寘鍚殑鐭ヨ瘑鐐?
+              collapse-tags-tooltip
+              placeholder="选择本次 PPT 需要覆盖的知识点"
               style="width: 100%"
             >
               <el-option
@@ -44,7 +44,7 @@
             </el-select>
           </el-form-item>
 
-          <el-form-item label="璇句欢闅惧害" prop="difficulty">
+          <el-form-item label="内容难度" prop="difficulty">
             <el-slider
               v-model="pptForm.difficulty"
               :step="1"
@@ -55,91 +55,83 @@
             />
           </el-form-item>
 
-          <el-form-item label="鍖呭惈鍐呭" prop="includes">
+          <el-form-item label="内容模块" prop="includes">
             <el-checkbox-group v-model="pptForm.includes">
-              <el-checkbox label="theory">鐞嗚鐭ヨ瘑</el-checkbox>
-              <el-checkbox label="examples">绀轰緥浠ｇ爜</el-checkbox>
-              <el-checkbox label="exercises">缁冧範棰?/el-checkbox>
-              <el-checkbox label="applications">瀹為檯搴旂敤</el-checkbox>
+              <el-checkbox label="theory">理论讲解</el-checkbox>
+              <el-checkbox label="examples">示例代码</el-checkbox>
+              <el-checkbox label="exercises">课堂练习</el-checkbox>
+              <el-checkbox label="applications">应用场景</el-checkbox>
             </el-checkbox-group>
           </el-form-item>
 
-          <el-form-item label="棰濆璇存槑">
+          <el-form-item label="补充说明">
             <el-input
               v-model="pptForm.notes"
               type="textarea"
-              :rows="3"
-              placeholder="鏈変粈涔堢壒娈婇渶姹傚彲浠ュ湪杩欓噷璇存槑"
+              :rows="4"
+              placeholder="例如：偏向实验课、需要突出易错点、希望加入课堂讨论问题。"
             />
           </el-form-item>
 
-          <el-form-item>
+          <div class="form-actions">
             <el-button type="primary" :loading="generating" @click="generatePPT">
-              {{ generating ? 'AI鐢熸垚涓?..' : '鐢熸垚PPT' }}
+              {{ generating ? '正在生成...' : '生成 PPT 大纲' }}
             </el-button>
-            <el-button @click="resetForm">閲嶇疆</el-button>
-          </el-form-item>
+            <el-button @click="resetForm">重置</el-button>
+          </div>
         </el-form>
       </el-card>
 
-      <!-- AI鐢熸垚杩涘害 -->
-      <el-card v-if="generating" class="progress-card">
-        <div class="generating-status">
-          <el-icon class="is-loading" :size="24"><Loading /></el-icon>
-          <span>AI姝ｅ湪鐢熸垚PPT鍐呭锛岃绋嶅€?..</span>
-        </div>
-        <div class="ai-stream-output" v-if="streamText">
-          <pre class="stream-text">{{ streamText }}</pre>
-        </div>
-      </el-card>
-
-      <el-card class="preview-card" v-if="showPreview && !generating">
+      <el-card class="preview-card">
         <template #header>
           <div class="card-header">
-            <span>PPT棰勮锛堝叡{{ previewSlides.length }}椤碉級</span>
-            <el-button type="primary" :icon="Download" @click="downloadPPT">
-              涓嬭浇涓烘枃鏈?            </el-button>
+            <span>内容预览</span>
+            <el-button type="primary" plain :disabled="!previewSlides.length" @click="downloadPPT">
+              下载文本
+            </el-button>
           </div>
         </template>
 
-        <div class="preview-container">
-          <div class="slides-container">
-            <div v-for="(slide, index) in previewSlides" :key="index" class="slide-item">
-              <div class="slide-header">绗?{{ index + 1 }} 椤?/div>
-              <div class="slide-content" :class="{ 'title-slide': slide.isTitle }">
-                <h3 v-if="slide.isTitle">{{ slide.title }}</h3>
-                <div v-if="slide.isTitle" class="slide-subtitle">{{ pptTypeText }}</div>
-                <template v-else>
-                  <h4>{{ slide.title }}</h4>
-                  <div class="slide-body">
-                    <div v-if="slide.isCode" class="code-block">
-                      <pre><code>{{ slide.content }}</code></pre>
-                    </div>
-                    <div v-else class="text-content" v-html="formatSlideContent(slide.content)"></div>
-                  </div>
-                </template>
-              </div>
-            </div>
-          </div>
+        <div v-if="generating" class="loading-state">
+          <el-icon class="is-loading" :size="22"><Loading /></el-icon>
+          <span>AI 正在生成课件内容，请稍候。</span>
         </div>
+
+        <div v-else-if="previewSlides.length" class="slides-grid">
+          <article
+            v-for="(slide, index) in previewSlides"
+            :key="`${slide.title}-${index}`"
+            class="slide-card"
+            :class="{ 'slide-card--title': slide.isTitle }"
+          >
+            <header class="slide-card__header">第 {{ index + 1 }} 页</header>
+            <div class="slide-card__body">
+              <h3>{{ slide.title }}</h3>
+              <p v-if="slide.isTitle" class="slide-card__subtitle">{{ pptTypeText }}</p>
+              <div v-else-if="slide.isCode" class="code-block">
+                <pre><code>{{ slide.content }}</code></pre>
+              </div>
+              <div v-else class="slide-card__content" v-html="formatSlideContent(slide.content)"></div>
+            </div>
+          </article>
+        </div>
+
+        <el-empty v-else description="生成后将在这里显示 PPT 大纲预览" />
       </el-card>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, reactive } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Download, Loading } from '@element-plus/icons-vue'
+import { Loading } from '@element-plus/icons-vue'
 import PageHeader from '../../components/PageHeader.vue'
-import { buildApiUrl } from '../../config/runtime'
-import axios from 'axios'
+import { chatSend } from '../../api/tap'
 
 const pptFormRef = ref(null)
 const generating = ref(false)
-const showPreview = ref(false)
 const previewSlides = ref([])
-const streamText = ref('')
 
 const pptForm = reactive({
   title: '',
@@ -152,105 +144,105 @@ const pptForm = reactive({
 
 const pptRules = {
   title: [
-    { required: true, message: '璇疯緭鍏PT涓婚', trigger: 'blur' },
-    { min: 2, max: 50, message: '闀垮害鍦?鍒?0涓瓧绗?, trigger: 'blur' }
+    { required: true, message: '请输入 PPT 主题', trigger: 'blur' },
+    { min: 2, max: 50, message: '主题长度保持在 2 到 50 个字符之间', trigger: 'blur' }
   ],
-  type: [{ required: true, message: '璇烽€夋嫨璇句欢绫诲瀷', trigger: 'change' }],
+  type: [{ required: true, message: '请选择课件类型', trigger: 'change' }],
   topics: [
-    { required: true, message: '璇疯嚦灏戦€夋嫨涓€涓煡璇嗙偣', trigger: 'change' },
-    { type: 'array', min: 1, message: '鑷冲皯閫夋嫨涓€涓煡璇嗙偣', trigger: 'change' }
+    { required: true, message: '请至少选择一个知识点', trigger: 'change' },
+    { type: 'array', min: 1, message: '请至少选择一个知识点', trigger: 'change' }
   ]
 }
 
-const difficultyMarks = { 1: '鍏ラ棬', 2: '鍩虹', 3: '涓瓑', 4: '杩涢樁', 5: '楂樼骇' }
+const difficultyMarks = {
+  1: '入门',
+  2: '基础',
+  3: '中等',
+  4: '进阶',
+  5: '挑战'
+}
 
 const knowledgeTopics = [
-  { value: 'array', label: '鏁扮粍' },
-  { value: 'linked_list', label: '閾捐〃' },
-  { value: 'stack', label: '鏍? },
-  { value: 'queue', label: '闃熷垪' },
-  { value: 'binary_tree', label: '浜屽弶鏍? },
-  { value: 'balanced_tree', label: '骞宠　鏍? },
-  { value: 'heap', label: '鍫? },
-  { value: 'graph_representation', label: '鍥剧殑琛ㄧず' },
-  { value: 'graph_traversal', label: '鍥剧殑閬嶅巻' },
-  { value: 'shortest_path', label: '鏈€鐭矾寰勭畻娉? },
-  { value: 'sorting', label: '鎺掑簭绠楁硶' },
-  { value: 'searching', label: '鏌ユ壘绠楁硶' },
-  { value: 'hashing', label: '鍝堝笇鎶€鏈? },
-  { value: 'dynamic_programming', label: '鍔ㄦ€佽鍒? }
+  { value: 'array', label: '数组' },
+  { value: 'linked_list', label: '链表' },
+  { value: 'stack', label: '栈' },
+  { value: 'queue', label: '队列' },
+  { value: 'binary_tree', label: '二叉树' },
+  { value: 'balanced_tree', label: '平衡树' },
+  { value: 'heap', label: '堆' },
+  { value: 'graph_representation', label: '图的表示' },
+  { value: 'graph_traversal', label: '图的遍历' },
+  { value: 'shortest_path', label: '最短路径' },
+  { value: 'sorting', label: '排序算法' },
+  { value: 'searching', label: '查找算法' },
+  { value: 'hashing', label: '哈希' },
+  { value: 'dynamic_programming', label: '动态规划' }
 ]
 
 const selectedTopics = computed(() =>
-  pptForm.topics.map(t => knowledgeTopics.find(k => k.value === t)?.label || t)
+  pptForm.topics.map(topic => knowledgeTopics.find(item => item.value === topic)?.label || topic)
 )
 
 const pptTypeText = computed(() => {
-  const map = { lecture: '鏁欏璁蹭箟', review: '澶嶄範璧勬枡', lab: '瀹為獙鎸囧' }
-  return map[pptForm.type] || '鏁欏璧勬枡'
+  const map = {
+    lecture: '课堂讲授',
+    review: '复习梳理',
+    lab: '实验指导'
+  }
+  return map[pptForm.type] || '教学课件'
 })
 
-const difficultyText = computed(() => difficultyMarks[pptForm.difficulty] || '涓瓑')
+const difficultyText = computed(() => difficultyMarks[pptForm.difficulty] || '中等')
 
-// 鏋勫缓AI鎻愮ず璇?const buildPrompt = () => {
-  const topicNames = selectedTopics.value.join('銆?)
-  const includeItems = pptForm.includes.map(i => {
-    const map = { theory: '鐞嗚鐭ヨ瘑', examples: '绀轰緥浠ｇ爜', exercises: '缁冧範棰?, applications: '瀹為檯搴旂敤' }
-    return map[i] || i
-  }).join('銆?)
-
-  return `璇蜂负鎴戠敓鎴愪竴浠芥暟鎹粨鏋勮绋嬬殑${pptTypeText.value}PPT澶х翰鍐呭銆?
-涓婚锛?{pptForm.title}
-鐭ヨ瘑鐐癸細${topicNames}
-闅惧害绾у埆锛?{difficultyText.value}
-闇€瑕佸寘鍚細${includeItems}
-${pptForm.notes ? '棰濆瑕佹眰锛? + pptForm.notes : ''}
-
-璇锋寜浠ヤ笅鏍煎紡杈撳嚭PPT鍐呭锛屾瘡椤电敤"---PAGE---"鍒嗛殧锛?绗竴椤垫槸灏侀潰锛屽彧鍐欐爣棰樸€?涔嬪悗姣忛〉鏍煎紡涓猴細
-鏍囬琛岋紙涓€琛屾爣棰樻枃瀛楋級
-鐒跺悗鏄椤电殑鍏蜂綋鍐呭锛堣鐐圭敤"- "寮€澶达紝浠ｇ爜鐢╘`\`\`鍖呰９锛夈€?
-璇风敓鎴?-12椤电殑鍐呭锛岀‘淇濆唴瀹逛笓涓氥€佸噯纭€侀€傚悎澶у鏁欏浣跨敤銆俙
-}
-
-// 瑙ｆ瀽AI杩斿洖鐨勬枃鏈负骞荤伅鐗?const parseSlides = (text) => {
-  const pages = text.split(/---PAGE---/).map(p => p.trim()).filter(Boolean)
-  const slides = []
-
-  pages.forEach((page, idx) => {
-    const lines = page.split('\n').filter(l => l.trim())
-    if (lines.length === 0) return
-
-    if (idx === 0) {
-      slides.push({ title: lines[0].replace(/^#+\s*/, '').trim() || pptForm.title, isTitle: true, content: '' })
-      return
+function buildPrompt() {
+  const includesText = pptForm.includes.map(item => {
+    const map = {
+      theory: '理论讲解',
+      examples: '示例代码',
+      exercises: '课堂练习',
+      applications: '应用场景'
     }
+    return map[item] || item
+  }).join('、')
 
-    const title = lines[0].replace(/^#+\s*/, '').trim()
-    const contentLines = lines.slice(1)
-    const content = contentLines.join('\n')
-    const isCode = content.includes('```') || contentLines.every(l => l.startsWith('  ') || l.startsWith('\t'))
-
-    slides.push({ title, content: content.replace(/```\w*/g, '').replace(/```/g, '').trim(), isTitle: false, isCode })
-  })
-
-  // 濡傛灉瑙ｆ瀽澶辫触锛屾寜娈佃惤鍒嗗壊
-  if (slides.length <= 1) {
-    const paragraphs = text.split(/\n\n+/).filter(p => p.trim())
-    slides.length = 0
-    slides.push({ title: pptForm.title, isTitle: true, content: '' })
-    paragraphs.forEach(p => {
-      const lines = p.split('\n').filter(l => l.trim())
-      const title = lines[0].replace(/^#+\s*/, '').replace(/^\d+[.銆乚\s*/, '').trim()
-      const content = lines.slice(1).join('\n').trim() || lines[0]
-      const isCode = content.includes('int ') || content.includes('void ') || content.includes('#include')
-      slides.push({ title, content, isTitle: false, isCode })
-    })
-  }
-
-  return slides
+  return [
+    `请为我生成一份“${pptForm.title}”的数据结构课程 ${pptTypeText.value} PPT 大纲。`,
+    `知识点：${selectedTopics.value.join('、')}`,
+    `难度：${difficultyText.value}`,
+    `需包含：${includesText}`,
+    pptForm.notes ? `补充要求：${pptForm.notes}` : '',
+    '',
+    '输出要求：',
+    '1. 使用 ---PAGE--- 分隔每一页。',
+    '2. 第一页只输出标题。',
+    '3. 后续页面先给页面标题，再给要点列表。',
+    '4. 总页数控制在 6 到 10 页。'
+  ].filter(Boolean).join('\n')
 }
 
-const formatSlideContent = (content) => {
+function parseSlides(text) {
+  const pages = text
+    .split(/---PAGE---/i)
+    .map(item => item.trim())
+    .filter(Boolean)
+
+  if (!pages.length) return []
+
+  return pages.map((page, index) => {
+    const lines = page.split('\n').map(line => line.trim()).filter(Boolean)
+    const title = lines[0]?.replace(/^#+\s*/, '') || (index === 0 ? pptForm.title : `第 ${index + 1} 页`)
+    const content = lines.slice(1).join('\n')
+    const isCode = content.includes('```')
+    return {
+      title,
+      content: content.replace(/```[\w-]*/g, '').replace(/```/g, '').trim(),
+      isTitle: index === 0,
+      isCode
+    }
+  })
+}
+
+function formatSlideContent(content) {
   if (!content) return ''
   return content
     .replace(/^- (.+)$/gm, '<li>$1</li>')
@@ -258,105 +250,175 @@ const formatSlideContent = (content) => {
     .replace(/\n/g, '<br>')
 }
 
-// 璋冪敤DeepSeek AI鐢熸垚PPT
-const generatePPT = () => {
-  pptFormRef.value.validate(async (valid) => {
-    if (!valid) { ElMessage.error('璇峰畬鍠勮〃鍗曚俊鎭?); return }
+async function generatePPT() {
+  const valid = await pptFormRef.value?.validate().catch(() => false)
+  if (!valid) {
+    ElMessage.error('请先完善表单信息')
+    return
+  }
 
-    generating.value = true
-    showPreview.value = false
-    streamText.value = ''
+  generating.value = true
+  previewSlides.value = []
 
-    try {
-      const prompt = buildPrompt()
-      const response = await fetch(buildApiUrl('/api/chat'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userInput: prompt })
-      })
+  try {
+    const res = await chatSend(buildPrompt(), [])
+    const data = res?.data ?? res
+    const fullText = (data?.reply || '').trim()
 
-      if (!response.ok) throw new Error('AI鏈嶅姟璇锋眰澶辫触')
-
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder('utf-8')
-      let fullText = ''
-
-      let reading = true
-      while (reading) {
-        const { done, value } = await reader.read()
-        if (done) { reading = false; break }
-        const chunk = decoder.decode(value, { stream: true })
-        fullText += chunk
-        streamText.value = fullText
-      }
-
-      previewSlides.value = parseSlides(fullText)
-      if (previewSlides.value.length === 0) {
-        previewSlides.value = [{ title: pptForm.title, isTitle: true, content: '' },
-          { title: '鍐呭', content: fullText, isTitle: false, isCode: false }]
-      }
-      showPreview.value = true
-      ElMessage.success(`PPT鐢熸垚瀹屾垚锛屽叡${previewSlides.value.length}椤礰)
-    } catch (error) {
-      console.error('鐢熸垚PPT鍑洪敊:', error)
-      ElMessage.error('鐢熸垚PPT澶辫触: ' + (error.message || '璇风◢鍚庨噸璇?))
-    } finally {
-      generating.value = false
+    if (!fullText) {
+      throw new Error('AI 未返回可用的 PPT 内容')
     }
-  })
+
+    const slides = parseSlides(fullText)
+    previewSlides.value = slides.length
+      ? slides
+      : [
+          { title: pptForm.title, content: '', isTitle: true, isCode: false },
+          { title: '内容', content: fullText, isTitle: false, isCode: false }
+        ]
+
+    ElMessage.success(`PPT 生成完成，共 ${previewSlides.value.length} 页`)
+  } catch (error) {
+    ElMessage.error(`生成失败：${error?.message || '请稍后重试'}`)
+  } finally {
+    generating.value = false
+  }
 }
 
-const resetForm = () => {
-  pptFormRef.value.resetFields()
-  showPreview.value = false
-  streamText.value = ''
+function resetForm() {
+  pptFormRef.value?.resetFields()
   previewSlides.value = []
 }
 
-const downloadPPT = () => {
-  if (previewSlides.value.length === 0) return
-  let text = ''
-  previewSlides.value.forEach((slide, i) => {
-    text += `===== 绗?{i + 1}椤?=====\n`
-    text += slide.title + '\n'
-    if (slide.content) text += slide.content + '\n'
-    text += '\n'
-  })
-  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
+function downloadPPT() {
+  if (!previewSlides.value.length) return
+
+  const content = previewSlides.value
+    .map((slide, index) => `===== 第 ${index + 1} 页 =====\n${slide.title}\n${slide.content || ''}`)
+    .join('\n\n')
+
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
   const link = document.createElement('a')
   link.href = URL.createObjectURL(blob)
-  link.download = `${pptForm.title || 'PPT'}_澶х翰.txt`
+  link.download = `${pptForm.title || '教学PPT大纲'}.txt`
   link.click()
   URL.revokeObjectURL(link.href)
-  ElMessage.success('PPT澶х翰宸蹭笅杞?)
 }
 </script>
 
 <style scoped>
-.content-container { display: flex; flex-direction: column; gap: 20px; }
-.card-header { display: flex; justify-content: space-between; align-items: center; }
-.progress-card { margin-top: 10px; }
-.generating-status { display: flex; align-items: center; gap: 10px; margin-bottom: 15px; font-size: 15px; color: #1a73e8; }
-.ai-stream-output { background: #f8f9fa; border-radius: 10px; padding: 15px; max-height: 300px; overflow-y: auto; border: 1px solid #dadce0; }
-.stream-text { white-space: pre-wrap; font-size: 13px; line-height: 1.6; margin: 0; font-family: 'Microsoft YaHei', sans-serif; }
-.preview-container { display: flex; flex-direction: column; gap: 20px; }
-.slides-container { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; }
-.slide-item { width: 320px; border: 1px solid #dadce0; border-radius: 16px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.04); transition: all 0.25s; }
-.slide-item:hover { box-shadow: 0 6px 16px rgba(0,0,0,0.08); transform: translateY(-2px); }
-.slide-header { background: #f8f9fa; padding: 8px 12px; font-size: 14px; color: #5f6368; border-bottom: 1px solid #dadce0; }
-.slide-content { padding: 15px; min-height: 180px; max-height: 250px; overflow: auto; display: flex; flex-direction: column; background-color: white; }
-.title-slide { justify-content: center; align-items: center; text-align: center; }
-.slide-subtitle { color: #5f6368; margin-top: 10px; }
-.slide-body { font-size: 13px; line-height: 1.6; }
-.code-block { background: #202124; border-radius: 8px; padding: 10px; font-family: monospace; font-size: 12px; overflow: auto; max-height: 180px; color: #dadce0; }
-.text-content :deep(ul) { padding-left: 18px; margin: 5px 0; }
-.text-content :deep(li) { margin-bottom: 4px; }
-.generate-ppt :deep(.el-card) {
-  border-radius: 16px;
-  border: 1px solid #dadce0;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+.generate-ppt {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
 }
-@media (max-width: 768px) { .slide-item { width: 100%; } }
+
+.page-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.form-card,
+.preview-card {
+  border-radius: 20px;
+  border: 1px solid #dbe5ef;
+  box-shadow: 0 12px 30px rgba(28, 52, 84, 0.06);
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-weight: 600;
+  color: #1d3557;
+}
+
+.form-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.loading-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 2px;
+  color: #48607c;
+}
+
+.slides-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.slide-card {
+  overflow: hidden;
+  border: 1px solid #dbe5ef;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+}
+
+.slide-card--title {
+  background: linear-gradient(160deg, #eef5ff 0%, #f8fbff 100%);
+}
+
+.slide-card__header {
+  padding: 10px 14px;
+  border-bottom: 1px solid #e6edf5;
+  font-size: 13px;
+  color: #68809c;
+}
+
+.slide-card__body {
+  padding: 18px;
+}
+
+.slide-card__body h3 {
+  margin: 0 0 10px;
+  font-size: 18px;
+  line-height: 1.35;
+  color: #16304f;
+}
+
+.slide-card__subtitle {
+  margin: 0;
+  color: #5f7690;
+}
+
+.slide-card__content {
+  color: #31465f;
+  line-height: 1.8;
+}
+
+.slide-card__content :deep(ul) {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.slide-card__content :deep(li) {
+  margin-bottom: 6px;
+}
+
+.code-block {
+  overflow: auto;
+  border-radius: 14px;
+  background: #10233b;
+  color: #f8fbff;
+  padding: 14px;
+}
+
+.code-block pre {
+  margin: 0;
+}
+
+@media (max-width: 1080px) {
+  .page-layout {
+    grid-template-columns: 1fr;
+  }
+}
 </style>
-
-

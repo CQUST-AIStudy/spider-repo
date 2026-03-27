@@ -6,7 +6,9 @@ import com.tap.backend.domain.user.UserEntity;
 import com.tap.backend.repo.ClassStudentRepository;
 import com.tap.backend.repo.TeachingClassRepository;
 import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.NoSuchElementException;
+import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -54,9 +56,7 @@ public class TeachingClassService {
         teachingClass.setGrade(grade);
         teachingClass.setCourseName(courseName);
         teachingClass.setDescription(description);
-        if (ptaKeyword != null && !ptaKeyword.isBlank()) {
-            teachingClass.setPtaKeyword(ptaKeyword);
-        }
+        teachingClass.setPtaKeyword(resolvePtaKeyword(name, ptaKeyword));
         if (syncEnabled != null) {
             teachingClass.setSyncEnabled(syncEnabled);
         }
@@ -92,7 +92,7 @@ public class TeachingClassService {
             teachingClass.setDescription(description);
         }
         if (ptaKeyword != null) {
-            teachingClass.setPtaKeyword(ptaKeyword);
+            teachingClass.setPtaKeyword(resolvePtaKeyword(teachingClass.getName(), ptaKeyword));
         }
         if (syncEnabled != null) {
             teachingClass.setSyncEnabled(syncEnabled);
@@ -172,13 +172,27 @@ public class TeachingClassService {
         if (!teachingClass.getJoinPassword().equals(password)) {
             throw new SecurityException("invalid class password");
         }
-        if (studentNum != null && studentRepo.existsByClassIdAndStudentNum(teachingClass.getId(), studentNum)) {
-            throw new IllegalArgumentException("student already joined this class");
+        String normalizedStudentNum = studentNum == null ? null : studentNum.trim();
+        if (normalizedStudentNum != null && !normalizedStudentNum.isBlank()) {
+            var existing = studentRepo.findByClassIdAndStudentNum(teachingClass.getId(), normalizedStudentNum);
+            if (existing.isPresent()) {
+                ClassStudentEntity matched = existing.get();
+                if (matched.getUserId() != null && userId != null && !userId.equals(matched.getUserId())) {
+                    throw new IllegalArgumentException("student already joined this class");
+                }
+                if (matched.getUserId() == null && userId != null) {
+                    matched.setUserId(userId);
+                }
+                if (studentName != null && !studentName.isBlank()) {
+                    matched.setStudentName(studentName);
+                }
+                return studentRepo.save(matched);
+            }
         }
         ClassStudentEntity student = new ClassStudentEntity();
         student.setTeachingClass(teachingClass);
         student.setStudentName(studentName);
-        student.setStudentNum(studentNum);
+        student.setStudentNum(normalizedStudentNum);
         student.setUserId(userId);
         return studentRepo.save(student);
     }
@@ -193,6 +207,20 @@ public class TeachingClassService {
         return studentRepo.findAllByUserId(userId);
     }
 
+    @Transactional(readOnly = true)
+    public List<TeachingClassEntity> listClassesByStudentNum(String studentNum) {
+        if (studentNum == null || studentNum.isBlank()) {
+            return List.of();
+        }
+        Set<Long> classIds = studentRepo.findAllByStudentNum(studentNum.trim()).stream()
+                .map(ClassStudentEntity::getClassId)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        if (classIds.isEmpty()) {
+            return List.of();
+        }
+        return classRepo.findAllById(classIds);
+    }
+
     private TeachingClassEntity requireOwnedClass(Long classId, Long teacherId) {
         TeachingClassEntity teachingClass = classRepo.findById(classId)
                 .orElseThrow(() -> new NoSuchElementException("class not found"));
@@ -200,5 +228,12 @@ public class TeachingClassService {
             throw new SecurityException("forbidden");
         }
         return teachingClass;
+    }
+
+    private String resolvePtaKeyword(String className, String ptaKeyword) {
+        if (ptaKeyword != null && !ptaKeyword.isBlank()) {
+            return ptaKeyword.trim();
+        }
+        return className == null ? null : className.trim();
     }
 }

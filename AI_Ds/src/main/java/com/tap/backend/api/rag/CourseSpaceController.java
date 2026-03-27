@@ -44,9 +44,13 @@ public class CourseSpaceController {
         this.principalResolver = principalResolver;
     }
 
-    public record CreateSpaceRequest(String name, String term, String courseName, String description) {}
+    public record CreateSpaceRequest(String name, String term, String courseName, String description,
+                                     String defaultMode, Boolean allowWebSearch,
+                                     Boolean requireCitation, String docVisibility,
+                                     List<Long> classIds) {}
     public record UpdateSpaceRequest(String name, String term, String courseName, String description,
-                                      String defaultMode, Boolean allowWebSearch, Boolean requireCitation, String docVisibility) {}
+                                      String defaultMode, Boolean allowWebSearch, Boolean requireCitation,
+                                      String docVisibility, List<Long> classIds) {}
 
     @PostMapping
     public ApiResponse<Map<String, Object>> createSpace(
@@ -55,7 +59,9 @@ public class CourseSpaceController {
         var resolved = principalResolver.resolve(principal);
         UserEntity teacher = userService.requireById(resolved.userId());
         CourseSpaceEntity cs = courseSpaceService.createSpace(
-                teacher, req.name(), req.term(), req.courseName(), req.description());
+                teacher, req.name(), req.term(), req.courseName(), req.description(),
+                req.defaultMode(), req.allowWebSearch(), req.requireCitation(), req.docVisibility(),
+                req.classIds());
         return ApiResponse.of(spaceToMap(cs));
     }
 
@@ -84,7 +90,8 @@ public class CourseSpaceController {
         var resolved = principalResolver.resolve(principal);
         CourseSpaceEntity cs = courseSpaceService.updateSpace(
                 id, resolved.userId(), req.name(), req.term(), req.courseName(), req.description(),
-                req.defaultMode(), req.allowWebSearch(), req.requireCitation(), req.docVisibility());
+                req.defaultMode(), req.allowWebSearch(), req.requireCitation(), req.docVisibility(),
+                req.classIds());
         return ApiResponse.of(spaceToMap(cs));
     }
 
@@ -152,6 +159,7 @@ public class CourseSpaceController {
         map.put("allowWebSearch", cs.getAllowWebSearch());
         map.put("requireCitation", cs.getRequireCitation());
         map.put("docVisibility", cs.getDocVisibility());
+        map.put("boundClassIds", courseSpaceService.listBoundClassIds(cs.getId()));
         map.put("createdAt", cs.getCreatedAt().toString());
         map.put("updatedAt", cs.getUpdatedAt().toString());
         return map;

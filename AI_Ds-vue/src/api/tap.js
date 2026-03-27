@@ -1,6 +1,3 @@
-﻿/**
- * TAP 妯″潡 API 瀹㈡埛绔? * 褰撳墠榛樿鎺ュ叆宸茬粡鍚堝苟鍒?AI_Ds 鐨勫悗绔疄渚?(绔彛 8081)
- */
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import {
@@ -21,7 +18,10 @@ const tapClient = axios.create({
   headers: { 'Content-Type': 'application/json' }
 })
 
-// 璇锋眰鎷︽埅鍣?- 娣诲姞 JWT token
+function normalizeAuthPayload(payload) {
+  return payload?.data ?? payload
+}
+
 tapClient.interceptors.request.use(config => {
   const token = getTapToken()
   if (token) {
@@ -30,15 +30,42 @@ tapClient.interceptors.request.use(config => {
   return config
 })
 
-// 鍝嶅簲鎷︽埅鍣?
 tapClient.interceptors.response.use(
   response => response.data,
-  error => {
-    if (error.response?.status === 401) {
+  async error => {
+    const originalRequest = error.config || {}
+    const status = error.response?.status
+    const requestUrl = originalRequest.url || ''
+    const isAuthRequest = requestUrl.includes('/api/auth/login') || requestUrl.includes('/api/auth/session')
+
+    if (status === 401 && !isAuthRequest && !originalRequest.__tapRetried) {
+      originalRequest.__tapRetried = true
+      try {
+        const refreshed = await axios.post(`${TAP_BASE}/api/auth/session`, {}, {
+          withCredentials: true,
+          headers: { 'Content-Type': 'application/json' }
+        })
+        const authData = normalizeAuthPayload(refreshed.data)
+        if (authData?.accessToken) {
+          setTapToken(authData.accessToken)
+          setTapUser({
+            userId: authData.userId,
+            role: authData.role,
+            username: getTapUser()?.username || null
+          })
+          originalRequest.headers = originalRequest.headers || {}
+          originalRequest.headers.Authorization = `Bearer ${authData.accessToken}`
+          return tapClient(originalRequest)
+        }
+      } catch {
+        // fall through to clear auth and surface the original 401
+      }
       clearTapAuth()
-      ElMessage.warning('鏁欒緟骞冲彴鐧诲綍宸茶繃鏈燂紝璇烽噸鏂扮櫥褰?)
+      ElMessage.warning('教辅平台登录已过期，请重新登录')
+    } else if (status === 401 && isAuthRequest) {
+      clearTapAuth()
     }
-    const msg = error.response?.data?.message || error.message || '璇锋眰澶辫触'
+    const msg = error.response?.data?.message || error.message || '请求失败'
     return Promise.reject(new Error(msg))
   }
 )
@@ -46,13 +73,31 @@ tapClient.interceptors.response.use(
 // ========== Auth ==========
 export async function tapLogin(username, password) {
   const res = await tapClient.post('/api/auth/login', { username, password })
-  const data = res?.data ?? res
+  const data = normalizeAuthPayload(res)
   if (data?.accessToken) {
     setTapToken(data.accessToken)
     setTapUser({
       userId: data.userId,
       role: data.role,
       username
+    })
+  }
+  return data
+}
+
+export async function restoreTapSession() {
+  const res = await axios.post(`${TAP_BASE}/api/auth/session`, {}, {
+    withCredentials: true,
+    headers: { 'Content-Type': 'application/json' }
+  })
+  const data = normalizeAuthPayload(res.data)
+  if (data?.accessToken) {
+    setTapToken(data.accessToken)
+    const currentTapUser = getTapUser()
+    setTapUser({
+      userId: data.userId,
+      role: data.role,
+      username: currentTapUser?.username || null
     })
   }
   return data
@@ -281,6 +326,10 @@ export function saveFinalReview(submissionId, finalReviewComment) {
   return tapClient.put(`/api/grading/submissions/${submissionId}/review`, { finalReviewComment })
 }
 
+export function publishSubmissionReport(submissionId) {
+  return tapClient.post(`/api/grading/submissions/${submissionId}/publish-report`)
+}
+
 
 // ========== Course Spaces (RAG Knowledge Base) ==========
 export function getCourseSpaces() {
@@ -379,7 +428,6 @@ export function getResourceGaps(courseSpaceId, coverageThreshold = 0.4, minFrequ
   })
 }
 
-// ========== 鐝骇绠＄悊 (Teaching Classes) ==========
 export function getTeachingClasses() {
   return tapClient.get('/api/classes')
 }
@@ -412,7 +460,6 @@ export function joinClass(data) {
   return tapClient.post('/api/classes/join', data)
 }
 
-// ========== PTA 鏁版嵁鍚屾 ==========
 export function updatePtaSyncConfig(classId, data) {
   return tapClient.put(`/api/classes/${classId}/pta-sync`, data)
 }
@@ -446,7 +493,6 @@ export function getExperimentComparison(classPrefix) {
   return tapClient.get('/api/analytics/comparison', { params })
 }
 
-// ========== Student Analytics (鐝骇瀵规瘮) ==========
 export function getStudentAnalyticsOverview(studentId) {
   return tapClient.get(`/api/analytics/student/${studentId}/overview`)
 }
@@ -455,7 +501,6 @@ export function getStudentExperimentDetail(studentId, experimentId) {
   return tapClient.get(`/api/analytics/student/${studentId}/experiments/${experimentId}`)
 }
 
-// ========== PTA Cookie 绠＄悊 ==========
 export function getPtaCookieStatus() {
   return tapClient.get('/api/pta-cookie/status')
 }

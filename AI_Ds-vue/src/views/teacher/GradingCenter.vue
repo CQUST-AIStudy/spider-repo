@@ -216,7 +216,14 @@ async function exportTask(id) {
     const a = document.createElement('a')
     a.href = url; a.download = `grading-export-${id}.zip`; a.click()
     URL.revokeObjectURL(url)
-  } catch (e) { ElMessage.error(e.message) }
+  } catch (e) {
+    const message = String(e?.message || '')
+    if (message.includes('Report not yet generated') || message.includes('404')) {
+      ElMessage.warning('当前批改报告尚未生成，暂时无法导出 ZIP。')
+      return
+    }
+    ElMessage.error(message || '导出失败')
+  }
 }
 
 onMounted(async () => {

@@ -1,95 +1,119 @@
 <template>
   <div class="class-list">
-    <page-header class="my-page-header" title="班级管理" description="管理教学班级和学生信息">
+    <page-header
+      class="my-page-header"
+      title="班级管理"
+      description="管理教学班级、学生信息与 PTA 同步设置，首屏卡片会根据内容自动伸展。"
+    >
       <el-button type="primary" @click="openCreateDialog">
-        <el-icon><Plus /></el-icon> 新增班级
+        <el-icon><Plus /></el-icon>
+        新增班级
       </el-button>
     </page-header>
 
-    <!-- PTA Cookie 过期告警 -->
     <el-alert
       v-if="cookieStatus === 'EXPIRED'"
+      class="cookie-alert"
       title="PTA 登录凭证已过期"
       type="warning"
       :closable="false"
       show-icon
-      style="margin-bottom: 16px; border-radius: 12px"
     >
       <template #default>
-        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
-          <span style="font-size: 13px; color: #5f6368">
-            系统自动登录失败，PTA数据同步暂停。请手动更新 Cookie 以恢复同步。
-          </span>
-          <el-button type="warning" size="small" @click="openCookieDialog" style="border-radius: 100px">
-            更新 Cookie
-          </el-button>
+        <div class="cookie-alert__content">
+          <span>系统自动登录失败，PTA 同步已暂停。请手动更新 Cookie 后再继续同步。</span>
+          <el-button type="warning" size="small" @click="openCookieDialog">更新 Cookie</el-button>
         </div>
       </template>
     </el-alert>
 
-    <!-- 班级卡片列表 -->
     <div class="class-cards" v-loading="loading">
       <el-empty v-if="classes.length === 0 && !loading" description="暂无班级，点击上方按钮创建">
         <el-button type="primary" @click="openCreateDialog">创建第一个班级</el-button>
       </el-empty>
 
-      <el-row :gutter="16">
-        <el-col :span="8" v-for="cls in classes" :key="cls.id" style="margin-bottom: 16px">
+      <el-row v-else :gutter="20" class="class-grid">
+        <el-col
+          v-for="cls in classes"
+          :key="cls.id"
+          :xs="24"
+          :sm="24"
+          :md="24"
+          :lg="12"
+          :xl="12"
+          class="class-grid__item"
+        >
           <el-card shadow="hover" class="class-card">
             <template #header>
               <div class="card-header">
-                <span class="class-name">{{ cls.name }}</span>
+                <div class="card-header__main">
+                  <h3 class="class-name">{{ displayClassName(cls) }}</h3>
+                  <div class="class-meta">
+                    <span class="meta-pill">{{ displayGrade(cls) }}</span>
+                    <span class="meta-pill meta-pill--soft">{{ studentCountValue(cls) }} 人</span>
+                  </div>
+                </div>
                 <el-dropdown trigger="click">
-                  <el-icon style="cursor: pointer"><MoreFilled /></el-icon>
+                  <el-icon class="card-menu"><MoreFilled /></el-icon>
                   <template #dropdown>
                     <el-dropdown-menu>
                       <el-dropdown-item @click="editClass(cls)">编辑班级</el-dropdown-item>
                       <el-dropdown-item @click="manageStudents(cls)">学生管理</el-dropdown-item>
-                      <el-dropdown-item divided @click="confirmDelete(cls)" style="color: #f56c6c">删除班级</el-dropdown-item>
+                      <el-dropdown-item divided @click="confirmDelete(cls)" style="color: #f56c6c">
+                        删除班级
+                      </el-dropdown-item>
                     </el-dropdown-menu>
                   </template>
                 </el-dropdown>
               </div>
             </template>
-            <div class="class-info">
-              <div class="info-row">
-                <span class="label">班级号</span>
-                <el-tag size="small" type="info" effect="plain">{{ cls.classCode }}</el-tag>
-                <el-button link size="small" @click="copyCode(cls.classCode)" style="margin-left: 4px">复制</el-button>
+
+            <div class="class-summary">
+              <div class="summary-chip">
+                <span class="summary-chip__label">班级号</span>
+                <strong>{{ displayClassCode(cls) }}</strong>
+                <el-button link size="small" @click="copyCode(displayClassCode(cls))">复制</el-button>
               </div>
-              <div class="info-row">
-                <span class="label">加入密码</span>
-                <span>{{ cls.joinPassword }}</span>
-              </div>
-              <div class="info-row" v-if="cls.grade">
-                <span class="label">年级</span>
-                <span>{{ cls.grade }}</span>
-              </div>
-              <div class="info-row" v-if="cls.courseName">
-                <span class="label">课程</span>
-                <span>{{ cls.courseName }}</span>
-              </div>
-              <div class="info-row">
-                <span class="label">学生人数</span>
-                <el-badge :value="cls.studentCount" type="primary" />
-              </div>
-              <div class="info-row" v-if="cls.ptaKeyword">
-                <span class="label">PTA同步</span>
+              <div class="summary-chip" v-if="hasPtaConfig(cls)">
+                <span class="summary-chip__label">PTA 同步</span>
                 <el-tag size="small" :type="syncTagType(cls.syncStatus)" effect="plain">
                   {{ syncStatusText(cls.syncStatus) }}
                 </el-tag>
-                <span v-if="cls.lastSyncAt" style="font-size: 11px; color: #b0b0b0; margin-left: 4px">
-                  {{ formatTime(cls.lastSyncAt) }}
-                </span>
+                <span v-if="cls.lastSyncAt" class="summary-chip__time">{{ formatTime(cls.lastSyncAt) }}</span>
               </div>
             </div>
+
+            <div class="info-grid">
+              <div class="info-block">
+                <span class="info-label">加入密码</span>
+                <span class="info-value">{{ displayJoinPassword(cls) }}</span>
+              </div>
+              <div class="info-block">
+                <span class="info-label">课程</span>
+                <span class="info-value">{{ displayCourseName(cls) }}</span>
+              </div>
+              <div class="info-block">
+                <span class="info-label">描述</span>
+                <span class="info-value">{{ displayDescription(cls) }}</span>
+              </div>
+              <div class="info-block">
+                <span class="info-label">同步关键词</span>
+                <span class="info-value">{{ displayPtaKeyword(cls) }}</span>
+              </div>
+            </div>
+
             <div class="card-actions">
-              <el-button type="primary" text @click="manageStudents(cls)">学生管理</el-button>
-              <el-button type="info" text @click="viewAnalysis(cls)">班级分析</el-button>
-              <el-button v-if="cls.ptaKeyword" type="warning" text
-                         :loading="syncingMap[cls.id]"
-                         :disabled="cls.syncStatus === 'RUNNING'"
-                         @click="triggerSyncForClass(cls)">
+              <el-button type="primary" @click="enterClassSpace(cls)">进入教学班</el-button>
+              <el-button @click="manageStudents(cls)">学生管理</el-button>
+              <el-button @click="viewAnalysis(cls)">班级分析</el-button>
+              <el-button
+                v-if="hasPtaConfig(cls)"
+                type="warning"
+                plain
+                :loading="syncingMap[cls.id]"
+                :disabled="cls.syncStatus === 'RUNNING'"
+                @click="triggerSyncForClass(cls)"
+              >
                 {{ cls.syncStatus === 'RUNNING' ? '同步中...' : '立即同步' }}
               </el-button>
             </div>
@@ -98,14 +122,18 @@
       </el-row>
     </div>
 
-    <!-- 创建/编辑班级对话框 -->
-    <el-dialog v-model="classDialogVisible" :title="editingClass ? '编辑班级' : '新增班级'" width="520px" destroy-on-close>
+    <el-dialog
+      v-model="classDialogVisible"
+      :title="editingClass ? '编辑班级' : '新增班级'"
+      width="520px"
+      destroy-on-close
+    >
       <el-form :model="classForm" :rules="classRules" ref="classFormRef" label-width="90px">
         <el-form-item label="班级名称" prop="name">
-          <el-input v-model="classForm.name" placeholder="如：计算机科学与技术1班" />
+          <el-input v-model="classForm.name" placeholder="例如：计算机科学与技术 23 级 1 班" />
         </el-form-item>
         <el-form-item label="班级号" prop="classCode" v-if="!editingClass">
-          <el-input v-model="classForm.classCode" placeholder="唯一标识，如 CS2023-01">
+          <el-input v-model="classForm.classCode" placeholder="唯一标识，例如 CS2023-01">
             <template #append>
               <el-button @click="generateCode">随机生成</el-button>
             </template>
@@ -116,28 +144,29 @@
         </el-form-item>
         <el-form-item label="年级">
           <el-select v-model="classForm.grade" placeholder="选择年级" clearable style="width: 100%">
-            <el-option v-for="y in ['2022','2023','2024','2025','2026']" :key="y" :label="y + '级'" :value="y" />
+            <el-option v-for="y in gradeOptions" :key="y" :label="`${y} 级`" :value="y" />
           </el-select>
         </el-form-item>
         <el-form-item label="课程名称">
-          <el-input v-model="classForm.courseName" placeholder="如：数据结构" />
+          <el-input v-model="classForm.courseName" placeholder="例如：数据结构" />
         </el-form-item>
         <el-form-item label="描述">
-          <el-input v-model="classForm.description" type="textarea" :rows="2" placeholder="班级描述（选填）" />
+          <el-input v-model="classForm.description" type="textarea" :rows="3" placeholder="可选，用于补充班级说明" />
         </el-form-item>
+
         <el-divider content-position="left">PTA 数据同步</el-divider>
-        <el-form-item label="PTA关键词">
-          <el-input v-model="classForm.ptaKeyword" placeholder="PTA上的搜索关键词，如：计科23数据结构">
-            <template #prepend>🔍</template>
-          </el-input>
-          <div style="font-size: 12px; color: #909399; margin-top: 4px">
-            填写后可自动从PTA同步该班级的实验数据
-          </div>
+
+        <el-form-item label="PTA 关键词">
+          <el-input
+            v-model="classForm.ptaKeyword"
+            placeholder="例如：计科 23 数据结构"
+          />
+          <div class="form-help">填写后可自动从 PTA 同步该班级的实验数据。</div>
         </el-form-item>
         <el-form-item label="定时同步">
-          <el-switch v-model="classForm.syncEnabled" :disabled="!classForm.ptaKeyword" />
-          <span style="margin-left: 8px; font-size: 13px; color: #909399">
-            {{ classForm.syncEnabled ? '已开启，每天凌晨自动同步一次' : '关闭' }}
+          <el-switch v-model="classForm.syncEnabled" :disabled="!classForm.ptaKeyword.trim()" />
+          <span class="switch-hint">
+            {{ classForm.syncEnabled ? '已开启，每天凌晨自动同步一次。' : '关闭' }}
           </span>
         </el-form-item>
       </el-form>
@@ -147,38 +176,39 @@
       </template>
     </el-dialog>
 
-    <!-- 学生管理对话框 -->
-    <el-dialog v-model="studentDialogVisible" :title="'学生管理 - ' + (currentClass?.name || '')" width="700px" destroy-on-close>
-      <div style="display: flex; justify-content: space-between; margin-bottom: 12px">
-        <el-input v-model="studentSearch" placeholder="搜索姓名或学号" clearable style="width: 240px" />
+    <el-dialog
+      v-model="studentDialogVisible"
+      :title="`学生管理 - ${displayClassName(currentClass || {})}`"
+      width="720px"
+      destroy-on-close
+    >
+      <div class="student-toolbar">
+        <el-input v-model="studentSearch" placeholder="搜索姓名或学号" clearable class="student-toolbar__search" />
         <el-button type="primary" size="small" @click="openAddStudentDialog">添加学生</el-button>
       </div>
-      <el-table :data="filteredStudents" stripe size="small" v-loading="studentsLoading" max-height="400">
-        <el-table-column type="index" label="#" width="50" />
-        <el-table-column prop="studentNum" label="学号" width="140" />
-        <el-table-column prop="studentName" label="姓名" width="120" />
-        <el-table-column prop="joinedAt" label="加入时间" min-width="160">
+      <el-table :data="filteredStudents" stripe size="small" v-loading="studentsLoading" max-height="420">
+        <el-table-column type="index" label="#" width="56" />
+        <el-table-column prop="studentNum" label="学号" width="160" />
+        <el-table-column prop="studentName" label="姓名" width="140" />
+        <el-table-column prop="joinedAt" label="加入时间" min-width="180">
           <template #default="{ row }">{{ formatTime(row.joinedAt) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="80">
+        <el-table-column label="操作" width="90">
           <template #default="{ row }">
             <el-button type="danger" link size="small" @click="confirmRemoveStudent(row)">移除</el-button>
           </template>
         </el-table-column>
       </el-table>
-      <div style="margin-top: 12px; color: #909399; font-size: 13px">
-        共 {{ students.length }} 名学生
-      </div>
+      <div class="student-count">共 {{ students.length }} 名学生</div>
     </el-dialog>
 
-    <!-- 添加学生小对话框 -->
     <el-dialog v-model="addStudentVisible" title="添加学生" width="400px" append-to-body>
       <el-form :model="addStudentForm" label-width="60px">
         <el-form-item label="姓名">
           <el-input v-model="addStudentForm.studentName" placeholder="学生姓名" />
         </el-form-item>
         <el-form-item label="学号">
-          <el-input v-model="addStudentForm.studentNum" placeholder="学号（选填）" />
+          <el-input v-model="addStudentForm.studentNum" placeholder="选填" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -187,47 +217,52 @@
       </template>
     </el-dialog>
 
-    <!-- 手动更新 PTA Cookie 对话框 -->
     <el-dialog v-model="cookieDialogVisible" title="手动更新 PTA Cookie" width="600px" destroy-on-close>
-      <el-steps :active="1" simple style="margin-bottom: 20px">
+      <el-steps :active="1" simple class="cookie-steps">
         <el-step title="获取 Cookie" />
         <el-step title="粘贴到下方" />
         <el-step title="验证生效" />
       </el-steps>
-      <el-alert type="info" :closable="false" style="margin-bottom: 16px; border-radius: 8px">
+
+      <el-alert type="info" :closable="false" class="cookie-helper">
         <template #title>
-          <span style="font-weight: 500">获取步骤</span>
+          <span class="cookie-helper__title">获取步骤</span>
         </template>
         <template #default>
-          <ol style="margin: 8px 0 0; padding-left: 20px; font-size: 13px; color: #5f6368; line-height: 1.8">
-            <li>用浏览器打开 <a href="https://pintia.cn" target="_blank" style="color: #1a73e8">pintia.cn</a> 并登录</li>
-            <li>按 <code>F12</code> 打开开发者工具 → 切换到 <code>Application</code> 标签</li>
-            <li>左侧找到 <code>Cookies</code> → <code>https://pintia.cn</code></li>
-            <li>推荐安装浏览器插件 <strong>EditThisCookie</strong>，点击导出按钮即可复制 JSON</li>
-            <li>将复制的 JSON 粘贴到下方输入框</li>
+          <ol class="cookie-helper__list">
+            <li>打开 <a href="https://pintia.cn" target="_blank" rel="noopener noreferrer">pintia.cn</a> 并登录。</li>
+            <li>按 `F12` 打开开发者工具，切换到 `Application`。</li>
+            <li>在左侧找到 `Cookies`，选择 `https://pintia.cn`。</li>
+            <li>复制导出的 Cookie JSON，粘贴到下方输入框。</li>
           </ol>
         </template>
       </el-alert>
+
       <el-input
         v-model="cookieInput"
         type="textarea"
         :rows="8"
-        placeholder='粘贴 Cookie JSON，格式如：[{"name":"PTASession","value":"xxx","domain":".pintia.cn"}, ...]'
-        style="font-family: monospace; font-size: 12px"
+        placeholder='粘贴 Cookie JSON，例如：[{"name":"PTASession","value":"xxx","domain":".pintia.cn"}]'
+        class="cookie-textarea"
       />
-      <div v-if="cookieSubmitResult" style="margin-top: 12px">
+
+      <div v-if="cookieSubmitResult" class="cookie-result">
         <el-alert
           :title="cookieSubmitResult.message"
           :type="cookieSubmitResult.valid ? 'success' : 'error'"
           :closable="false"
           show-icon
-          style="border-radius: 8px"
         />
       </div>
+
       <template #footer>
         <el-button @click="cookieDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitCookieForm" :loading="cookieSubmitting"
-                   :disabled="!cookieInput.trim()" style="border-radius: 100px">
+        <el-button
+          type="primary"
+          @click="submitCookieForm"
+          :loading="cookieSubmitting"
+          :disabled="!cookieInput.trim()"
+        >
           验证并保存
         </el-button>
       </template>
@@ -236,164 +271,280 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, MoreFilled } from '@element-plus/icons-vue'
+import { MoreFilled, Plus } from '@element-plus/icons-vue'
 import PageHeader from '../../components/PageHeader.vue'
+import { useUserStore } from '../../store'
 import {
-  getTeachingClasses, createTeachingClass, updateTeachingClass, deleteTeachingClass,
-  getClassStudents, addClassStudent, removeClassStudent,
-  triggerPtaSync, getPtaSyncStatus,
-  getPtaCookieStatus, submitPtaCookie
+  addClassStudent,
+  createTeachingClass,
+  deleteTeachingClass,
+  getClassStudents,
+  getPtaCookieStatus,
+  getTeachingClasses,
+  removeClassStudent,
+  submitPtaCookie,
+  triggerPtaSync,
+  updateTeachingClass
 } from '../../api/tap'
 
 const router = useRouter()
+const userStore = useUserStore()
+
 const loading = ref(false)
 const classes = ref([])
+const gradeOptions = ['2022', '2023', '2024', '2025', '2026', '2027']
 
-const extract = (res) => res?.data ?? res
-
-const loadClasses = async () => {
-  loading.value = true
-  try {
-    const res = await getTeachingClasses()
-    classes.value = extract(res) || []
-  } catch (e) {
-    ElMessage.error('加载班级失败: ' + e.message)
-  } finally {
-    loading.value = false
-  }
-}
-
-// --- 创建/编辑 ---
 const classDialogVisible = ref(false)
 const editingClass = ref(null)
 const submitting = ref(false)
 const classFormRef = ref(null)
-const classForm = reactive({ name: '', classCode: '', joinPassword: '', grade: '', courseName: '', description: '', ptaKeyword: '', syncEnabled: false })
+const classForm = reactive({
+  name: '',
+  classCode: '',
+  joinPassword: '',
+  grade: '',
+  courseName: '',
+  description: '',
+  ptaKeyword: '',
+  syncEnabled: false
+})
 const classRules = {
   name: [{ required: true, message: '请输入班级名称', trigger: 'blur' }],
   classCode: [{ required: true, message: '请输入班级号', trigger: 'blur' }],
   joinPassword: [{ required: true, message: '请设置加入密码', trigger: 'blur' }]
 }
 
-const openCreateDialog = () => {
-  editingClass.value = null
-  Object.assign(classForm, { name: '', classCode: '', joinPassword: '', grade: '', courseName: '', description: '', ptaKeyword: '', syncEnabled: false })
-  classDialogVisible.value = true
-}
-
-const editClass = (cls) => {
-  editingClass.value = cls
-  Object.assign(classForm, {
-    name: cls.name, classCode: cls.classCode, joinPassword: cls.joinPassword,
-    grade: cls.grade || '', courseName: cls.courseName || '', description: cls.description || '',
-    ptaKeyword: cls.ptaKeyword || '', syncEnabled: cls.syncEnabled || false
-  })
-  classDialogVisible.value = true
-}
-
-const generateCode = () => {
-  classForm.classCode = 'C' + Date.now().toString(36).toUpperCase().slice(-6)
-}
-
-const submitClassForm = async () => {
-  const valid = await classFormRef.value.validate().catch(() => false)
-  if (!valid) return
-  submitting.value = true
-  try {
-    if (editingClass.value) {
-      await updateTeachingClass(editingClass.value.id, {
-        name: classForm.name, joinPassword: classForm.joinPassword,
-        grade: classForm.grade, courseName: classForm.courseName, description: classForm.description,
-        ptaKeyword: classForm.ptaKeyword, syncEnabled: classForm.syncEnabled
-      })
-      ElMessage.success('班级更新成功')
-    } else {
-      const res = await createTeachingClass({ ...classForm })
-      const created = extract(res)
-      ElMessage.success('班级创建成功')
-      // 如果填写了 PTA 关键词，自动触发首次同步
-      if (classForm.ptaKeyword && classForm.ptaKeyword.trim() && created?.id) {
-        try {
-          await triggerPtaSync(created.id)
-          ElMessage.success('已自动触发 PTA 数据同步')
-        } catch (syncErr) {
-          ElMessage.warning('班级已创建，但自动同步失败: ' + (syncErr.message || '爬虫服务可能未启动'))
-        }
-      }
-    }
-    classDialogVisible.value = false
-    loadClasses()
-  } catch (e) {
-    ElMessage.error(e.message)
-  } finally {
-    submitting.value = false
-  }
-}
-
-const confirmDelete = (cls) => {
-  ElMessageBox.confirm(`确定删除班级「${cls.name}」？此操作不可恢复，班级内学生关系将一并删除。`, '警告', {
-    confirmButtonText: '确定删除', cancelButtonText: '取消', type: 'warning'
-  }).then(async () => {
-    try {
-      await deleteTeachingClass(cls.id)
-      ElMessage.success('删除成功')
-      loadClasses()
-    } catch (e) { ElMessage.error(e.message) }
-  }).catch(() => {})
-}
-
-const copyCode = (code) => {
-  navigator.clipboard.writeText(code).then(() => ElMessage.success('班级号已复制'))
-}
-
-const viewAnalysis = (cls) => {
-  router.push(`/teacher/class-detailed-analysis/${cls.id}`)
-}
-
-// --- PTA 同步 ---
 const syncingMap = reactive({})
 
-const syncTagType = (status) => {
-  const map = { SUCCESS: 'success', RUNNING: '', FAILED: 'danger', IDLE: 'info' }
-  return map[status] || 'info'
-}
-
-const syncStatusText = (status) => {
-  const map = { SUCCESS: '已同步', RUNNING: '同步中', FAILED: '同步失败', IDLE: '未同步' }
-  return map[status] || status || '未同步'
-}
-
-const triggerSyncForClass = async (cls) => {
-  syncingMap[cls.id] = true
-  try {
-    await triggerPtaSync(cls.id)
-    ElMessage.success('同步任务已提交')
-    cls.syncStatus = 'RUNNING'
-  } catch (e) {
-    ElMessage.error(e.message || '同步失败')
-  } finally {
-    syncingMap[cls.id] = false
-  }
-}
-
-// --- 学生管理 ---
 const studentDialogVisible = ref(false)
 const currentClass = ref(null)
 const students = ref([])
 const studentsLoading = ref(false)
 const studentSearch = ref('')
 
+const addStudentVisible = ref(false)
+const addStudentForm = reactive({ studentName: '', studentNum: '' })
+const addingStudent = ref(false)
+
+const cookieStatus = ref('UNKNOWN')
+const cookieDialogVisible = ref(false)
+const cookieInput = ref('')
+const cookieSubmitting = ref(false)
+const cookieSubmitResult = ref(null)
+
+const extract = (res) => res?.data ?? res
+
+const isCorruptedText = (value) => {
+  const text = String(value || '').trim()
+  if (!text) return true
+  return text.includes('??') || text.includes('�')
+}
+
+const cleanText = (value, fallback = '未设置') => {
+  const text = String(value || '').trim()
+  if (!text || isCorruptedText(text)) return fallback
+  return text
+}
+
+const studentCountValue = (cls) => Number(cls?.studentCount || 0)
+const hasPtaConfig = (cls) => !isCorruptedText(cls?.ptaKeyword) && !!String(cls?.ptaKeyword || '').trim()
+
+const displayClassCode = (cls) => cleanText(cls?.classCode, '未生成')
+const displayClassName = (cls) => cleanText(cls?.name, displayClassCode(cls) === '未生成' ? '未命名班级' : `班级 ${displayClassCode(cls)}`)
+const displayCourseName = (cls) => cleanText(cls?.courseName, '课程信息待补充')
+const displayDescription = (cls) => cleanText(cls?.description, '暂无描述')
+const displayPtaKeyword = (cls) => cleanText(cls?.ptaKeyword, '未配置')
+const displayJoinPassword = (cls) => cleanText(cls?.joinPassword, '未设置')
+const displayGrade = (cls) => {
+  const grade = cleanText(cls?.grade, '')
+  return grade ? `${grade} 级` : '未设置年级'
+}
+
 const filteredStudents = computed(() => {
   if (!studentSearch.value) return students.value
-  const q = studentSearch.value.toLowerCase()
-  return students.value.filter(s =>
-    (s.studentName && s.studentName.toLowerCase().includes(q)) ||
-    (s.studentNum && s.studentNum.toLowerCase().includes(q))
+  const query = studentSearch.value.toLowerCase()
+  return students.value.filter(item =>
+    String(item.studentName || '').toLowerCase().includes(query) ||
+    String(item.studentNum || '').toLowerCase().includes(query)
   )
 })
+
+const resolvePtaKeyword = () => (classForm.ptaKeyword || classForm.name || '').trim()
+
+const toSelectedClass = (cls) => ({
+  id: cls.id,
+  name: displayClassName(cls),
+  ptaKeyword: cls.ptaKeyword || cls.name || ''
+})
+
+const loadClasses = async () => {
+  loading.value = true
+  try {
+    const res = await getTeachingClasses()
+    classes.value = extract(res) || []
+  } catch (error) {
+    ElMessage.error(`加载班级失败：${error.message}`)
+  } finally {
+    loading.value = false
+  }
+}
+
+const openCreateDialog = () => {
+  editingClass.value = null
+  Object.assign(classForm, {
+    name: '',
+    classCode: '',
+    joinPassword: '',
+    grade: '',
+    courseName: '',
+    description: '',
+    ptaKeyword: '',
+    syncEnabled: false
+  })
+  classDialogVisible.value = true
+}
+
+const editClass = (cls) => {
+  editingClass.value = cls
+  Object.assign(classForm, {
+    name: cleanText(cls.name, ''),
+    classCode: cleanText(cls.classCode, ''),
+    joinPassword: cleanText(cls.joinPassword, ''),
+    grade: cleanText(cls.grade, ''),
+    courseName: cleanText(cls.courseName, ''),
+    description: cleanText(cls.description, ''),
+    ptaKeyword: cleanText(cls.ptaKeyword, ''),
+    syncEnabled: !!cls.syncEnabled
+  })
+  classDialogVisible.value = true
+}
+
+const generateCode = () => {
+  classForm.classCode = `C${Date.now().toString(36).toUpperCase().slice(-6)}`
+}
+
+const submitClassForm = async () => {
+  const valid = await classFormRef.value?.validate().catch(() => false)
+  if (!valid) return
+
+  submitting.value = true
+  try {
+    const ptaKeyword = resolvePtaKeyword()
+    if (editingClass.value) {
+      await updateTeachingClass(editingClass.value.id, {
+        name: classForm.name,
+        joinPassword: classForm.joinPassword,
+        grade: classForm.grade,
+        courseName: classForm.courseName,
+        description: classForm.description,
+        ptaKeyword,
+        syncEnabled: classForm.syncEnabled
+      })
+      ElMessage.success('班级更新成功')
+    } else {
+      const res = await createTeachingClass({ ...classForm, ptaKeyword })
+      const created = extract(res)
+      if (created?.id) {
+        userStore.setSelectedClass(toSelectedClass({
+          ...created,
+          ptaKeyword: created.ptaKeyword || ptaKeyword || created.name
+        }))
+      }
+      ElMessage.success('班级创建成功')
+      if (ptaKeyword && created?.id) {
+        try {
+          await triggerPtaSync(created.id)
+          ElMessage.success('已自动触发 PTA 数据同步')
+        } catch (syncError) {
+          ElMessage.warning(`班级已创建，但自动同步失败：${syncError.message || '爬虫服务可能未启动'}`)
+        }
+      }
+    }
+
+    classDialogVisible.value = false
+    await loadClasses()
+  } catch (error) {
+    ElMessage.error(error.message || '保存班级失败')
+  } finally {
+    submitting.value = false
+  }
+}
+
+const confirmDelete = (cls) => {
+  ElMessageBox.confirm(
+    `确定删除班级“${displayClassName(cls)}”？此操作不可恢复，班级内学生关系也会一并删除。`,
+    '警告',
+    {
+      confirmButtonText: '确定删除',
+      cancelButtonText: '取消',
+      type: 'warning'
+    }
+  ).then(async () => {
+    try {
+      await deleteTeachingClass(cls.id)
+      ElMessage.success('删除成功')
+      await loadClasses()
+    } catch (error) {
+      ElMessage.error(error.message || '删除失败')
+    }
+  }).catch(() => {})
+}
+
+const copyCode = async (code) => {
+  if (!code || code === '未生成') return
+  try {
+    await navigator.clipboard.writeText(code)
+    ElMessage.success('班级号已复制')
+  } catch {
+    ElMessage.warning('复制失败，请手动复制')
+  }
+}
+
+const enterClassSpace = (cls) => {
+  userStore.setSelectedClass(toSelectedClass(cls))
+  ElMessage.success(`已切换到 ${displayClassName(cls)}`)
+  router.push('/teacher/dashboard')
+}
+
+const viewAnalysis = (cls) => {
+  router.push(`/teacher/class-detailed-analysis/${cls.id}`)
+}
+
+const syncTagType = (status) => {
+  const tagMap = {
+    SUCCESS: 'success',
+    RUNNING: 'warning',
+    FAILED: 'danger',
+    IDLE: 'info'
+  }
+  return tagMap[status] || 'info'
+}
+
+const syncStatusText = (status) => {
+  const textMap = {
+    SUCCESS: '已同步',
+    RUNNING: '同步中',
+    FAILED: '同步失败',
+    IDLE: '未同步'
+  }
+  return textMap[status] || '未同步'
+}
+
+const triggerSyncForClass = async (cls) => {
+  syncingMap[cls.id] = true
+  try {
+    await triggerPtaSync(cls.id)
+    cls.syncStatus = 'RUNNING'
+    ElMessage.success('同步任务已提交')
+  } catch (error) {
+    ElMessage.error(error.message || '同步失败')
+  } finally {
+    syncingMap[cls.id] = false
+  }
+}
 
 const manageStudents = async (cls) => {
   currentClass.value = cls
@@ -402,16 +553,12 @@ const manageStudents = async (cls) => {
   try {
     const res = await getClassStudents(cls.id)
     students.value = extract(res) || []
-  } catch (e) {
-    ElMessage.error('加载学生列表失败')
+  } catch (error) {
+    ElMessage.error(error.message || '加载学生列表失败')
   } finally {
     studentsLoading.value = false
   }
 }
-
-const addStudentVisible = ref(false)
-const addStudentForm = reactive({ studentName: '', studentNum: '' })
-const addingStudent = ref(false)
 
 const openAddStudentDialog = () => {
   addStudentForm.studentName = ''
@@ -420,52 +567,55 @@ const openAddStudentDialog = () => {
 }
 
 const doAddStudent = async () => {
-  if (!addStudentForm.studentName.trim()) { ElMessage.warning('请输入学生姓名'); return }
+  if (!addStudentForm.studentName.trim()) {
+    ElMessage.warning('请输入学生姓名')
+    return
+  }
+
   addingStudent.value = true
   try {
     await addClassStudent(currentClass.value.id, { ...addStudentForm })
     ElMessage.success('添加成功')
     addStudentVisible.value = false
-    // reload
     const res = await getClassStudents(currentClass.value.id)
     students.value = extract(res) || []
-    loadClasses() // refresh count
-  } catch (e) { ElMessage.error(e.message) }
-  finally { addingStudent.value = false }
+    await loadClasses()
+  } catch (error) {
+    ElMessage.error(error.message || '添加学生失败')
+  } finally {
+    addingStudent.value = false
+  }
 }
 
 const confirmRemoveStudent = (row) => {
-  ElMessageBox.confirm(`确定移除学生「${row.studentName}」？`, '提示', {
-    confirmButtonText: '移除', cancelButtonText: '取消', type: 'warning'
+  ElMessageBox.confirm(`确定移除学生“${row.studentName}”吗？`, '提示', {
+    confirmButtonText: '移除',
+    cancelButtonText: '取消',
+    type: 'warning'
   }).then(async () => {
     try {
       await removeClassStudent(currentClass.value.id, row.id)
-      students.value = students.value.filter(s => s.id !== row.id)
+      students.value = students.value.filter(item => item.id !== row.id)
       ElMessage.success('已移除')
-      loadClasses()
-    } catch (e) { ElMessage.error(e.message) }
+      await loadClasses()
+    } catch (error) {
+      ElMessage.error(error.message || '移除失败')
+    }
   }).catch(() => {})
 }
 
-const formatTime = (t) => {
-  if (!t) return ''
-  return new Date(t).toLocaleString('zh-CN')
+const formatTime = (value) => {
+  if (!value) return ''
+  return new Date(value).toLocaleString('zh-CN')
 }
-
-// --- PTA Cookie 状态 ---
-const cookieStatus = ref('UNKNOWN')
-const cookieDialogVisible = ref(false)
-const cookieInput = ref('')
-const cookieSubmitting = ref(false)
-const cookieSubmitResult = ref(null)
 
 const checkCookieStatus = async () => {
   try {
     const res = await getPtaCookieStatus()
-    const data = res?.data ?? res
+    const data = extract(res)
     cookieStatus.value = data?.status || 'UNKNOWN'
   } catch {
-    // 爬虫服务未启动时不显示告警
+    cookieStatus.value = 'UNKNOWN'
   }
 }
 
@@ -480,40 +630,309 @@ const submitCookieForm = async () => {
   cookieSubmitResult.value = null
   try {
     const res = await submitPtaCookie(cookieInput.value.trim())
-    const data = res?.data ?? res
+    const data = extract(res)
     cookieSubmitResult.value = data
     if (data?.valid) {
       cookieStatus.value = 'OK'
       ElMessage.success('Cookie 更新成功，数据同步已恢复')
-      setTimeout(() => { cookieDialogVisible.value = false }, 1500)
+      setTimeout(() => {
+        cookieDialogVisible.value = false
+      }, 1500)
     }
-  } catch (e) {
-    cookieSubmitResult.value = { valid: false, message: '提交失败: ' + (e.message || '未知错误') }
+  } catch (error) {
+    cookieSubmitResult.value = {
+      valid: false,
+      message: `提交失败：${error.message || '未知错误'}`
+    }
   } finally {
     cookieSubmitting.value = false
   }
 }
 
-onMounted(() => { loadClasses(); checkCookieStatus() })
+onMounted(() => {
+  loadClasses()
+  checkCookieStatus()
+})
 </script>
 
 <style scoped>
-.class-list { height: 100%; overflow-y: auto; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; }
-.my-page-header { padding: 0; }
-.my-page-header :deep(.g-primary-btn),
-.class-list :deep(.el-button--primary) { border-radius: 100px; }
-.class-cards { padding: 0 0 20px; }
-.class-card {
-  border-radius: 16px;
-  border: 1px solid #dadce0;
-  box-shadow: none;
-  transition: box-shadow 0.2s, transform 0.2s;
+.class-list {
+  height: 100%;
+  overflow-y: auto;
 }
-.class-card:hover { transform: translateY(-2px); box-shadow: 0 1px 3px rgba(60,64,67,0.15), 0 4px 8px rgba(60,64,67,0.08); }
-.card-header { display: flex; justify-content: space-between; align-items: center; }
-.class-name { font-size: 15px; font-weight: 500; color: #202124; }
-.class-info { display: flex; flex-direction: column; gap: 10px; }
-.info-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #5f6368; }
-.info-row .label { color: #9aa0a6; min-width: 64px; }
-.card-actions { margin-top: 14px; display: flex; gap: 8px; border-top: 1px solid #e8eaed; padding-top: 12px; }
+
+.my-page-header {
+  margin-bottom: 10px;
+}
+
+.class-list :deep(.el-button--primary) {
+  border-radius: 999px;
+}
+
+.cookie-alert {
+  margin-bottom: 18px;
+  border-radius: 18px;
+}
+
+.cookie-alert__content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.class-cards {
+  padding-bottom: 24px;
+}
+
+.class-grid {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.class-grid__item {
+  display: flex;
+  margin-bottom: 20px;
+}
+
+.class-card {
+  width: 100%;
+  min-height: 380px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #dce5f0;
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at top right, rgba(26, 115, 232, 0.08), transparent 30%),
+    linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  box-shadow: 0 14px 36px rgba(38, 61, 89, 0.07);
+}
+
+.class-card :deep(.el-card__header) {
+  padding: 22px 24px 14px;
+}
+
+.class-card :deep(.el-card__body) {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 0 24px 24px;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.card-header__main {
+  min-width: 0;
+  flex: 1;
+}
+
+.class-name {
+  margin: 0;
+  font-size: 26px;
+  line-height: 1.2;
+  color: #16314a;
+  word-break: break-word;
+}
+
+.class-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.meta-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(18, 112, 216, 0.1);
+  color: #1860b7;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.meta-pill--soft {
+  background: rgba(126, 157, 183, 0.12);
+  color: #5c7188;
+}
+
+.card-menu {
+  cursor: pointer;
+  color: #71839a;
+  font-size: 18px;
+}
+
+.class-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.summary-chip {
+  min-width: min(280px, 100%);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(244, 248, 253, 0.92);
+  border: 1px solid #e3ebf5;
+  color: #34475d;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.summary-chip__label {
+  color: #8091a5;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.summary-chip__time {
+  font-size: 12px;
+  color: #8b9bae;
+}
+
+.info-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.info-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid #e8eef6;
+  min-height: 108px;
+}
+
+.info-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #8092a6;
+}
+
+.info-value {
+  color: #24384f;
+  font-size: 14px;
+  line-height: 1.7;
+  word-break: break-word;
+}
+
+.card-actions {
+  margin-top: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 6px;
+}
+
+.form-help {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #7b8ba0;
+}
+
+.switch-hint {
+  margin-left: 10px;
+  font-size: 13px;
+  color: #7b8ba0;
+}
+
+.student-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.student-toolbar__search {
+  max-width: 260px;
+}
+
+.student-count {
+  margin-top: 14px;
+  font-size: 13px;
+  color: #7f90a4;
+}
+
+.cookie-steps {
+  margin-bottom: 18px;
+}
+
+.cookie-helper {
+  margin-bottom: 16px;
+  border-radius: 14px;
+}
+
+.cookie-helper__title {
+  font-weight: 600;
+}
+
+.cookie-helper__list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: #4d6077;
+  line-height: 1.8;
+}
+
+.cookie-textarea :deep(.el-textarea__inner) {
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 12px;
+}
+
+.cookie-result {
+  margin-top: 14px;
+}
+
+@media (max-width: 900px) {
+  .info-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .class-card {
+    min-height: auto;
+    border-radius: 20px;
+  }
+
+  .class-card :deep(.el-card__header) {
+    padding: 18px 18px 12px;
+  }
+
+  .class-card :deep(.el-card__body) {
+    padding: 0 18px 18px;
+  }
+
+  .class-name {
+    font-size: 22px;
+  }
+
+  .summary-chip {
+    width: 100%;
+  }
+
+  .student-toolbar {
+    flex-direction: column;
+  }
+
+  .student-toolbar__search {
+    max-width: none;
+  }
+}
 </style>

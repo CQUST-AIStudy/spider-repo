@@ -1,17 +1,25 @@
 package com.tap.backend.service;
 
+import com.tap.backend.domain.classroom.ClassStudentEntity;
+import com.tap.backend.domain.classroom.TeachingClassEntity;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tap.backend.domain.document.DocumentEntity;
+import com.tap.backend.domain.rag.CourseSpaceClassEntity;
 import com.tap.backend.domain.rag.CourseSpaceDocumentEntity;
 import com.tap.backend.domain.rag.CourseSpaceEntity;
 import com.tap.backend.domain.upload.UploadFolderEntity;
 import com.tap.backend.domain.user.UserEntity;
+import com.tap.backend.repo.ClassStudentRepository;
+import com.tap.backend.repo.CourseSpaceClassRepository;
 import com.tap.backend.repo.CourseSpaceDocumentRepository;
 import com.tap.backend.repo.CourseSpaceRepository;
 import com.tap.backend.repo.DocumentRepository;
+import com.tap.backend.repo.TeachingClassRepository;
 import com.tap.backend.repo.UploadFolderRepository;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -26,44 +34,99 @@ public class CourseSpaceService {
     private static final String RAG_TASKS_KEY = "rag:tasks";
 
     private final CourseSpaceRepository courseSpaceRepo;
+    private final CourseSpaceClassRepository courseSpaceClassRepo;
     private final CourseSpaceDocumentRepository courseSpaceDocRepo;
     private final DocumentRepository documentRepo;
     private final DocumentIngestService documentIngestService;
     private final UploadFolderRepository uploadFolderRepo;
+    private final TeachingClassRepository teachingClassRepo;
+    private final ClassStudentRepository classStudentRepo;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
 
     public CourseSpaceService(CourseSpaceRepository courseSpaceRepo,
+                              CourseSpaceClassRepository courseSpaceClassRepo,
                               CourseSpaceDocumentRepository courseSpaceDocRepo,
                               DocumentRepository documentRepo,
                               DocumentIngestService documentIngestService,
                               UploadFolderRepository uploadFolderRepo,
+                              TeachingClassRepository teachingClassRepo,
+                              ClassStudentRepository classStudentRepo,
                               StringRedisTemplate redisTemplate,
                               ObjectMapper objectMapper) {
         this.courseSpaceRepo = courseSpaceRepo;
+        this.courseSpaceClassRepo = courseSpaceClassRepo;
         this.courseSpaceDocRepo = courseSpaceDocRepo;
         this.documentRepo = documentRepo;
         this.documentIngestService = documentIngestService;
         this.uploadFolderRepo = uploadFolderRepo;
+        this.teachingClassRepo = teachingClassRepo;
+        this.classStudentRepo = classStudentRepo;
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
     }
 
     @Transactional
     public CourseSpaceEntity createSpace(UserEntity teacher, String name, String term,
-                                         String courseName, String description) {
+                                         String courseName, String description,
+                                         String defaultMode, Boolean allowWebSearch,
+                                         Boolean requireCitation, String docVisibility,
+                                         List<Long> classIds) {
         CourseSpaceEntity cs = new CourseSpaceEntity();
         cs.setTeacher(teacher);
         cs.setName(name);
         cs.setTerm(term);
         cs.setCourseName(courseName);
         cs.setDescription(description);
-        return courseSpaceRepo.save(cs);
+        if (defaultMode != null && !defaultMode.isBlank()) {
+            cs.setDefaultMode(defaultMode);
+        }
+        if (allowWebSearch != null) {
+            cs.setAllowWebSearch(allowWebSearch);
+        }
+        if (requireCitation != null) {
+            cs.setRequireCitation(requireCitation);
+        }
+        if (docVisibility != null && !docVisibility.isBlank()) {
+            cs.setDocVisibility(docVisibility);
+        }
+        CourseSpaceEntity saved = courseSpaceRepo.save(cs);
+        replaceBoundClasses(saved, teacher.getId(), classIds);
+        return saved;
     }
 
     @Transactional(readOnly = true)
     public List<CourseSpaceEntity> listSpaces(Long teacherId) {
         return courseSpaceRepo.findAllByTeacherId(teacherId);
+    }
+
+    @Transactional(readOnly = true)
+    public List<CourseSpaceEntity> listPublicSpaces() {
+        return courseSpaceRepo.findAllByDocVisibilityIgnoreCase("public");
+    }
+
+    @Transactional(readOnly = true)
+    public List<CourseSpaceEntity> listReadableSpacesForStudent(String studentNum) {
+        Set<Long> courseSpaceIds = new LinkedHashSet<>(
+                courseSpaceRepo.findAllByDocVisibilityIgnoreCase("public").stream()
+                        .map(CourseSpaceEntity::getId)
+                        .toList());
+        if (studentNum != null && !studentNum.isBlank()) {
+            Set<Long> classIds = classStudentRepo.findAllByStudentNum(studentNum.trim()).stream()
+                    .map(ClassStudentEntity::getClassId)
+                    .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+            if (!classIds.isEmpty()) {
+                courseSpaceClassRepo.findAllByClassIdIn(classIds).stream()
+                        .map(CourseSpaceClassEntity::getCourseSpaceId)
+                        .forEach(courseSpaceIds::add);
+            }
+        }
+        if (courseSpaceIds.isEmpty()) {
+            return List.of();
+        }
+        return courseSpaceRepo.findAllById(courseSpaceIds).stream()
+                .filter(cs -> isPubliclyReadable(cs) || isClassScoped(cs))
+                .toList();
     }
 
     @Transactional(readOnly = true)
@@ -81,11 +144,66 @@ public class CourseSpaceService {
         return cs;
     }
 
+    @Transactional(readOnly = true)
+    public CourseSpaceEntity requireReadableSpace(Long id, Long requesterUserId, boolean allowPublicRead) {
+        CourseSpaceEntity cs = getSpace(id);
+        if (requesterUserId != null && cs.getTeacherId().equals(requesterUserId)) {
+            return cs;
+        }
+        if (allowPublicRead && isPubliclyReadable(cs)) {
+            return cs;
+        }
+        throw new IllegalArgumentException("course space not accessible");
+    }
+
+    @Transactional(readOnly = true)
+    public CourseSpaceEntity requireReadableSpaceForStudent(Long id, String studentNum) {
+        CourseSpaceEntity cs = getSpace(id);
+        if (isPubliclyReadable(cs)) {
+            return cs;
+        }
+        if (!isClassScoped(cs) || studentNum == null || studentNum.isBlank()) {
+            throw new IllegalArgumentException("course space not accessible");
+        }
+        Set<Long> classIds = classStudentRepo.findAllByStudentNum(studentNum.trim()).stream()
+                .map(ClassStudentEntity::getClassId)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        if (classIds.isEmpty()) {
+            throw new IllegalArgumentException("course space not accessible");
+        }
+        if (courseSpaceClassRepo.existsByCourseSpaceIdAndClassIdIn(id, classIds)) {
+            return cs;
+        }
+        throw new IllegalArgumentException("course space not accessible");
+    }
+
+    public boolean isPubliclyReadable(CourseSpaceEntity cs) {
+        if (cs == null || cs.getDocVisibility() == null) {
+            return false;
+        }
+        return "public".equalsIgnoreCase(cs.getDocVisibility().trim());
+    }
+
+    public boolean isClassScoped(CourseSpaceEntity cs) {
+        if (cs == null || cs.getDocVisibility() == null) {
+            return false;
+        }
+        return "class".equalsIgnoreCase(cs.getDocVisibility().trim());
+    }
+
+    @Transactional(readOnly = true)
+    public List<Long> listBoundClassIds(Long courseSpaceId) {
+        return courseSpaceClassRepo.findAllByCourseSpaceId(courseSpaceId).stream()
+                .map(CourseSpaceClassEntity::getClassId)
+                .toList();
+    }
+
     @Transactional
     public CourseSpaceEntity updateSpace(Long id, Long teacherId, String name, String term,
                                           String courseName, String description,
                                           String defaultMode, Boolean allowWebSearch,
-                                          Boolean requireCitation, String docVisibility) {
+                                          Boolean requireCitation, String docVisibility,
+                                          List<Long> classIds) {
         CourseSpaceEntity cs = courseSpaceRepo.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("course space not found"));
         if (!cs.getTeacherId().equals(teacherId)) {
@@ -99,7 +217,13 @@ public class CourseSpaceService {
         if (allowWebSearch != null) cs.setAllowWebSearch(allowWebSearch);
         if (requireCitation != null) cs.setRequireCitation(requireCitation);
         if (docVisibility != null) cs.setDocVisibility(docVisibility);
-        return courseSpaceRepo.save(cs);
+        CourseSpaceEntity saved = courseSpaceRepo.save(cs);
+        if (docVisibility != null && !"class".equalsIgnoreCase(docVisibility)) {
+            courseSpaceClassRepo.deleteAllByCourseSpaceId(saved.getId());
+        } else if (classIds != null) {
+            replaceBoundClasses(saved, teacherId, classIds);
+        }
+        return saved;
     }
 
     @Transactional
@@ -177,6 +301,26 @@ public class CourseSpaceService {
             log.info("Pushed rag task: {}", json);
         } catch (Exception e) {
             log.error("Failed to push rag task to Redis", e);
+        }
+    }
+
+    private void replaceBoundClasses(CourseSpaceEntity courseSpace, Long teacherId, List<Long> classIds) {
+        courseSpaceClassRepo.deleteAllByCourseSpaceId(courseSpace.getId());
+        if (classIds == null || classIds.isEmpty()) {
+            return;
+        }
+        List<TeachingClassEntity> classes = teachingClassRepo.findAllById(classIds);
+        if (classes.size() != new LinkedHashSet<>(classIds).size()) {
+            throw new IllegalArgumentException("some teaching classes were not found");
+        }
+        for (TeachingClassEntity teachingClass : classes) {
+            if (!teacherId.equals(teachingClass.getTeacherId())) {
+                throw new IllegalArgumentException("class does not belong to current teacher");
+            }
+            CourseSpaceClassEntity binding = new CourseSpaceClassEntity();
+            binding.setCourseSpace(courseSpace);
+            binding.setTeachingClass(teachingClass);
+            courseSpaceClassRepo.save(binding);
         }
     }
 }

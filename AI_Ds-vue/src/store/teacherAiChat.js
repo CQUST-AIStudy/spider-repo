@@ -57,7 +57,11 @@ export const useTeacherAiChatStore = defineStore('teacherAiChat', {
       } catch (error) {
         this.messages = trimMessages([
           ...this.messages,
-          { role: 'assistant', content: `请求失败：${error.message}`, createdAt: Date.now() }
+          {
+            role: 'assistant',
+            content: `请求失败：${error?.message || '请稍后重试'}`,
+            createdAt: Date.now()
+          }
         ])
       } finally {
         this.loading = false

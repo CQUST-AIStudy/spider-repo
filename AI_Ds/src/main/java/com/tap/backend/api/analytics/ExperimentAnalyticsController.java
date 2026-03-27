@@ -85,10 +85,10 @@ public class ExperimentAnalyticsController {
 
         // 4. 实验名称
         @SuppressWarnings("unchecked")
-        List<Object[]> nameRows = em.createNativeQuery(
+        List<String> nameRows = em.createNativeQuery(
             "SELECT name FROM experiment WHERE experiment_id = ?1"
         ).setParameter(1, experimentId).getResultList();
-        result.put("experimentName", nameRows.isEmpty() ? "" : nameRows.get(0)[0]);
+        result.put("experimentName", nameRows.isEmpty() ? "" : nameRows.get(0));
 
         return ApiResponse.of(result);
     }
@@ -133,7 +133,7 @@ public class ExperimentAnalyticsController {
     private Map<String, Object> computeOverview(int experimentId) {
         // 从 score 表获取该实验所有学生的总分
         @SuppressWarnings("unchecked")
-        List<Object[]> rows = em.createNativeQuery(
+        List<Number> rows = em.createNativeQuery(
             "SELECT score FROM score WHERE experiment_id = ?1 AND score IS NOT NULL ORDER BY score DESC"
         ).setParameter(1, experimentId).getResultList();
 
@@ -144,8 +144,8 @@ public class ExperimentAnalyticsController {
         }
 
         List<Double> scores = new ArrayList<>();
-        for (Object[] r : rows) {
-            if (r[0] != null) scores.add(((Number) r[0]).doubleValue());
+        for (Number scoreValue : rows) {
+            if (scoreValue != null) scores.add(scoreValue.doubleValue());
         }
         if (scores.isEmpty()) {
             ov.put("totalStudents", 0);
@@ -182,14 +182,14 @@ public class ExperimentAnalyticsController {
 
         // 更准确: 每题满分之和
         @SuppressWarnings("unchecked")
-        List<Object[]> fullScoreRows = em.createNativeQuery(
+        List<Number> fullScoreRows = em.createNativeQuery(
             "SELECT SUM(ms) FROM (SELECT problem_label, MAX(max_score) as ms " +
             "FROM problem_score_detail WHERE experiment_id = ?1 GROUP BY problem_label) t"
         ).setParameter(1, experimentId).getResultList();
 
         double fullScore = max; // fallback
-        if (!fullScoreRows.isEmpty() && fullScoreRows.get(0)[0] != null) {
-            fullScore = ((Number) fullScoreRows.get(0)[0]).doubleValue();
+        if (!fullScoreRows.isEmpty() && fullScoreRows.get(0) != null) {
+            fullScore = fullScoreRows.get(0).doubleValue();
         }
         if (fullScore <= 0) fullScore = max > 0 ? max : 100;
 

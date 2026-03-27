@@ -43,6 +43,11 @@ const routes = [
         component: () => import('../views/student/AIAssistant.vue')
       },
       {
+        path: 'class-join',
+        name: 'StudentClassJoin',
+        component: () => import('../views/student/ClassJoin.vue')
+      },
+      {
         path: 'ai-report',
         name: 'AIReport',
         component: () => import('../views/student/AIReport.vue')
@@ -51,6 +56,11 @@ const routes = [
         path: 'practice',
         name: 'Practice',
         component: () => import('../views/student/Practice.vue')
+      },
+      {
+        path: 'weakness-training',
+        name: 'WeaknessTraining',
+        component: () => import('../views/student/WeaknessTraining.vue')
       },
       {
         path: 'leetcode-practice/:id',
@@ -306,6 +316,7 @@ router.beforeEach((to, from, next) => {
   console.log('路由守卫检查:', to.path)
   const isLoginPage = to.path === '/login'
   const isClassSelector = to.path === '/teacher/select-class'
+  const teacherRoutesWithoutSelectedClass = new Set(['/teacher/class-list', '/teacher/profile'])
   const token = getSessionToken()
 
   if (!isLoginPage && !isClassSelector && !token) {
@@ -319,7 +330,7 @@ router.beforeEach((to, from, next) => {
       const parsed = userStr ? JSON.parse(userStr) : null
       selectedClass = parsed?.selectedClass
     } catch (e) { /* ignore */ }
-    if (!selectedClass) {
+    if (!selectedClass && !teacherRoutesWithoutSelectedClass.has(to.path)) {
       console.log('未选择班级，重定向到班级选择页')
       next('/teacher/select-class')
     } else if (to.meta.requiredPermissions) {

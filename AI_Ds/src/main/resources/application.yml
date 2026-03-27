@@ -161,7 +161,7 @@ tap:
   security:
     jwt:
       issuer: ${JWT_ISSUER:tap}
-      secret: ${JWT_SECRET:}
+      secret: ${JWT_SECRET:local_dev_only_jwt_secret_change_me_1234567890}
       access-token-ttl-seconds: ${JWT_TTL_SECONDS:3600}
   quota:
     translation-chars-per-day: ${QUOTA_TRANSLATION_CHARS_PER_DAY:200000}

@@ -35,6 +35,7 @@ public class ChatController {
     private static final Logger log = LoggerFactory.getLogger(ChatController.class);
     private final String aiBaseUrl;
     private final String aiApiKey;
+    private final String provider;
     private final ObjectMapper objectMapper;
     private final String model;
     private final QuotaService quotaService;
@@ -48,6 +49,7 @@ public class ChatController {
         this.objectMapper = objectMapper;
         this.quotaService = quotaService;
         this.principalResolver = principalResolver;
+        this.provider = props.provider() == null ? "mock" : props.provider().trim().toLowerCase();
         AiProperties.OpenAi oa = props.openai();
         String apiKey = oa == null ? null : oa.apiKey();
         if (apiKey == null || apiKey.isBlank()) apiKey = System.getenv("OPENAI_API_KEY");
@@ -178,6 +180,11 @@ public class ChatController {
     }
 
     private String callAi(List<ObjectNode> messages) {
+        String userPrompt = extractLastUserPrompt(messages);
+        if ("mock".equals(provider) || aiApiKey.isBlank()) {
+            return buildMockReply(userPrompt);
+        }
+
         try {
             ObjectNode body = objectMapper.createObjectNode();
             body.put("model", model);
@@ -204,6 +211,94 @@ public class ChatController {
             log.error("AI chat failed: {}", e.getMessage(), e);
             return "抱歉，AI 服务暂时不可用，请稍后重试。错误：" + e.getMessage();
         }
+    }
+
+    private String extractLastUserPrompt(List<ObjectNode> messages) {
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            JsonNode item = messages.get(i);
+            if ("user".equals(item.path("role").asText())) {
+                return item.path("content").asText("");
+            }
+        }
+        return "";
+    }
+
+    private String buildMockReply(String prompt) {
+        String normalized = prompt == null ? "" : prompt.toLowerCase();
+
+        if (normalized.contains("ppt") || normalized.contains("---page---") || normalized.contains("幻灯片")) {
+            return String.join("\n",
+                    "数据结构课程导学与核心要点",
+                    "---PAGE---",
+                    "课程目标",
+                    "- 明确本次教学主题、先修知识和达成目标",
+                    "- 说明课堂讲授、例题演示与实验训练之间的关系",
+                    "- 强调复杂度分析和代码实现的双重要求",
+                    "---PAGE---",
+                    "知识点拆解",
+                    "- 从概念定义、核心结构、典型操作三个层次展开",
+                    "- 配合时间复杂度与空间复杂度对比",
+                    "- 用一到两个典型输入输出帮助学生建立直觉",
+                    "---PAGE---",
+                    "课堂示例",
+                    "- 先用流程图说明算法步骤",
+                    "- 再展示关键伪代码和边界条件",
+                    "- 最后安排 1 道即时练习检查理解情况",
+                    "---PAGE---",
+                    "实验与作业建议",
+                    "- 将基础题、进阶题、开放题分层布置",
+                    "- 对常见错误给出专项提示",
+                    "- 课后复盘关注代码规范、复杂度与测试覆盖",
+                    "---PAGE---",
+                    "总结",
+                    "- 回顾核心概念与易错点",
+                    "- 给出课后练习方向",
+                    "- 引导学生将本节内容迁移到后续实验场景");
+        }
+
+        if (normalized.contains("教学建议") || normalized.contains("课程分析") || normalized.contains("课程数据")) {
+            return String.join("\n",
+                    "## 课程整体判断",
+                    "- 当前课程可以继续保持实验驱动的教学方式，但需要更明确地区分基础训练与综合训练。",
+                    "- 若提交率正常而均分波动较大，通常说明学生在知识迁移和代码调试环节存在断层。",
+                    "",
+                    "## 需要重点关注的问题",
+                    "1. 基础概念理解与实验实现之间可能脱节。",
+                    "2. 学生对复杂度分析、边界条件和异常输入处理不够稳定。",
+                    "3. 作业反馈若停留在分数层面，改进闭环会偏弱。",
+                    "",
+                    "## 教学调整建议",
+                    "- 每次实验前加入 5 分钟的先修知识核对。",
+                    "- 每次实验后沉淀一份“高频错误清单”供下一轮教学复用。",
+                    "- 对低完成度任务拆成更小的阶段目标，降低学生进入门槛。",
+                    "",
+                    "## 下一步动作",
+                    "- 先查看当前教学班中提交率最低的实验。",
+                    "- 为该实验补一页步骤讲解和一页常见错误说明。",
+                    "- 下次课前用 1 道小测验证补救是否生效。");
+        }
+
+        if (normalized.contains("论文") || normalized.contains("paper") || normalized.contains("arxiv") || normalized.contains("搜索")) {
+            return String.join("\n",
+                    "## 检索建议",
+                    "- 当前环境未配置真实外部 AI 密钥，已切换为本地演示回复。",
+                    "- 你可以继续输入更具体的主题、年份、方法名或应用方向，我会按教学场景整理检索策略。",
+                    "",
+                    "## 推荐的限定方式",
+                    "1. 指定研究主题，例如“程序设计教学中的大模型反馈”。",
+                    "2. 指定时间范围，例如“2024 年以后”。",
+                    "3. 指定输出类型，例如“综述、课堂应用案例、实验系统设计”。");
+        }
+
+        return String.join("\n",
+                "## 教学助手回复",
+                "- 当前环境未配置真实外部 AI 密钥，已自动切换为本地演示模式。",
+                "- 你可以继续提问课程设计、实验讲解、评分说明、作业反馈等问题。",
+                "",
+                "### 建议的下一步",
+                "1. 说明你当前的教学目标。",
+                "2. 给出面向的年级或班级。",
+                "3. 指定希望得到的输出形式，例如讲稿、评语、PPT 大纲或教学建议。");
     }
 
     private ObjectNode msg(String role, String content) {

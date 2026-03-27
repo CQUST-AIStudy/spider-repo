@@ -15,6 +15,11 @@
           <template #header><span>数据同步操作</span></template>
           <div class="status-row">
             <div class="status-item">
+              <span class="status-label">当前教学班</span>
+              <el-tag v-if="selectedClassName" type="info" effect="plain" size="small">{{ selectedClassName }}</el-tag>
+              <el-tag v-else type="danger" effect="plain" size="small">未选择教学班</el-tag>
+            </div>
+            <div class="status-item">
               <span class="status-label">同步关键词</span>
               <el-tag v-if="currentKeyword" type="primary" effect="plain" size="small">{{ currentKeyword }}</el-tag>
               <el-tag v-else type="warning" effect="plain" size="small">未设置（请在班级管理中配置PTA关键词）</el-tag>
@@ -56,7 +61,7 @@
                 <div class="action-desc">检测新题目集，爬取内容+提交+导出（仅新增）</div>
               </div>
               <el-button type="primary" :loading="syncLoading === 'incremental'"
-                :disabled="!!syncLoading || cookieStatus === 'EXPIRED'" @click="triggerSync('incremental')">
+                :disabled="!selectedClassId || !!syncLoading || cookieStatus === 'EXPIRED'" @click="triggerSync('incremental')">
                 开始同步
               </el-button>
             </div>
@@ -66,7 +71,7 @@
                 <div class="action-desc">拉取已有题目集的最新提交（轻量，冷却 4h）</div>
               </div>
               <el-button type="success" :loading="syncLoading === 'submissions'"
-                :disabled="!!syncLoading || cookieStatus === 'EXPIRED'" @click="triggerSync('submissions')">
+                :disabled="!selectedClassId || !!syncLoading || cookieStatus === 'EXPIRED'" @click="triggerSync('submissions')">
                 拉取提交
               </el-button>
             </div>
@@ -76,7 +81,7 @@
                 <div class="action-desc">重新导出成绩单/答题卡/代码（较重，冷却 24h）</div>
               </div>
               <el-button type="warning" :loading="syncLoading === 'refresh'"
-                :disabled="!!syncLoading || cookieStatus === 'EXPIRED'" @click="triggerSync('refresh')">
+                :disabled="!selectedClassId || !!syncLoading || cookieStatus === 'EXPIRED'" @click="triggerSync('refresh')">
                 刷新导出
               </el-button>
             </div>
@@ -86,7 +91,7 @@
                 <div class="action-desc">增量 + 提交 + 导出，耗时较长</div>
               </div>
               <el-button type="danger" :loading="syncLoading === 'full'"
-                :disabled="!!syncLoading || cookieStatus === 'EXPIRED'" @click="triggerSync('full')">
+                :disabled="!selectedClassId || !!syncLoading || cookieStatus === 'EXPIRED'" @click="triggerSync('full')">
                 全量同步
               </el-button>
             </div>
@@ -258,6 +263,11 @@ function spiderApi(path) {
 }
 const userStore = useUserStore()
 
+const selectedClassName = computed(() => userStore.selectedClass?.name || '')
+const selectedClassId = computed(() => {
+  const id = Number(userStore.selectedClass?.id)
+  return Number.isInteger(id) && id > 0 ? id : null
+})
 const currentKeyword = computed(() => userStore.selectedClass?.ptaKeyword || userStore.selectedClass?.name || '')
 
 const cookieStatus = ref('UNKNOWN')
@@ -323,7 +333,11 @@ async function loadCookieStatus() {
 }
 
 async function loadCooldown() {
-  const keyword = userStore.selectedClass?.ptaKeyword || userStore.selectedClass?.name || '数据结构'
+  const keyword = currentKeyword.value
+  if (!selectedClassId.value) {
+    ElMessage.warning('请先选择当前教学班')
+    return
+  }
   try {
     const r = await axios.get(spiderApi(`/cooldown/${encodeURIComponent(keyword)}`), { timeout: 5000 })
     cooldownInfo.value = r.data
@@ -338,7 +352,8 @@ async function loadTaskHistory() {
 }
 
 async function triggerSync(mode) {
-  const keyword = userStore.selectedClass?.ptaKeyword || userStore.selectedClass?.name || '数据结构'
+  const keyword = currentKeyword.value
+  if (!selectedClassId.value || !keyword) return
   if (!keyword || !String(keyword).trim()) {
     ElMessage.warning('请先在班级管理中配置 PTA 同步关键词')
     return
@@ -361,11 +376,7 @@ async function triggerSync(mode) {
 
   syncLoading.value = mode
   try {
-    const payload = { keyword: String(keyword).trim(), mode, force: forceMode.value }
-    const maybeClassId = Number(userStore.selectedClass?.id)
-    if (Number.isInteger(maybeClassId) && maybeClassId > 0) {
-      payload.class_id = maybeClassId
-    }
+    const payload = { keyword: String(keyword).trim(), mode, force: forceMode.value, class_id: selectedClassId.value }
 
     const r = await axios.post(spiderApi('/crawl'), payload, { timeout: 10000 })
 

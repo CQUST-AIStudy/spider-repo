@@ -1,11 +1,11 @@
-﻿<template>
+<template>
   <div class="ability-profile">
     <div v-if="loading" class="loading-container">
       <el-skeleton :rows="10" animated />
     </div>
     <el-alert v-else-if="errorMsg" :title="errorMsg" type="warning" show-icon :closable="false" />
     <template v-else>
-      <!-- 姒傝鍗＄墖 -->
+      <!-- 概览卡片 -->
       <el-row :gutter="16" class="overview-row">
         <el-col :span="6" v-for="item in overviewCards" :key="item.label">
           <el-card shadow="hover" class="stat-card">
@@ -20,18 +20,18 @@
         </el-col>
       </el-row>
 
-      <!-- 闆疯揪鍥?+ 瓒嬪娍 -->
+      <!-- 雷达图 + 趋势 -->
       <el-row :gutter="16" style="margin-top:16px">
         <el-col :span="12">
           <el-card shadow="hover">
-            <template #header><span class="card-title">馃幆 鑳藉姏闆疯揪鍥?/span></template>
+            <template #header><span class="card-title">🎯 能力雷达图</span></template>
             <div ref="radarChartRef" class="chart-box"></div>
           </el-card>
         </el-col>
         <el-col :span="12">
           <el-card shadow="hover">
             <template #header>
-              <span class="card-title">馃搱 瀛︽湡瓒嬪娍</span>
+              <span class="card-title">📈 学期趋势</span>
               <el-tag :type="trendTagType" size="small" style="margin-left:8px" effect="dark">{{ trendText }}</el-tag>
             </template>
             <div ref="trendChartRef" class="chart-box"></div>
@@ -39,29 +39,29 @@
         </el-col>
       </el-row>
 
-      <!-- AI瀛︿範寤鸿 (鍏ㄥ) -->
+      <!-- AI学习建议 (全宽) -->
       <el-card shadow="hover" style="margin-top:16px" class="feedback-card">
         <template #header>
           <div style="display:flex;align-items:center;justify-content:space-between">
-            <span class="card-title">馃 AI 瀛︿範寤鸿</span>
+            <span class="card-title">🤖 AI 学习建议</span>
             <el-button type="primary" size="small" :loading="refreshingFeedback" @click="handleRefreshFeedback" round>
-              {{ refreshingFeedback ? '鍒嗘瀽涓?..' : '馃攧 閲嶆柊鍒嗘瀽' }}
+              {{ refreshingFeedback ? '分析中...' : '🔄 重新分析' }}
             </el-button>
           </div>
         </template>
         <div v-if="refreshingFeedback" class="feedback-loading">
           <el-skeleton :rows="4" animated />
-          <div class="feedback-loading-tip">姝ｅ湪璋冪敤 DeepSeek 鍒嗘瀽瀛︿範鏁版嵁锛岃绋嶅€?..</div>
+          <div class="feedback-loading-tip">正在调用 DeepSeek 分析学习数据，请稍候...</div>
         </div>
         <div v-else-if="profile.feedback" class="feedback-content" v-html="renderedFeedback"></div>
         <div v-else class="feedback-empty">
-          <el-empty description="鏆傛棤AI鍒嗘瀽锛岀偣鍑讳笂鏂规寜閽敓鎴? :image-size="80" />
+          <el-empty description="暂无AI分析，点击上方按钮生成" :image-size="80" />
         </div>
       </el-card>
 
-      <!-- 瀛︿範鐗瑰緛 -->
+      <!-- 学习特征 -->
       <el-card shadow="hover" style="margin-top:16px">
-        <template #header><span class="card-title">馃彿锔?瀛︿範鐗瑰緛</span></template>
+        <template #header><span class="card-title">🏷️ 学习特征</span></template>
         <el-row :gutter="16">
           <el-col :span="8" v-for="p in profile.patterns" :key="p.tag">
             <div class="pattern-card" :class="'pattern-' + patternClass(p.tag)">
@@ -69,16 +69,16 @@
               <div class="pattern-body">
                 <div class="pattern-tag-name">{{ p.tag }}</div>
                 <div class="pattern-desc">{{ p.description }}</div>
-                <div class="pattern-evidence">馃搳 {{ p.evidence }}</div>
+                <div class="pattern-evidence">📊 {{ p.evidence }}</div>
               </div>
             </div>
           </el-col>
         </el-row>
       </el-card>
 
-      <!-- Top钖勫急鐐?-->
+      <!-- Top薄弱点 -->
       <el-card shadow="hover" style="margin-top:16px">
-        <template #header><span class="card-title">鈿狅笍 Top 钖勫急鐐?/span></template>
+        <template #header><span class="card-title">⚠️ Top 薄弱点</span></template>
         <el-row :gutter="16">
           <el-col :span="8" v-for="(w, idx) in profile.weaknesses" :key="w.experimentId">
             <div class="weakness-card">
@@ -89,14 +89,14 @@
               </div>
               <el-progress :percentage="Math.round(w.mastery)" :color="masteryColor(w.mastery)" :stroke-width="12" style="margin:10px 0" />
               <div class="weakness-evidence">
-                <span>馃摑 鎻愪氦{{ w.evidence?.totalSubmissions }}娆?/span>
-                <span>鉁?AC{{ w.evidence?.acCount }}娆?/span>
-                <span>鉂?缂栬瘧閿欒{{ w.evidence?.compileErrors }}</span>
+                <span>📝 提交{{ w.evidence?.totalSubmissions }}次</span>
+                <span>✅ AC{{ w.evidence?.acCount }}次</span>
+                <span>❌ 编译错误{{ w.evidence?.compileErrors }}</span>
               </div>
               <div v-if="w.weakQuestions?.length" class="weakness-questions">
-                <div class="q-title">钖勫急棰樼洰:</div>
+                <div class="q-title">薄弱题目:</div>
                 <div v-for="q in w.weakQuestions" :key="q.serial_number" class="q-item">
-                  棰榹{ q.serial_number }}: 灏濊瘯{{ q.attempts }}娆? AC{{ q.ac_count }}娆?
+                  题{{ q.serial_number }}: 尝试{{ q.attempts }}次, AC{{ q.ac_count }}次
                 </div>
               </div>
             </div>
@@ -104,16 +104,16 @@
         </el-row>
       </el-card>
 
-      <!-- 鎶€鑳芥爲 -->
+      <!-- 技能树 -->
       <el-card shadow="hover" style="margin-top:16px">
-        <template #header><span class="card-title">馃尦 鎶€鑳芥爲璇︽儏</span></template>
+        <template #header><span class="card-title">🌳 技能树详情</span></template>
         <div class="skill-tree">
           <div v-for="dim in profile.skillTree" :key="dim.dimension" class="tree-dimension">
             <div class="tree-dim-header" :class="'dim-' + dim.level">
               <div class="dim-left">
                 <span class="dim-icon">{{ dimEmoji(dim.dimension) }}</span>
                 <span class="dim-name">{{ dim.dimension }}</span>
-                <el-tag :type="levelTagType(dim.level)" size="small" effect="dark">{{ dim.avgMastery }}鍒?/el-tag>
+                <el-tag :type="levelTagType(dim.level)" size="small" effect="dark">{{ dim.avgMastery }}分</el-tag>
               </div>
               <span class="dim-desc">{{ dim.description }}</span>
             </div>
@@ -122,15 +122,15 @@
                    class="tree-leaf" :class="'leaf-' + c.level">
                 <div class="leaf-top">
                   <span class="leaf-name">{{ c.name }}</span>
-                  <span class="leaf-score" :style="{ color: masteryColor(c.mastery) }">{{ c.mastery }}鍒?/span>
+                  <span class="leaf-score" :style="{ color: masteryColor(c.mastery) }">{{ c.mastery }}分</span>
                 </div>
                 <div class="leaf-bar">
                   <div class="leaf-bar-fill" :style="{ width: c.mastery + '%', background: masteryGradient(c.mastery) }"></div>
                 </div>
                 <div class="leaf-bottom" v-if="c.totalSubmissions">
-                  <span>鎻愪氦{{ c.totalSubmissions }}</span>
+                  <span>提交{{ c.totalSubmissions }}</span>
                   <span>AC{{ c.acCount }}</span>
-                  <span>{{ c.questionCount }}棰?/span>
+                  <span>{{ c.questionCount }}题</span>
                 </div>
               </div>
             </div>
@@ -149,10 +149,8 @@ import { TrendCharts, DataAnalysis, Finished, List as ListIcon } from '@element-
 import { ElMessage } from 'element-plus'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { API_BASE_URL } from '../../config/runtime'
-import { getCurrentStudentId } from '../../constants/auth'
 
-const API_BASE = API_BASE_URL
+const API_BASE = 'http://localhost:8081'
 const loading = ref(true)
 const errorMsg = ref('')
 const profile = ref({})
@@ -163,22 +161,22 @@ let radarChart = null
 let trendChart = null
 
 const overviewCards = computed(() => [
-  { label: '鎬绘彁浜ゆ鏁?, value: profile.value.overview?.totalSubmissions || 0, icon: TrendCharts, color: '#409EFF', bg: 'linear-gradient(135deg,#409EFF,#79bbff)' },
-  { label: '閫氳繃娆℃暟', value: profile.value.overview?.totalAc || 0, icon: Finished, color: '#67C23A', bg: 'linear-gradient(135deg,#67C23A,#95d475)' },
-  { label: '鎬讳綋AC鐜?, value: (profile.value.overview?.overallAcRate || 0) + '%', icon: DataAnalysis, color: '#E6A23C', bg: 'linear-gradient(135deg,#E6A23C,#eebe77)' },
-  { label: '宸插弬涓庡疄楠?, value: (profile.value.overview?.experimentsCovered || 0) + '/' + (profile.value.overview?.totalExperiments || 19), icon: ListIcon, color: '#909399', bg: 'linear-gradient(135deg,#909399,#b1b3b8)' }
+  { label: '总提交次数', value: profile.value.overview?.totalSubmissions || 0, icon: TrendCharts, color: '#409EFF', bg: 'linear-gradient(135deg,#409EFF,#79bbff)' },
+  { label: '通过次数', value: profile.value.overview?.totalAc || 0, icon: Finished, color: '#67C23A', bg: 'linear-gradient(135deg,#67C23A,#95d475)' },
+  { label: '总体AC率', value: (profile.value.overview?.overallAcRate || 0) + '%', icon: DataAnalysis, color: '#E6A23C', bg: 'linear-gradient(135deg,#E6A23C,#eebe77)' },
+  { label: '已参与实验', value: (profile.value.overview?.experimentsCovered || 0) + '/' + (profile.value.overview?.totalExperiments || 19), icon: ListIcon, color: '#909399', bg: 'linear-gradient(135deg,#909399,#b1b3b8)' }
 ])
 
 const trendText = computed(() => {
   const d = profile.value.trend?.direction
-  return d === 'up' ? '鈫?杩涙' : d === 'down' ? '鈫?涓嬮檷' : '鈫?骞崇ǔ'
+  return d === 'up' ? '↑ 进步' : d === 'down' ? '↓ 下降' : '→ 平稳'
 })
 const trendTagType = computed(() => {
   const d = profile.value.trend?.direction
   return d === 'up' ? 'success' : d === 'down' ? 'danger' : 'info'
 })
 
-// Markdown娓叉煋
+// Markdown渲染
 const renderedFeedback = computed(() => {
   if (!profile.value.feedback) return ''
   const rawHtml = marked(profile.value.feedback)
@@ -193,17 +191,17 @@ function masteryGradient(v) {
 }
 function levelTagType(l) { return l === 'good' ? 'success' : l === 'medium' ? 'warning' : 'danger' }
 function patternClass(tag) {
-  if (tag === '绋冲畾杩涙' || tag === '琛ㄧ幇鍧囪　') return 'good'
-  if (tag === '楂樻尝鍔ㄥ瀷') return 'warn'
+  if (tag === '稳定进步' || tag === '表现均衡') return 'good'
+  if (tag === '高波动型') return 'warn'
   return 'bad'
 }
 function patternEmoji(tag) {
-  const map = { '绋冲畾杩涙': '馃搱', '琛ㄧ幇鍧囪　': '鈿栵笍', '楂樻尝鍔ㄥ瀷': '馃帰', '楂橀噸鍋氬瀷': '馃攧', '缂栫爜鍩虹钖勫急': '馃敡' }
-  return map[tag] || '馃搵'
+  const map = { '稳定进步': '📈', '表现均衡': '⚖️', '高波动型': '🎢', '高重做型': '🔄', '编码基础薄弱': '🔧' }
+  return map[tag] || '📋'
 }
 function dimEmoji(dim) {
-  const map = { '绾挎€ц〃': '馃搹', '鏍堜笌闃熷垪': '馃摎', '鏍?: '馃尣', '鍥?: '馃暩锔?, '鍝堝笇': '#锔忊儯', '缁煎悎': '馃幆' }
-  return map[dim] || '馃摝'
+  const map = { '线性表': '📏', '栈与队列': '📚', '树': '🌲', '图': '🕸️', '哈希': '#️⃣', '综合': '🎯' }
+  return map[dim] || '📦'
 }
 
 async function handleRefreshFeedback() {
@@ -215,8 +213,8 @@ async function handleRefreshFeedback() {
     const res = await axios.post(url, null, { withCredentials: true })
     const data = res.data || res
     if (data.error) { ElMessage.error(data.error) }
-    else if (data.feedback) { profile.value.feedback = data.feedback; ElMessage.success('AI鍒嗘瀽宸叉洿鏂?) }
-  } catch (e) { ElMessage.error('鍒锋柊澶辫触: ' + (e.message || e)) }
+    else if (data.feedback) { profile.value.feedback = data.feedback; ElMessage.success('AI分析已更新') }
+  } catch (e) { ElMessage.error('刷新失败: ' + (e.message || e)) }
   finally { refreshingFeedback.value = false }
 }
 
@@ -227,8 +225,9 @@ async function fetchProfile() {
     try {
       res = await axios.get(`${API_BASE}/api/profile/me`, { withCredentials: true })
     } catch {
-      const usernum = getCurrentStudentId()
-      if (!usernum) { errorMsg.value = '鏈粦瀹氬鍙凤紝鏃犳硶鏌ョ湅鑳藉姏鐢诲儚'; return }
+      const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
+      const usernum = userInfo.usernum
+      if (!usernum) { errorMsg.value = '未绑定学号，无法查看能力画像'; return }
       res = await axios.get(`${API_BASE}/api/profile/student/${usernum}`, { withCredentials: true })
     }
     const data = res.data || res
@@ -244,7 +243,7 @@ async function fetchProfile() {
         trendChart?.resize()
       }, 500)
     }, 300)
-  } catch (e) { errorMsg.value = '鍔犺浇澶辫触: ' + (e.message || e) }
+  } catch (e) { errorMsg.value = '加载失败: ' + (e.message || e) }
   finally { loading.value = false }
 }
 
@@ -263,7 +262,7 @@ function initRadar() {
       splitLine: { lineStyle: { color: '#ddd' } }, axisLine: { lineStyle: { color: '#ccc' } }
     },
     series: [{ type: 'radar', symbol: 'circle', symbolSize: 6, data: [{
-      value: r.scores, name: '鑳藉姏鍊?,
+      value: r.scores, name: '能力值',
       areaStyle: { color: 'rgba(64,158,255,0.25)' }, lineStyle: { color: '#409EFF', width: 2 },
       itemStyle: { color: '#409EFF', borderColor: '#fff', borderWidth: 2 },
       label: { show: true, formatter: p => p.value + '', color: '#409EFF', fontSize: 11 }
@@ -277,13 +276,13 @@ function initTrend() {
   trendChart = echarts.init(trendChartRef.value)
   const s = profile.value.trend.series
   trendChart.setOption({
-    tooltip: { trigger: 'axis', formatter: params => params[0].name + '<br/>鎺屾彙搴? ' + params[0].value + '鍒? },
+    tooltip: { trigger: 'axis', formatter: params => params[0].name + '<br/>掌握度: ' + params[0].value + '分' },
     xAxis: { type: 'category', data: s.map(x => x.name), axisLabel: { rotate: 35, fontSize: 10, color: '#666' }, axisLine: { lineStyle: { color: '#ddd' } } },
-    yAxis: { type: 'value', min: 0, max: 100, name: '鎺屾彙搴?, nameTextStyle: { color: '#999' }, splitLine: { lineStyle: { type: 'dashed', color: '#eee' } } },
+    yAxis: { type: 'value', min: 0, max: 100, name: '掌握度', nameTextStyle: { color: '#999' }, splitLine: { lineStyle: { type: 'dashed', color: '#eee' } } },
     series: [{ type: 'line', data: s.map(x => x.mastery), smooth: true,
       areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(64,158,255,0.3)' }, { offset: 1, color: 'rgba(64,158,255,0.02)' }]) },
       lineStyle: { color: '#409EFF', width: 2.5 }, itemStyle: { color: '#409EFF', borderColor: '#fff', borderWidth: 2 }, symbolSize: 7,
-      markLine: { data: [{ type: 'average', name: '骞冲潎', label: { formatter: '鍧囧€?{c}' } }], lineStyle: { color: '#E6A23C', type: 'dashed' } }
+      markLine: { data: [{ type: 'average', name: '平均', label: { formatter: '均值 {c}' } }], lineStyle: { color: '#E6A23C', type: 'dashed' } }
     }],
     grid: { left: 50, right: 20, bottom: 55, top: 35 }
   })
@@ -308,7 +307,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', handleResize); rada
 .stat-value { font-size: 24px; font-weight: 600; color: #202124; }
 .stat-label { font-size: 13px; color: #5f6368; margin-top: 2px }
 
-/* 瀛︿範鐗瑰緛 - 妯悜鎺掑垪 */
+/* 学习特征 - 横向排列 */
 .pattern-card { display: flex; gap: 12px; padding: 14px; border-radius: 12px; border: 1px solid #e8eaed; transition: transform .2s; height: 100% }
 .pattern-card:hover { transform: translateX(4px) }
 .pattern-good { background: #e6f4ea; border-color: #ceead6 }
@@ -319,7 +318,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', handleResize); rada
 .pattern-desc { font-size: 13px; color: #5f6368; margin-top: 3px }
 .pattern-evidence { font-size: 12px; color: #9aa0a6; margin-top: 4px }
 
-/* AI鍙嶉 - 鍏ㄥ + Markdown娓叉煋 */
+/* AI反馈 - 全宽 + Markdown渲染 */
 .feedback-card :deep(.el-card__body) { padding: 20px }
 .feedback-content { font-size: 14px; line-height: 1.9; color: #202124; background: #e6f4ea; padding: 20px 24px; border-radius: 12px; border-left: 4px solid #1e8e3e }
 .feedback-content :deep(h1), .feedback-content :deep(h2), .feedback-content :deep(h3) { color: #1a73e8; margin: 16px 0 8px 0; font-size: 16px }
@@ -332,7 +331,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', handleResize); rada
 .feedback-loading-tip { text-align: center; color: #5f6368; font-size: 13px; margin-top: 12px }
 .feedback-empty { padding: 20px 0 }
 
-/* 钖勫急鐐?*/
+/* 薄弱点 */
 .weakness-card { background: #fff; border: 1px solid #fde2e2; border-radius: 12px; padding: 16px; position: relative; transition: box-shadow .2s; height: 100% }
 .weakness-card:hover { box-shadow: 0 4px 12px rgba(245,108,108,0.15) }
 .weakness-rank { position: absolute; top: -8px; left: -8px; width: 28px; height: 28px; background: #F56C6C; color: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px }
@@ -343,7 +342,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', handleResize); rada
 .q-title { font-size: 12px; color: #606266; font-weight: 600 }
 .q-item { font-size: 12px; color: #909399 }
 
-/* 鎶€鑳芥爲 */
+/* 技能树 */
 .skill-tree { display: flex; flex-direction: column; gap: 20px }
 .tree-dimension { border: 1px solid #eee; border-radius: 12px; overflow: hidden; transition: box-shadow .2s }
 .tree-dimension:hover { box-shadow: 0 2px 12px rgba(0,0,0,0.06) }
@@ -365,5 +364,3 @@ onBeforeUnmount(() => { window.removeEventListener('resize', handleResize); rada
 .leaf-bar-fill { height: 100%; border-radius: 3px; transition: width .6s ease }
 .leaf-bottom { display: flex; gap: 12px; font-size: 11px; color: #909399; margin-top: 6px }
 </style>
-
-

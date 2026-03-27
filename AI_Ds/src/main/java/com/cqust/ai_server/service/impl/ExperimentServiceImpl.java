@@ -12,7 +12,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.text.SimpleDateFormat;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 @Service
 public class ExperimentServiceImpl implements ExperimentService {
@@ -65,41 +69,38 @@ public class ExperimentServiceImpl implements ExperimentService {
     @Transactional
     public boolean submitExperiment(int id, String username, String code, String report) {
         try {
-//            // 获取实验信息
-//            Experiment experiment = experimentDao.findExperimentById(id);
-//            if (experiment == null) {
-//                return false;
-//            }
-//
-//            // 创建提交记录
-//            Submission submission = new Submission();
-//            submission.setUsername(username);
-//            submission.setExperiment_id(id);
-//            submission.setCode(code);
-//            submission.setReport(report);
-//            submission.setSubmit_time(new Date());
-//
-//            submissionDao.saveSubmission(submission);
-//
-//            // 更新成绩记录
-//            Score score = scoreDao.findByUsernameAndExperimentNum(username, experiment.getNum());
-//            if (score == null) {
-//                score = new Score();
-//                score.setUsername(username);
-//                score.setExperiment_id(experiment.getNum());
-//                score.setSubmit_time(new Date());
-//                score.setStatus("completed");
-//                // 初始分数和抄袭率将在后续由教师或AI评分
-//                score.setScore(0);
-//                score.setPlagiarism_rate(0.0);
-//
-//                scoreDao.saveScore(score);
-//            } else {
-//                score.setSubmit_time(new Date());
-//                score.setStatus("completed");
-//
-//                scoreDao.updateScore(score);
-//            }
+            Experiment experiment = experimentDao.findExperimentById(id);
+            if (experiment == null) {
+                return false;
+            }
+
+            Submission submission = new Submission();
+            submission.setUsername(username);
+            submission.setExperiment_id(id);
+            submission.setCode(code);
+            submission.setReport(report);
+            submission.setSubmit_time(new Date());
+            submissionDao.saveSubmission(submission);
+
+            Score score = scoreDao.findByUsernameAndExperimentNum(username, experiment.getNum());
+            if (score == null) {
+                score = new Score();
+                score.setUsername(username);
+                score.setExperiment_id(experiment.getExperiment_id());
+                score.setNum(experiment.getNum());
+                score.setSubmit_time(new Date());
+                score.setStatus("completed");
+                score.setScore(0);
+                score.setPlagiarism_rate("0.0");
+                scoreDao.saveScore(score);
+            } else {
+                score.setSubmit_time(new Date());
+                score.setStatus("completed");
+                if (score.getPlagiarism_rate() == null) {
+                    score.setPlagiarism_rate("0.0");
+                }
+                scoreDao.updateScore(score);
+            }
 
             return true;
         } catch (Exception e) {
@@ -113,11 +114,8 @@ public class ExperimentServiceImpl implements ExperimentService {
         List<Map<String, Object>> result = new ArrayList<>();
         SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
 
-        // 获取所有实验
         List<Experiment> allExperiments = experimentDao.findAllExperiments();
-
         for (Experiment experiment : allExperiments) {
-            // 获取该用户在该实验的成绩信息
             Score score = scoreDao.findByUsernameAndExperimentNum(username, experiment.getNum());
 
             Map<String, Object> experimentInfo = new HashMap<>();
@@ -127,12 +125,10 @@ public class ExperimentServiceImpl implements ExperimentService {
             experimentInfo.put("deadline", experiment.getDeadline());
             experimentInfo.put("description", experiment.getDescribe());
 
-            // 添加成绩信息
             if (score != null) {
                 experimentInfo.put("status", score.getStatus());
                 experimentInfo.put("score", score.getScore());
                 experimentInfo.put("plagiarismRate", score.getPlagiarism_rate());
-
                 if (score.getSubmit_time() != null) {
                     experimentInfo.put("submitTime", dateFormat.format(score.getSubmit_time()));
                 }
@@ -147,7 +143,4 @@ public class ExperimentServiceImpl implements ExperimentService {
 
         return result;
     }
-
-
-
 }

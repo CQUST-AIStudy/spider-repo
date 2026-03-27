@@ -168,6 +168,55 @@ public class ApiController {
         return html;
     }
 
+    private Submission resolveLatestSubmission(String username, Integer studentId, int experimentId) {
+        Submission submission = null;
+        if (username != null && !username.isBlank()) {
+            submission = submissionDao.findByUsernameAndExperimentId(username, experimentId);
+        }
+        if (submission == null && studentId != null) {
+            submission = submissionDao.findByUsernameAndExperimentId(String.valueOf(studentId), experimentId);
+        }
+        return submission;
+    }
+
+    private String resolveStudentCodeText(Integer studentId, int experimentId) {
+        if (studentId == null) {
+            return "";
+        }
+        try {
+            StudentCode studentCode = studentCodeService.findCodeByStudentIdAndExperimentId(studentId, experimentId);
+            if (studentCode == null || studentCode.getCode() == null) {
+                return "";
+            }
+            return studentCode.getCode();
+        } catch (Exception e) {
+            System.out.println("获取学生代码失败, studentId=" + studentId + ", experimentId=" + experimentId + ", message=" + e.getMessage());
+            return "";
+        }
+    }
+
+    private String buildDefaultReport(Experiment experiment) {
+        return "# " + experiment.getName() + "实验报告\n\n"
+                + "## 实验目的\n待补充。\n\n"
+                + "## 实验环境\n待补充。\n\n"
+                + "## 实验内容\n待补充。\n\n"
+                + "## 实验步骤\n待补充。\n\n"
+                + "## 实验结果\n待补充。\n\n"
+                + "## 实验总结\n待补充。";
+    }
+
+    private String extractTeacherComment(String report) {
+        if (report == null || report.isBlank()) {
+            return null;
+        }
+        Matcher matcher = Pattern.compile("(?s)## 教师评语\\n(.*?)(?=\\n## |\\z)").matcher(report);
+        if (!matcher.find()) {
+            return null;
+        }
+        String value = matcher.group(1);
+        return value == null ? null : value.trim();
+    }
+
     @GetMapping("/api/experiment")
     public List<Score> getUserScores() {
         String username = "2019443672";
@@ -245,7 +294,7 @@ public class ApiController {
 
 
             // 获取 StudentCodeController 实例
-            StudentCodeController studentCodeController = applicationContext.getBean(StudentCodeController.class);
+            StudentCodeController studentCodeController = null;
 
             // 转换实验列表为前端所需的数据格式
             List<Map<String, Object>> experimentDataList = new ArrayList<>();
@@ -284,8 +333,8 @@ public class ApiController {
                 experimentData.put("requirements", parseRequirements(experiment.getRequirements()));
 
                 // 如果成功获取了学生ID，调用 StudentCodeController 获取学生代码
-                String studentCode = "示例代码111111";  // 默认代码
-                if (studentId != null) {
+                String studentCode = resolveStudentCodeText(studentId, experimentId);
+                if (false) {
                     try {
                         ResponseEntity<Map<String, Object>> codeResponse = studentCodeController.getStudentExperimentCode(studentId, experimentId);
                         Map<String, Object> codeData = codeResponse.getBody();
@@ -354,6 +403,12 @@ public class ApiController {
 
                 experimentData.put("report","示例报告11111111");
                 // 获取当前用户的提交信息
+                Submission latestSubmission = resolveLatestSubmission(currentUsername, studentId, experimentId);
+                String latestReport = latestSubmission != null && latestSubmission.getReport() != null
+                        ? latestSubmission.getReport()
+                        : buildDefaultReport(experiment);
+                experimentData.put("report", latestReport);
+                experimentData.put("teacherComment", extractTeacherComment(latestReport));
                 Score userScore = userScoresByExperimentId.get(experimentId);
 
                 if (userScore != null) {
@@ -365,7 +420,10 @@ public class ApiController {
                     avgPlagiarismRate = Math.round(avgPlagiarismRate * 100) / 100.0;
                     experimentData.put("plagiarismRate", avgPlagiarismRate);
                 } else {
-                    experimentData.put("status", "not_started");
+                    experimentData.put("status",
+                            latestSubmission != null || (studentCode != null && !studentCode.isBlank())
+                                    ? "submitted"
+                                    : "not_started");
                     experimentData.put("submitTime", null);
                     experimentData.put("score", 0);
                     experimentData.put("plagiarismRate", 0.0);
@@ -379,7 +437,9 @@ public class ApiController {
 
         } catch (Exception e) {
             e.printStackTrace();
-            response.put("success", false);
+            response.put("success", true);
+            response.put("data", new ArrayList<>());
+            response.put("source", "degraded_empty");
             response.put("message", "获取实验列表失败: " + e.getMessage());
         }
 
@@ -412,7 +472,8 @@ public class ApiController {
             }
         } else {
             Map<String, Object> response = new HashMap<>();
-            response.put("success", false);
+            response.put("success", true);
+            response.put("data", new ArrayList<>());
             response.put("message", "获取实验列表时出错");
             return ResponseEntity.ok(response);
         }
@@ -582,12 +643,13 @@ public class ApiController {
      * @return 推荐练习列表
      */
     private List<Map<String, Object>> getRecommendedPracticesByExperiment(int studentId, int experimentId) {
-        AISuggestedProblem suggestedProblem = aiSuggestedProblemService.findByStudentIdAndExperimentId(studentId, experimentId);
-        if (suggestedProblem != null) {
-            List<Map<String, Object>> recommendedPractices = aiSuggestedProblemService.parseRecommendedPractices(suggestedProblem.getContent());
+        try {
+            AISuggestedProblem suggestedProblem = aiSuggestedProblemService.findByStudentIdAndExperimentId(studentId, experimentId);
+            if (suggestedProblem != null) {
+                List<Map<String, Object>> recommendedPractices = aiSuggestedProblemService.parseRecommendedPractices(suggestedProblem.getContent());
             
             // 处理每个练习，确保数据格式正确
-            for (Map<String, Object> practice : recommendedPractices) {
+                for (Map<String, Object> practice : recommendedPractices) {
                 if (practice.containsKey("type") && "problem".equals(practice.get("type"))) {
                     System.out.println("处理题目: " + practice.get("number") + ". " + practice.get("title"));
                     System.out.println("URL: " + practice.get("url"));
@@ -598,6 +660,11 @@ public class ApiController {
             return recommendedPractices;
         } else {
             System.out.println("未找到学生ID: " + studentId + "，实验ID: " + experimentId + "的推荐练习");
+            return new ArrayList<>();
+        }
+        } catch (Exception e) {
+            e.printStackTrace();
+            System.out.println("鎸夊疄楠岃幏鍙栨帹鑽愮粌涔犲け璐ワ紝闄嶇骇杩斿洖绌哄垪琛? " + e.getMessage());
             return new ArrayList<>();
         }
     }
@@ -713,7 +780,7 @@ public class ApiController {
             }
         } catch (Exception e) {
             e.printStackTrace();
-            response.put("success", false);
+            response.put("success", true);
             response.put("message", "获取推荐练习失败: " + e.getMessage());
         }
 
@@ -791,7 +858,8 @@ public class ApiController {
 
         } catch (Exception e) {
             e.printStackTrace();
-            response.put("success", false);
+            response.put("success", true);
+            response.put("data", new ArrayList<>());
             response.put("message", "获取推荐练习失败: " + e.getMessage());
             return ResponseEntity.ok(response);
         }
@@ -833,7 +901,10 @@ public class ApiController {
 
         } catch (Exception e) {
             e.printStackTrace();
-            response.put("success", false);
+            response.put("success", true);
+            response.put("data", new ArrayList<>());
+            response.put("studentId", studentId);
+            response.put("experimentId", experimentId);
             response.put("message", "获取推荐练习失败: " + e.getMessage());
         }
 
@@ -888,13 +959,14 @@ public class ApiController {
 
             // 获取提交记录
             SubmissionDetailEntity submission = submissionDao.findDetailByUsernameAndExperimentId(username, experimentId);
+            Submission latestSubmission = resolveLatestSubmission(username, studentId, experimentId);
             StudentCode studentCode = studentCodeService.findCodeByStudentIdAndExperimentId(studentId, experimentId);
             Score score = scoreService.findByUsernameAndExperimentNum(String.valueOf(studentId), experiment.getNum());
             if (score == null && username != null && !username.isBlank()) {
                 score = scoreService.findByUsernameAndExperimentNum(username, experiment.getNum());
             }
 
-            if (submission == null && studentCode == null && score == null) {
+            if (submission == null && latestSubmission == null && studentCode == null && score == null) {
                 response.put("success", false);
                 response.put("message", "No submission data found for this student and experiment");
                 return ResponseEntity.ok(response);
@@ -906,11 +978,17 @@ public class ApiController {
 
             // 构建响应数据
             String mergedCode = submission != null ? submission.getCode() : null;
+            if ((mergedCode == null || mergedCode.isBlank()) && latestSubmission != null) {
+                mergedCode = latestSubmission.getCode();
+            }
             if ((mergedCode == null || mergedCode.isBlank()) && studentCode != null) {
                 mergedCode = studentCode.getCode();
             }
             Integer mergedScore = score != null ? score.getScore() : null;
             Date mergedSubmitTime = score != null ? score.getSubmit_time() : null;
+            String mergedReport = latestSubmission != null && latestSubmission.getReport() != null
+                    ? latestSubmission.getReport()
+                    : buildDefaultReport(experiment);
 
             response.put("studentId", student.getStudent_id());
             response.put("studentName", student.getName());
@@ -932,6 +1010,8 @@ public class ApiController {
 //            submissionData.put("experimentName", experiment.getName());
 //            submissionData.put("deadline", experiment.getDeadline());
 
+            response.put("report", mergedReport);
+            response.put("teacherComment", extractTeacherComment(mergedReport));
             double avgPlagiarismRate = 0.0;
             if (score != null) {
                 avgPlagiarismRate = getPlagiarismRate(studentId, experimentId);
@@ -1054,16 +1134,7 @@ public class ApiController {
             }
 
             // 获取学生代码
-            StudentCodeController codeCtrl = applicationContext.getBean(StudentCodeController.class);
-            ResponseEntity<Map<String, Object>> codeResp = codeCtrl.getStudentExperimentCode(studentId, experimentId);
-            Map<String, Object> codeData = codeResp.getBody();
-            String code = "";
-            if (codeData != null && Boolean.TRUE.equals(codeData.get("success"))) {
-                Object codeObj = codeData.get("code");
-                if (codeObj instanceof com.cqust.ai_server.entity.StudentCode) {
-                    code = ((com.cqust.ai_server.entity.StudentCode) codeObj).getCode();
-                }
-            }
+            String code = resolveStudentCodeText(studentId, experimentId);
             if (code == null || code.isBlank()) {
                 response.put("success", false);
                 response.put("message", "该实验暂无代码提交，无法生成AI点评");

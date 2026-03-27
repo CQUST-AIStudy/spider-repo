@@ -1,34 +1,50 @@
 <template>
-  <div class="app-container">
+  <div class="app-shell">
+    <div class="app-orb orb-left"></div>
+    <div class="app-orb orb-right"></div>
     <router-view />
   </div>
 </template>
 
 <script setup>
-// App级别的逻辑可以在这里添加
 </script>
 
 <style>
-@import './assets/styles/fonts.css';
-
-* {
+html,
+body {
   margin: 0;
-  padding: 0;
-  box-sizing: border-box;
 }
 
-html, body {
-  height: 100%;
-  font-family: "Microsoft YaHei", Arial, sans-serif;
+body {
+  min-height: 100vh;
 }
 
-.app-container {
-  height: 100vh;
-  width: 100%;
-  background-color: #f5f7fa;
+.app-shell {
+  position: relative;
+  min-height: 100vh;
+  overflow: hidden;
 }
 
-.my-page-header{
-  padding: 20px;
+.app-orb {
+  position: fixed;
+  z-index: 0;
+  width: 420px;
+  height: 420px;
+  border-radius: 50%;
+  filter: blur(60px);
+  pointer-events: none;
+  opacity: 0.45;
+}
+
+.orb-left {
+  top: -140px;
+  left: -120px;
+  background: radial-gradient(circle, rgba(58, 153, 255, 0.34) 0%, rgba(58, 153, 255, 0) 72%);
+}
+
+.orb-right {
+  top: 18%;
+  right: -180px;
+  background: radial-gradient(circle, rgba(44, 181, 160, 0.26) 0%, rgba(44, 181, 160, 0) 72%);
 }
 </style>
