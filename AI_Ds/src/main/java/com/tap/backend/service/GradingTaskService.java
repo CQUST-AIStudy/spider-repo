@@ -7,9 +7,11 @@ import com.tap.backend.infra.storage.ObjectStorageService;
 import com.tap.backend.repo.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -18,6 +20,8 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.InputStream;
 import java.io.ByteArrayOutputStream;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.*;
 
 @Service
@@ -35,6 +39,13 @@ public class GradingTaskService {
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
     private final GradingSubmissionService gradingSubmissionService;
+    private final GradingTraceRepository traceRepo;
+
+    @Value("${tap.grading.stuck-scan-enabled:true}")
+    private boolean stuckScanEnabled;
+
+    @Value("${tap.grading.stuck-timeout-minutes:20}")
+    private long stuckTimeoutMinutes;
 
     public GradingTaskService(GradingTaskRepository taskRepo,
                               GradingSubmissionRepository submissionRepo,
@@ -43,7 +54,8 @@ public class GradingTaskService {
                               ObjectStorageService storageService,
                               StringRedisTemplate redisTemplate,
                               ObjectMapper objectMapper,
-                              GradingSubmissionService gradingSubmissionService) {
+                              GradingSubmissionService gradingSubmissionService,
+                              GradingTraceRepository traceRepo) {
         this.taskRepo = taskRepo;
         this.submissionRepo = submissionRepo;
         this.rubricRepo = rubricRepo;
@@ -52,6 +64,7 @@ public class GradingTaskService {
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
         this.gradingSubmissionService = gradingSubmissionService;
+        this.traceRepo = traceRepo;
     }
 
     @Transactional
@@ -211,6 +224,36 @@ public class GradingTaskService {
                 publishTaskToQueue(taskIdFinal);
             }
         });
+    }
+
+    @Transactional
+    public int forceRequeueProcessing(Long taskId, Long teacherId) {
+        GradingTaskEntity task = requireOwnedTask(taskId, teacherId);
+        List<GradingSubmissionEntity> processing = submissionRepo.findAllByTaskIdAndStatus(taskId, SubmissionStatus.PROCESSING);
+        if (processing.isEmpty()) {
+            throw new IllegalStateException("No processing submissions to requeue");
+        }
+
+        int changed = 0;
+        for (GradingSubmissionEntity sub : processing) {
+            sub.setStatus(SubmissionStatus.PENDING);
+            sub.setErrorMessage("Manually requeued from stale processing state");
+            submissionRepo.save(sub);
+            changed++;
+        }
+
+        refreshTaskCounters(task);
+        task.setStatus(GradingTaskStatus.PROCESSING);
+        taskRepo.save(task);
+
+        final Long taskIdFinal = taskId;
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                publishTaskToQueue(taskIdFinal);
+            }
+        });
+        return changed;
     }
 
     @Transactional
@@ -453,5 +496,66 @@ public class GradingTaskService {
         } catch (Exception e) {
             log.warn("Auto finalization failed for submission {}: {}", submissionId, e.getMessage());
         }
+    }
+
+    @Scheduled(fixedDelayString = "${tap.grading.stuck-scan-interval-ms:60000}")
+    @Transactional
+    public void recoverStuckProcessingSubmissions() {
+        if (!stuckScanEnabled) {
+            return;
+        }
+
+        long timeoutMinutes = Math.max(1, stuckTimeoutMinutes);
+        Instant staleBefore = Instant.now().minus(Duration.ofMinutes(timeoutMinutes));
+        List<GradingSubmissionEntity> candidates = submissionRepo
+                .findAllByStatusAndUpdatedAtBefore(SubmissionStatus.PROCESSING, staleBefore);
+        if (candidates.isEmpty()) {
+            return;
+        }
+
+        Set<Long> taskIdsToRepublish = new HashSet<>();
+        int recovered = 0;
+        for (GradingSubmissionEntity sub : candidates) {
+            Instant lastActivity = sub.getUpdatedAt();
+            GradingTraceEntity latestTrace = traceRepo.findTopBySubmissionIdOrderByCreatedAtDesc(sub.getId());
+            if (latestTrace != null && latestTrace.getCreatedAt() != null
+                    && (lastActivity == null || latestTrace.getCreatedAt().isAfter(lastActivity))) {
+                lastActivity = latestTrace.getCreatedAt();
+            }
+            if (lastActivity != null && lastActivity.isAfter(staleBefore)) {
+                continue;
+            }
+
+            sub.setStatus(SubmissionStatus.PENDING);
+            sub.setErrorMessage("Automatically requeued after stale processing timeout");
+            submissionRepo.save(sub);
+            taskIdsToRepublish.add(sub.getTaskId());
+            recovered++;
+        }
+
+        if (recovered == 0) {
+            return;
+        }
+
+        for (Long taskId : taskIdsToRepublish) {
+            GradingTaskEntity task = taskRepo.findById(taskId).orElse(null);
+            if (task == null) {
+                continue;
+            }
+            refreshTaskCounters(task);
+            task.setStatus(GradingTaskStatus.PROCESSING);
+            taskRepo.save(task);
+
+            final Long taskIdFinal = taskId;
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    publishTaskToQueue(taskIdFinal);
+                }
+            });
+        }
+
+        log.warn("Recovered {} stale processing submissions and republished {} tasks",
+                recovered, taskIdsToRepublish.size());
     }
 }

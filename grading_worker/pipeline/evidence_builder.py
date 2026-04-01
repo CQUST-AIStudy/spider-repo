@@ -7,6 +7,7 @@ from models.pipeline_models import EvidenceBlock, EvidencePack
 
 MIN_EVIDENCE = 3
 MAX_EVIDENCE = 8
+USABLE_KINDS = {"text", "ocr", "vlm", "image"}
 
 
 class CodeLineSplitter:
@@ -38,8 +39,14 @@ def build_evidence_packs(
     # Convert evidence blocks to LangChain Documents
     splitter = CodeLineSplitter(max_lines=20)
     documents: List[Document] = []
+    usable_blocks = [
+        eb for eb in evidence_blocks
+        if eb.kind in USABLE_KINDS and (eb.content or "").strip()
+    ]
+    fallback_blocks = [eb for eb in evidence_blocks if eb.kind == "vlm_failed"]
+    candidate_blocks = usable_blocks if usable_blocks else evidence_blocks
 
-    for eb in evidence_blocks:
+    for eb in candidate_blocks:
         meta = {
             "evidence_id": eb.evidence_id,
             "kind": eb.kind,
@@ -83,7 +90,16 @@ def build_evidence_packs(
 
         # If we have fewer than MIN_EVIDENCE, pad with remaining blocks
         if len(selected) < MIN_EVIDENCE:
-            for eb in evidence_blocks:
+            for eb in usable_blocks:
+                if eb.evidence_id not in seen_ids:
+                    selected.append(eb)
+                    seen_ids.add(eb.evidence_id)
+                if len(selected) >= MIN_EVIDENCE:
+                    break
+
+        # Last resort only: include failure placeholders if no usable evidence can satisfy MIN_EVIDENCE.
+        if len(selected) < MIN_EVIDENCE:
+            for eb in fallback_blocks:
                 if eb.evidence_id not in seen_ids:
                     selected.append(eb)
                     seen_ids.add(eb.evidence_id)

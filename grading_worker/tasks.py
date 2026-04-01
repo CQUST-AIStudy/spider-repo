@@ -87,12 +87,40 @@ def _extract_vlm_text(image_bytes: bytes):
     payload = result.description_json or {}
     recognized = str(payload.get("recognized_text") or "").strip()
     summary = str(payload.get("summary") or "").strip()
+    raw = str(payload.get("raw") or "").strip()
+    if not recognized and raw:
+        recognized = raw
+    if not summary and raw:
+        summary = raw
     try:
         confidence = float(payload.get("confidence") or 0.0)
     except Exception:
         confidence = 0.0
     text = recognized if len(recognized) >= len(summary) else summary
     useful = ("error" not in payload) and (len(text) >= 20 or confidence >= 0.55)
+
+    # Retry once with a more descriptive VLM prompt if text extraction output is sparse.
+    if not useful:
+        describe = call_vlm(image_bytes, task="describe")
+        describe_payload = describe.description_json or {}
+        recognized2 = str(describe_payload.get("recognized_text") or "").strip()
+        summary2 = str(describe_payload.get("summary") or "").strip()
+        raw2 = str(describe_payload.get("raw") or "").strip()
+        if not recognized2 and raw2:
+            recognized2 = raw2
+        if not summary2 and raw2:
+            summary2 = raw2
+        try:
+            confidence2 = float(describe_payload.get("confidence") or 0.0)
+        except Exception:
+            confidence2 = 0.0
+        text2 = recognized2 if len(recognized2) >= len(summary2) else summary2
+        if ("error" not in describe_payload) and (len(text2) >= 20 or confidence2 >= 0.55):
+            payload = {"extract_text": payload, "describe_fallback": describe_payload}
+            text = text2
+            confidence = max(confidence, confidence2)
+            useful = True
+
     return useful, text, confidence, payload
 
 
@@ -170,8 +198,10 @@ def process_submission(self, task_message_json: str):
 
         evidence_blocks: list[EvidenceBlock] = []
         ev_counter = 0
+        failure_pages = set()
 
         for page in parsed.pages:
+            has_page_text = bool(page.text.strip())
             if page.text.strip():
                 ev_counter += 1
                 evidence_blocks.append(EvidenceBlock(
@@ -221,17 +251,19 @@ def process_submission(self, task_message_json: str):
                         continue
 
                     ev_counter += 1
-                    _append_image_failure(
-                        evidence_blocks,
-                        minio_client,
-                        msg.submissionId,
-                        ev_counter,
-                        page.page_num,
-                        img,
-                        kind,
-                        ocr_conf,
-                        vlm_payload,
-                    )
+                    if page.page_num not in failure_pages or not has_page_text:
+                        _append_image_failure(
+                            evidence_blocks,
+                            minio_client,
+                            msg.submissionId,
+                            ev_counter,
+                            page.page_num,
+                            img,
+                            kind,
+                            ocr_conf,
+                            vlm_payload,
+                        )
+                        failure_pages.add(page.page_num)
                     continue
 
                 ocr_text = ""
@@ -293,16 +325,18 @@ def process_submission(self, task_message_json: str):
                         metadata={"image_kind": str(kind), "vlm_payload": vlm_payload},
                     ))
                 else:
-                    evidence_blocks.append(EvidenceBlock(
-                        evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
-                        kind="vlm_failed",
-                        page=page.page_num,
-                        content="Image evidence exists, but the multimodal model did not extract usable content.",
-                        confidence=max(ocr_conf, vlm_conf),
-                        image_key=img_key,
-                        bbox=img.bbox,
-                        metadata={"image_kind": str(kind), "ocr_empty": True, "vlm_payload": vlm_payload},
-                    ))
+                    if page.page_num not in failure_pages or not has_page_text:
+                        evidence_blocks.append(EvidenceBlock(
+                            evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
+                            kind="vlm_failed",
+                            page=page.page_num,
+                            content="Image evidence exists, but the multimodal model did not extract usable content.",
+                            confidence=max(ocr_conf, vlm_conf),
+                            image_key=img_key,
+                            bbox=img.bbox,
+                            metadata={"image_kind": str(kind), "ocr_empty": True, "vlm_payload": vlm_payload},
+                        ))
+                        failure_pages.add(page.page_num)
 
         with trace_step(msg.submissionId, "save_evidence") as info:
             for eb in evidence_blocks:

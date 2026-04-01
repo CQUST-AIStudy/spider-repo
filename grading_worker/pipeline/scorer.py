@@ -18,9 +18,12 @@ from config import (
 from models.pipeline_models import EvidencePack, ScoreResult
 
 MAX_SCHEMA_RETRIES = 3
-_redis_client = None
 MAX_EVIDENCE_BLOCKS_PER_DIM = 4
 MAX_EVIDENCE_CHARS_PER_BLOCK = 600
+SCORE_FLOOR_RATIO_ON_SUBSTANTIAL_EVIDENCE = 0.35
+SCORE_FLOOR_RATIO_ON_EXTRACT_NOISE = 0.15
+
+_redis_client = None
 
 
 def _get_redis():
@@ -38,7 +41,7 @@ def _rate_limit_wait():
     r = _get_redis()
     key = f"ratelimit:{GRADING_AI_PROVIDER}"
     now = time.time()
-    window = 60  # 1 minute window
+    window = 60
 
     pipe = r.pipeline()
     pipe.zremrangebyscore(key, 0, now - window)
@@ -57,7 +60,6 @@ def _rate_limit_wait():
 
 
 def _extract_json_object(content: str) -> dict:
-    """Extract and parse a JSON object from raw model output."""
     cleaned = (content or "").strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
@@ -76,7 +78,6 @@ def _extract_json_object(content: str) -> dict:
 
 
 def _post_chat_json(prompt: str, max_tokens: int) -> tuple[dict, dict]:
-    """Call configured chat completion endpoint and parse the first JSON object in the reply."""
     if not GRADING_API_KEY:
         raise RuntimeError(f"{GRADING_AI_PROVIDER} API key is not configured")
 
@@ -132,7 +133,7 @@ def _has_substantial_evidence(evidence_pack: EvidencePack) -> bool:
     text_len = 0
     signal_blocks = 0
     for eb in evidence_pack.blocks:
-        if eb.kind in ("text", "ocr", "vlm"):
+        if eb.kind in ("text", "ocr", "vlm", "image"):
             txt = (eb.content or "").strip()
             if txt:
                 signal_blocks += 1
@@ -140,8 +141,22 @@ def _has_substantial_evidence(evidence_pack: EvidencePack) -> bool:
     return signal_blocks >= 2 or text_len >= 120
 
 
+def _evidence_stats(evidence_pack: EvidencePack) -> tuple[int, int, int]:
+    usable_blocks = 0
+    failed_blocks = 0
+    text_len = 0
+    for eb in (evidence_pack.blocks if evidence_pack else []):
+        kind = (eb.kind or "").lower()
+        content = (eb.content or "").strip()
+        if kind in ("text", "ocr", "vlm", "image") and content:
+            usable_blocks += 1
+            text_len += len(content)
+        elif kind == "vlm_failed":
+            failed_blocks += 1
+    return usable_blocks, failed_blocks, text_len
+
+
 def _normalize_result(parsed: dict, evidence_pack: EvidencePack, dimension: dict) -> ScoreResult:
-    """Normalize model JSON into safe ScoreResult."""
     max_score = float(dimension["max_score"])
     valid_evidence_ids = {eb.evidence_id for eb in evidence_pack.blocks}
 
@@ -160,18 +175,34 @@ def _normalize_result(parsed: dict, evidence_pack: EvidencePack, dimension: dict
         evidence_ids = []
     evidence_ids = [str(eid) for eid in evidence_ids if str(eid) in valid_evidence_ids][:8]
 
-    # Reduce false NEED_MORE_EVIDENCE when evidence is clearly present.
+    # Avoid false NEED_MORE_EVIDENCE when useful evidence exists.
     if status == "NEED_MORE_EVIDENCE" and _has_substantial_evidence(evidence_pack):
         status = "SCORED"
         if score is None:
-            score = 0.0
+            score = round(max_score * SCORE_FLOOR_RATIO_ON_SUBSTANTIAL_EVIDENCE, 2)
         if not comment:
-            comment = "存在可用证据，但证据强度偏弱，按保守策略评分。"
+            comment = "存在可用证据，但覆盖不完整，已按保守策略给分。"
         else:
-            comment += "（检测到可用证据，按保守策略评分）"
+            comment += "（检测到可用证据，已按保守策略评分）"
 
     if status == "SCORED" and score is None:
         score = 0.0
+
+    usable_blocks, failed_blocks, text_len = _evidence_stats(evidence_pack)
+    if (
+        status == "SCORED"
+        and score is not None
+        and usable_blocks >= 2
+        and text_len >= 160
+        and failed_blocks >= 2
+        and score < max_score * SCORE_FLOOR_RATIO_ON_EXTRACT_NOISE
+    ):
+        score = round(max_score * SCORE_FLOOR_RATIO_ON_EXTRACT_NOISE, 2)
+        if comment:
+            comment += "（提取噪声较高，已启用最低分保护）"
+        else:
+            comment = "提取噪声较高，已启用最低分保护。"
+
     if status == "SCORED" and not evidence_ids and evidence_pack.blocks:
         evidence_ids = [evidence_pack.blocks[0].evidence_id]
 
@@ -214,7 +245,8 @@ def score_dimensions_batch(
     for dim in dimensions:
         pack = evidence_packs.get(dim["id"])
         blocks = []
-        for eb in (pack.blocks if pack else [])[:MAX_EVIDENCE_BLOCKS_PER_DIM]:
+        usable_blocks = [eb for eb in (pack.blocks if pack else []) if (eb.kind or "").lower() != "vlm_failed"]
+        for eb in usable_blocks[:MAX_EVIDENCE_BLOCKS_PER_DIM]:
             blocks.append({
                 "evidence_id": eb.evidence_id,
                 "kind": eb.kind,
@@ -232,17 +264,18 @@ def score_dimensions_batch(
         })
 
     prompt = (
-        "You are a strict lab report grading assistant.\n"
+        "You are a fair, evidence-grounded lab report grading assistant.\n"
         "Grade every rubric dimension below based only on the provided evidence.\n"
         "Comments must be in Chinese.\n"
         f"{custom_section}"
         f"{range_section}"
         "\nRules:\n"
-        "1. If a dimension has some relevant evidence, return status=SCORED and give a conservative score.\n"
+        "1. If a dimension has some relevant evidence, return status=SCORED and give partial credit.\n"
         "2. Use status=NEED_MORE_EVIDENCE only when all provided evidence is irrelevant or missing for that dimension.\n"
         "3. score must be between 0 and max_score.\n"
         "4. evidence_ids must only use IDs that appear in that dimension's evidence_blocks.\n"
-        "5. Return JSON only. No markdown.\n"
+        "5. Do not over-penalize extraction uncertainty. If core steps/results exist, avoid near-zero scores.\n"
+        "6. Return JSON only. No markdown.\n"
         "\nReturn this schema exactly:\n"
         "{\n"
         '  "results": [\n'
@@ -309,8 +342,7 @@ def score_dimension(
     if custom_prompt and custom_prompt.strip():
         custom_section = f"\n## 教师自定义评分要求\n{custom_prompt.strip()}\n"
 
-    prompt = f"""你是一个严格的实验报告评分助手。请根据以下评分维度和证据材料进行评分。
-{custom_section}
+    prompt = f"""你是一个公平、严谨的实验报告评分助手。请根据以下评分维度和证据材料进行评分。{custom_section}
 ## 评分维度
 - 名称: {dimension["name"]}
 - 描述: {dimension.get("description", "")}
@@ -320,10 +352,11 @@ def score_dimension(
 {evidence_text}
 
 ## 规则
-1. 只要存在部分相关证据，必须给出保守分数并返回 status=SCORED。
+1. 只要存在部分相关证据，必须返回 status=SCORED，并给出合理的部分分。
 2. 只有在所有证据都与该维度完全无关时，才可返回 status=NEED_MORE_EVIDENCE。
 3. score 必须在 0 到 {dimension["max_score"]} 之间。
 4. evidence_ids 只能填写上面已出现的证据ID。
+5. 不要因识别噪声过度扣分；核心步骤或结果已出现时，不应给接近零分。
 
 ## 输出要求
 只输出严格 JSON，不要任何额外文字：
@@ -355,9 +388,9 @@ def score_dimension(
                     return (
                         ScoreResult(
                             dimension_id=dimension["id"],
-                            score=0.0,
+                            score=round(float(dimension["max_score"]) * SCORE_FLOOR_RATIO_ON_SUBSTANTIAL_EVIDENCE, 2),
                             max_score=dimension["max_score"],
-                            comment=f"模型响应格式异常，已按保守策略评分: {str(e)[:120]}",
+                            comment=f"模型响应格式异常，已按保守策略评分：{str(e)[:120]}",
                             evidence_ids=[evidence_pack.blocks[0].evidence_id] if evidence_pack.blocks else [],
                             status="SCORED",
                         ),

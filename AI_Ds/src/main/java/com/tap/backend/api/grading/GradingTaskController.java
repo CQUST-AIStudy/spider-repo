@@ -130,6 +130,20 @@ public class GradingTaskController {
         }
     }
 
+    @PostMapping("/{id}/requeue-processing")
+    public ResponseEntity<?> requeueProcessing(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserPrincipal principal
+    ) {
+        Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
+        try {
+            int count = taskService.forceRequeueProcessing(id, teacherId);
+            return ResponseEntity.ok(ApiResponse.of(Map.of("message", "Requeued processing submissions", "count", count)));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+        }
+    }
+
     @DeleteMapping("/{id}")
     public ResponseEntity<?> delete(
             @PathVariable Long id,

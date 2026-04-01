@@ -2,6 +2,7 @@
 import hashlib
 import json
 import base64
+import re
 import redis
 import httpx
 from config import VLM_API_URL, VLM_API_KEY, VLM_MODEL, REDIS_HOST, REDIS_PORT
@@ -20,6 +21,54 @@ def _get_redis():
 def compute_image_hash(image_bytes: bytes) -> str:
     """Compute SHA256 hash of image bytes for cache key."""
     return hashlib.sha256(image_bytes).hexdigest()
+
+
+def _normalize_content_to_text(content) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content") or item.get("value")
+                if text:
+                    parts.append(str(text))
+        return "\n".join(parts)
+    return str(content)
+
+
+def _extract_json_from_text(raw: str):
+    text = (raw or "").strip()
+    if not text:
+        return None
+
+    if text.startswith("```"):
+        first_lf = text.find("\n")
+        last_fence = text.rfind("```")
+        if first_lf >= 0 and last_fence > first_lf:
+            text = text[first_lf + 1:last_fence].strip()
+
+    # Try full parse first.
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    # Extract the outermost JSON object if wrapped with extra text.
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        candidate = text[start:end + 1]
+        try:
+            return json.loads(candidate)
+        except Exception:
+            pass
+
+    return None
 
 
 def call_vlm(image_bytes: bytes, task: str = "describe") -> VlmResult:
@@ -70,7 +119,8 @@ def call_vlm(image_bytes: bytes, task: str = "describe") -> VlmResult:
                     ]
                 }
             ],
-            "max_tokens": 500
+            "max_tokens": 500,
+            "response_format": {"type": "json_object"},
         }
 
         headers = {"Authorization": f"Bearer {VLM_API_KEY}", "Content-Type": "application/json"}
@@ -78,22 +128,17 @@ def call_vlm(image_bytes: bytes, task: str = "describe") -> VlmResult:
         resp.raise_for_status()
 
         data = resp.json()
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
+        message = data.get("choices", [{}])[0].get("message", {}) or {}
+        content = _normalize_content_to_text(message.get("content", "{}"))
 
-        try:
-            stripped = (content or "").strip()
-            if stripped.startswith("```"):
-                first_lf = stripped.find("\n")
-                last_fence = stripped.rfind("```")
-                if first_lf >= 0 and last_fence > first_lf:
-                    stripped = stripped[first_lf + 1:last_fence].strip()
-            start = stripped.find("{")
-            end = stripped.rfind("}")
-            if start >= 0 and end > start:
-                stripped = stripped[start:end + 1]
-            desc = json.loads(stripped)
-        except json.JSONDecodeError:
-            desc = {"raw": content}
+        desc = _extract_json_from_text(content)
+        if desc is None:
+            plain = re.sub(r"\s+", " ", (content or "")).strip()
+            if plain:
+                # Keep useful plain text instead of treating it as full failure.
+                desc = {"summary": plain[:2000], "recognized_text": plain[:2000], "confidence": 0.62}
+            else:
+                desc = {"raw": content}
 
         # Cache result (TTL 7 days)
         r.setex(cache_key, 604800, json.dumps(desc))

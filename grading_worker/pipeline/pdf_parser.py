@@ -5,6 +5,7 @@ from models.pipeline_models import ParsedDocument, ParsedPage, ImageInfo
 SCAN_RENDER_DPI = 260
 LOW_TEXT_THRESHOLD = 40
 FULL_PAGE_IMAGE_COVERAGE = 0.6
+MIN_IMAGE_COVERAGE = 0.002  # Skip tiny decorative images (<0.2% of page)
 
 
 def parse_pdf(pdf_bytes: bytes) -> ParsedDocument:
@@ -23,8 +24,12 @@ def parse_pdf(pdf_bytes: bytes) -> ParsedDocument:
 
             images = []
             max_image_coverage = 0.0
+            seen_xrefs = set()
             for img_index, img in enumerate(page.get_images(full=True)):
                 xref = img[0]
+                if xref in seen_xrefs:
+                    continue
+                seen_xrefs.add(xref)
                 try:
                     base_image = doc.extract_image(xref)
                     if base_image and base_image.get("image"):
@@ -35,6 +40,8 @@ def parse_pdf(pdf_bytes: bytes) -> ParsedDocument:
                             r = img_rects[0]
                             bbox = [r.x0, r.y0, r.x1, r.y1]
                             coverage = abs((r.x1 - r.x0) * (r.y1 - r.y0)) / page_area
+                            if coverage < MIN_IMAGE_COVERAGE:
+                                continue
                             max_image_coverage = max(max_image_coverage, coverage)
 
                         images.append(ImageInfo(
