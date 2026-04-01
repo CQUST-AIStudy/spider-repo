@@ -39,6 +39,27 @@ public class AiConfig {
                 .build();
             return new OpenAiProvider(restClient, objectMapper, model);
         }
+        if ("dashscope".equals(provider) || "qwen".equals(provider)) {
+            AiProperties.Dashscope ds = props.dashscope();
+            String apiKey = ds == null ? null : ds.apiKey();
+            if (apiKey == null || apiKey.isBlank()) apiKey = System.getenv("DASHSCOPE_API_KEY");
+            if (apiKey == null || apiKey.isBlank()) {
+                throw new IllegalStateException("tap.ai.provider=dashscope but DASHSCOPE_API_KEY is empty");
+            }
+            String baseUrl = ds == null ? null : ds.baseUrl();
+            if (baseUrl == null || baseUrl.isBlank()) {
+                baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+            }
+            String model = ds == null ? null : ds.model();
+            if (model == null || model.isBlank()) model = "qwen-vl-max-latest";
+
+            RestClient restClient = RestClient.builder()
+                .baseUrl(baseUrl)
+                .defaultHeader("Authorization", "Bearer " + apiKey.trim())
+                .requestFactory(pooledRequestFactory())
+                .build();
+            return new OpenAiProvider(restClient, objectMapper, model);
+        }
         return new MockAiProvider();
     }
 

@@ -4,7 +4,9 @@ import com.tap.backend.domain.grading.GradingRubricEntity;
 import com.tap.backend.domain.grading.RubricDimensionEntity;
 import com.tap.backend.security.TeacherPrincipalResolver;
 import com.tap.backend.security.UserPrincipal;
+import com.tap.backend.service.RubricDraftService;
 import com.tap.backend.service.RubricService;
+import com.tap.backend.service.RubricDraftService.DraftDimension;
 import com.tap.backend.service.RubricService.DimensionInput;
 import com.tap.common.api.ApiResponse;
 import java.math.BigDecimal;
@@ -21,20 +23,48 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/grading/rubrics")
 public class RubricController {
 
     private final RubricService rubricService;
+    private final RubricDraftService rubricDraftService;
     private final TeacherPrincipalResolver teacherPrincipalResolver;
 
     public RubricController(
             RubricService rubricService,
+            RubricDraftService rubricDraftService,
             TeacherPrincipalResolver teacherPrincipalResolver
     ) {
         this.rubricService = rubricService;
+        this.rubricDraftService = rubricDraftService;
         this.teacherPrincipalResolver = teacherPrincipalResolver;
+    }
+
+    @PostMapping("/draft")
+    public ResponseEntity<?> draft(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestParam("templateFile") MultipartFile templateFile,
+            @RequestParam(value = "subject", required = false) String subject,
+            @RequestParam(value = "name", required = false) String name
+    ) {
+        teacherPrincipalResolver.requireTeacherId(principal);
+        try {
+            var draft = rubricDraftService.generateDraft(templateFile, subject, name);
+            return ResponseEntity.ok(ApiResponse.of(Map.of(
+                    "name", draft.name(),
+                    "subject", draft.subject(),
+                    "description", draft.description(),
+                    "customPrompt", draft.customPrompt(),
+                    "dimensions", draft.dimensions().stream().map(this::toDraftDimensionDto).toList()
+            )));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(502).body(Map.of("message", e.getMessage()));
+        }
     }
 
     @PostMapping
@@ -136,6 +166,15 @@ public class RubricController {
                 "maxScore", dimension.getMaxScore(),
                 "weight", dimension.getWeight(),
                 "sortOrder", dimension.getSortOrder()
+        );
+    }
+
+    private Map<String, Object> toDraftDimensionDto(DraftDimension dimension) {
+        return Map.of(
+                "name", dimension.name(),
+                "description", dimension.description() != null ? dimension.description() : "",
+                "maxScore", dimension.maxScore(),
+                "weight", dimension.weight()
         );
     }
 

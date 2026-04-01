@@ -1,4 +1,6 @@
 spring:
+  config:
+    import: optional:classpath:application-local.yml
   application:
     name: AI_server
   datasource:
@@ -173,6 +175,10 @@ tap:
       base-url: ${OPENAI_BASE_URL:https://api.deepseek.com/v1}
       api-key: ${OPENAI_API_KEY:}
       model: ${OPENAI_MODEL:deepseek-chat}
+    dashscope:
+      base-url: ${DASHSCOPE_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+      api-key: ${DASHSCOPE_API_KEY:}
+      model: ${DASHSCOPE_MODEL:qwen-vl-max-latest}
   documents:
     extracted-text-max-chars: ${DOC_EXTRACT_MAX_CHARS:20000}
     store-full-extracted-text-to-minio: ${DOC_STORE_FULL_TEXT_TO_MINIO:true}

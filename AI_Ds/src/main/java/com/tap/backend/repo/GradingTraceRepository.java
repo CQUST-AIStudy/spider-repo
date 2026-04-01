@@ -6,4 +6,5 @@ import java.util.List;
 
 public interface GradingTraceRepository extends JpaRepository<GradingTraceEntity, Long> {
     List<GradingTraceEntity> findAllBySubmissionId(Long submissionId);
+    List<GradingTraceEntity> findAllBySubmissionIdOrderByCreatedAtAsc(Long submissionId);
 }

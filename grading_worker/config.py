@@ -27,10 +27,42 @@ DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 DEEPSEEK_RATE_LIMIT = int(os.getenv("DEEPSEEK_RATE_LIMIT", "30"))  # requests per minute
 
+# DashScope Embedding
+DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
+DASHSCOPE_EMBEDDING_MODEL = "text-embedding-v3"
+DASHSCOPE_EMBEDDING_DIM = 1024
+DASHSCOPE_EMBEDDING_ENDPOINT = "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
+
+# Qwen / DashScope compatible chat
+DASHSCOPE_COMPAT_BASE_URL = os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+QWEN_TEXT_MODEL = os.getenv("QWEN_TEXT_MODEL", "qwen-plus-latest")
+QWEN_VLM_MODEL = os.getenv("QWEN_VLM_MODEL", "qwen-vl-max-latest")
+QWEN_RATE_LIMIT = int(os.getenv("QWEN_RATE_LIMIT", "20"))
+
+GRADING_AI_PROVIDER = os.getenv(
+    "GRADING_AI_PROVIDER",
+    "qwen" if DASHSCOPE_API_KEY else ("deepseek" if DEEPSEEK_API_KEY else "mock"),
+).strip().lower()
+if GRADING_AI_PROVIDER == "qwen":
+    GRADING_API_KEY = DASHSCOPE_API_KEY
+    GRADING_BASE_URL = DASHSCOPE_COMPAT_BASE_URL
+    GRADING_MODEL = os.getenv("GRADING_MODEL", QWEN_TEXT_MODEL)
+    GRADING_RATE_LIMIT = QWEN_RATE_LIMIT
+else:
+    GRADING_API_KEY = DEEPSEEK_API_KEY
+    GRADING_BASE_URL = DEEPSEEK_BASE_URL
+    GRADING_MODEL = os.getenv("GRADING_MODEL", DEEPSEEK_MODEL)
+    GRADING_RATE_LIMIT = DEEPSEEK_RATE_LIMIT
+
 # VLM API
-VLM_API_URL = os.getenv("VLM_API_URL", "")
-VLM_API_KEY = os.getenv("VLM_API_KEY", "")
-VLM_RATE_LIMIT = int(os.getenv("VLM_RATE_LIMIT", "5"))  # requests per minute
+VLM_API_URL = os.getenv("VLM_API_URL", f"{DASHSCOPE_COMPAT_BASE_URL}/chat/completions" if DASHSCOPE_API_KEY else "")
+VLM_API_KEY = os.getenv("VLM_API_KEY", DASHSCOPE_API_KEY)
+VLM_MODEL = os.getenv("VLM_MODEL", QWEN_VLM_MODEL)
+VLM_RATE_LIMIT = int(os.getenv("VLM_RATE_LIMIT", "8"))  # requests per minute
+OCR_STRATEGY = os.getenv(
+    "OCR_STRATEGY",
+    "qwen_first" if DASHSCOPE_API_KEY else "ocr_first",
+).strip().lower()
 
 # Celery
 CELERY_CONCURRENCY = int(os.getenv("CELERY_CONCURRENCY", "6"))
@@ -44,12 +76,6 @@ DIMENSION_SCORE_CONCURRENCY = int(os.getenv("DIMENSION_SCORE_CONCURRENCY", "1"))
 TASK_QUEUE_KEY = "grading:tasks"
 RESULT_CHANNEL = "grading:results"
 
-# DashScope Embedding
-DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
-DASHSCOPE_EMBEDDING_MODEL = "text-embedding-v3"
-DASHSCOPE_EMBEDDING_DIM = 1024
-DASHSCOPE_EMBEDDING_ENDPOINT = "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
-
 # Milvus
 MILVUS_HOST = os.getenv("MILVUS_HOST", "localhost")
 MILVUS_PORT = int(os.getenv("MILVUS_PORT", "19530"))
@@ -57,3 +83,8 @@ MILVUS_COLLECTION = "course_chunks"
 
 # RAG Queue
 RAG_TASK_QUEUE_KEY = "rag:tasks"
+
+try:
+    from local_settings import *  # noqa: F401,F403
+except Exception:
+    pass

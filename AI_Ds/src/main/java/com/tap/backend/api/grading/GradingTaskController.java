@@ -3,10 +3,15 @@ package com.tap.backend.api.grading;
 import com.tap.backend.domain.grading.GradingSubmissionEntity;
 import com.tap.backend.domain.grading.GradingTaskEntity;
 import com.tap.backend.domain.grading.GradingTaskStatus;
+import com.tap.backend.domain.grading.ReportFileEntity;
+import com.tap.backend.repo.ReportFileRepository;
 import com.tap.backend.security.TeacherPrincipalResolver;
 import com.tap.backend.security.UserPrincipal;
+import com.tap.backend.service.AnnotatedStudentReportService;
 import com.tap.backend.service.GradingTaskService;
 import com.tap.common.api.ApiResponse;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -30,13 +35,16 @@ import org.springframework.web.multipart.MultipartFile;
 public class GradingTaskController {
 
     private final GradingTaskService taskService;
+    private final ReportFileRepository reportFileRepo;
     private final TeacherPrincipalResolver teacherPrincipalResolver;
 
     public GradingTaskController(
             GradingTaskService taskService,
+            ReportFileRepository reportFileRepo,
             TeacherPrincipalResolver teacherPrincipalResolver
     ) {
         this.taskService = taskService;
+        this.reportFileRepo = reportFileRepo;
         this.teacherPrincipalResolver = teacherPrincipalResolver;
     }
 
@@ -98,9 +106,10 @@ public class GradingTaskController {
         try {
             GradingTaskEntity task = taskService.getTaskDetail(id, teacherId);
             List<GradingSubmissionEntity> submissions = taskService.getTaskSubmissions(id, teacherId);
+            Map<Long, ReportFileEntity> preferredReports = buildPreferredReportMap(id);
 
             Map<String, Object> dto = new LinkedHashMap<>(toListDto(task));
-            dto.put("submissions", submissions.stream().map(this::toSubDto).toList());
+            dto.put("submissions", submissions.stream().map(submission -> toSubDto(submission, preferredReports.get(submission.getId()))).toList());
             return ResponseEntity.ok(ApiResponse.of(dto));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(404).body(Map.of("message", e.getMessage()));
@@ -170,7 +179,34 @@ public class GradingTaskController {
         return dto;
     }
 
-    private Map<String, Object> toSubDto(GradingSubmissionEntity submission) {
+    private Map<Long, ReportFileEntity> buildPreferredReportMap(Long taskId) {
+        Map<Long, ReportFileEntity> result = new HashMap<>();
+        for (ReportFileEntity reportFile : reportFileRepo.findAllByTaskId(taskId)) {
+            if (reportFile.getSubmissionId() == null) {
+                continue;
+            }
+            result.merge(reportFile.getSubmissionId(), reportFile, this::preferredReport);
+        }
+        return result;
+    }
+
+    private ReportFileEntity preferredReport(ReportFileEntity left, ReportFileEntity right) {
+        return Comparator.comparingInt(this::reportPriority).compare(left, right) >= 0 ? left : right;
+    }
+
+    private int reportPriority(ReportFileEntity report) {
+        if (report == null || report.getFileType() == null) {
+            return 0;
+        }
+        return switch (report.getFileType()) {
+            case AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_DOCX -> 4;
+            case AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_PDF -> 3;
+            case "pdf" -> 2;
+            default -> 1;
+        };
+    }
+
+    private Map<String, Object> toSubDto(GradingSubmissionEntity submission, ReportFileEntity preferredReport) {
         Map<String, Object> dto = new LinkedHashMap<>();
         dto.put("submissionId", submission.getId());
         dto.put("studentName", submission.getStudentName());
@@ -180,6 +216,8 @@ public class GradingTaskController {
         dto.put("totalScore", submission.getTotalScore());
         dto.put("originalFilename", submission.getOriginalFilename());
         dto.put("finalReviewComment", submission.getFinalReviewComment());
+        dto.put("hasDownloadableReport", preferredReport != null);
+        dto.put("preferredReportFileType", preferredReport != null ? preferredReport.getFileType() : null);
         return dto;
     }
 }

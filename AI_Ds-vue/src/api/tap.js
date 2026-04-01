@@ -269,6 +269,17 @@ export function getRubricDetail(id) {
   return tapClient.get(`/api/grading/rubrics/${id}`)
 }
 
+export function draftRubricFromTemplate(file, extra = {}) {
+  const fd = new FormData()
+  fd.append('templateFile', file)
+  if (extra?.subject) fd.append('subject', extra.subject)
+  if (extra?.name) fd.append('name', extra.name)
+  return tapClient.post('/api/grading/rubrics/draft', fd, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 180000,
+  })
+}
+
 // ========== Grading - Tasks ==========
 export function createGradingTask(formData) {
   return tapClient.post('/api/grading/tasks', formData, {

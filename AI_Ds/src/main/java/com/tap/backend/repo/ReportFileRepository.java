@@ -8,5 +8,6 @@ import java.util.Optional;
 public interface ReportFileRepository extends JpaRepository<ReportFileEntity, Long> {
     List<ReportFileEntity> findAllByTaskId(Long taskId);
     List<ReportFileEntity> findAllByTaskIdAndFileType(Long taskId, String fileType);
+    List<ReportFileEntity> findAllBySubmissionIdOrderByCreatedAtDesc(Long submissionId);
     Optional<ReportFileEntity> findBySubmissionIdAndFileType(Long submissionId, String fileType);
 }

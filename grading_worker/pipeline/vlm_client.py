@@ -4,7 +4,7 @@ import json
 import base64
 import redis
 import httpx
-from config import VLM_API_URL, VLM_API_KEY, REDIS_HOST, REDIS_PORT
+from config import VLM_API_URL, VLM_API_KEY, VLM_MODEL, REDIS_HOST, REDIS_PORT
 from models.pipeline_models import VlmResult
 
 _redis_client = None
@@ -22,10 +22,10 @@ def compute_image_hash(image_bytes: bytes) -> str:
     return hashlib.sha256(image_bytes).hexdigest()
 
 
-def call_vlm(image_bytes: bytes) -> VlmResult:
-    """Call VLM API for diagram/plot description, with Redis caching."""
+def call_vlm(image_bytes: bytes, task: str = "describe") -> VlmResult:
+    """Call VLM API for multimodal extraction/understanding, with Redis caching."""
     img_hash = compute_image_hash(image_bytes)
-    cache_key = f"vlm:cache:{img_hash}"
+    cache_key = f"vlm:cache:{task}:{img_hash}"
 
     # Check cache
     r = _get_redis()
@@ -42,23 +42,35 @@ def call_vlm(image_bytes: bytes) -> VlmResult:
 
     try:
         b64_image = base64.b64encode(image_bytes).decode("utf-8")
+        if task == "extract_text":
+            prompt = (
+                "Read this screenshot or scanned page carefully and return strict JSON only. "
+                "Schema: {\"recognized_text\":\"...\",\"summary\":\"...\",\"confidence\":0.0}. "
+                "recognized_text should contain the main visible text content in Chinese or original language. "
+                "If the image is not text-heavy, still summarize the useful content."
+            )
+        else:
+            prompt = (
+                "Describe this image as short strict JSON only. "
+                "Schema: {\"image_type\":\"diagram|plot|screenshot|other\",\"recognized_text\":\"...\","
+                "\"summary\":\"...\",\"confidence\":0.0}. "
+                "For diagrams or plots, summarize the key relationship or trend. "
+                "If visible text exists, include it in recognized_text."
+            )
+
         payload = {
-            "model": "vlm",
+            "model": VLM_MODEL,
             "messages": [
+                {"role": "system", "content": "Return valid JSON only."},
                 {
                     "role": "user",
                     "content": [
                         {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_image}"}},
-                        {"type": "text", "text": (
-                            "Describe this image as a short structured JSON. "
-                            "For diagrams: {\"type\":\"diagram\",\"nodes\":[...],\"edges\":[...]}. "
-                            "For plots: {\"type\":\"plot\",\"x_label\":\"...\",\"y_label\":\"...\",\"trend\":\"...\"}. "
-                            "Keep it under 100 tokens."
-                        )}
+                        {"type": "text", "text": prompt}
                     ]
                 }
             ],
-            "max_tokens": 150
+            "max_tokens": 500
         }
 
         headers = {"Authorization": f"Bearer {VLM_API_KEY}", "Content-Type": "application/json"}
@@ -69,7 +81,17 @@ def call_vlm(image_bytes: bytes) -> VlmResult:
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
 
         try:
-            desc = json.loads(content)
+            stripped = (content or "").strip()
+            if stripped.startswith("```"):
+                first_lf = stripped.find("\n")
+                last_fence = stripped.rfind("```")
+                if first_lf >= 0 and last_fence > first_lf:
+                    stripped = stripped[first_lf + 1:last_fence].strip()
+            start = stripped.find("{")
+            end = stripped.rfind("}")
+            if start >= 0 and end > start:
+                stripped = stripped[start:end + 1]
+            desc = json.loads(stripped)
         except json.JSONDecodeError:
             desc = {"raw": content}
 

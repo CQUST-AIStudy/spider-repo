@@ -21,6 +21,10 @@
         <div class="review-card-header">
           <span class="review-title">教师总评</span>
           <div class="review-actions">
+            <el-button size="small" type="success" plain @click="downloadReport" :loading="downloadingReport"
+              :disabled="!detail?.hasDownloadableReport">
+              下载批注报告
+            </el-button>
             <el-button size="small" type="primary" plain @click="generateReview" :loading="generatingReview">
               AI 生成总评
             </el-button>
@@ -40,6 +44,9 @@
         </div>
         <p class="review-hint">
           导入后会把当前总分和教师总评写入学生实验报告，学生端导出的 Word 会显示红色手写评语。
+        </p>
+        <p class="review-hint" v-if="detail?.hasDownloadableReport">
+          当前已生成 {{ preferredReportLabel }}，可直接下载查看。
         </p>
         <el-input
           v-model="finalReview"
@@ -138,6 +145,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ChatDotRound, Edit } from '@element-plus/icons-vue'
 import {
+  downloadSubmissionReport,
   generateFinalReview,
   getSubmissionDetail,
   overrideSubmissionScore,
@@ -156,6 +164,7 @@ const reviewEdited = ref(false)
 const generatingReview = ref(false)
 const savingReview = ref(false)
 const publishingReport = ref(false)
+const downloadingReport = ref(false)
 
 const overrideVisible = ref(false)
 const overriding = ref(false)
@@ -167,6 +176,15 @@ const scoreLevel = computed(() => {
   if (score >= 80) return 'level-good'
   if (score >= 60) return 'level-ok'
   return 'level-low'
+})
+
+const preferredReportLabel = computed(() => {
+  const type = detail.value?.preferredReportFileType
+  return {
+    annodoc: '批注版 Word',
+    annopdf: '批注版 PDF',
+    pdf: '评分报告 PDF',
+  }[type] || '报告文件'
 })
 
 function formatScore(score, fallback = '-') {
@@ -266,11 +284,35 @@ async function publishReport() {
       reviewEdited.value = false
     }
     await publishSubmissionReport(subId)
+    await loadDetail()
     ElMessage.success('已导入学生报告，学生端可直接查看和导出')
   } catch (error) {
     ElMessage.error(`导入失败: ${error.message}`)
   } finally {
     publishingReport.value = false
+  }
+}
+
+async function downloadReport() {
+  if (!detail.value?.hasDownloadableReport) {
+    ElMessage.warning('当前还没有可下载的批注报告')
+    return
+  }
+  downloadingReport.value = true
+  try {
+    const blob = await downloadSubmissionReport(subId)
+    const ext = detail.value?.preferredReportFileType === 'annodoc' ? 'docx' : 'pdf'
+    const filename = `${detail.value?.studentName || 'submission'}-annotated.${ext}`
+    const url = URL.createObjectURL(new Blob([blob]))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (error) {
+    ElMessage.error(`下载失败: ${error.message}`)
+  } finally {
+    downloadingReport.value = false
   }
 }
 

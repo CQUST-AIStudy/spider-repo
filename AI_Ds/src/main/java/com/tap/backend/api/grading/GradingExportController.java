@@ -9,9 +9,11 @@ import com.tap.backend.repo.GradingTaskRepository;
 import com.tap.backend.repo.ReportFileRepository;
 import com.tap.backend.security.TeacherPrincipalResolver;
 import com.tap.backend.security.UserPrincipal;
+import com.tap.backend.service.AnnotatedStudentReportService;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -74,15 +76,17 @@ public class GradingExportController {
             @AuthenticationPrincipal UserPrincipal principal
     ) {
         Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
-        var reportOpt = reportFileRepo.findBySubmissionIdAndFileType(id, "pdf");
-        if (reportOpt.isEmpty()) {
+        GradingSubmissionEntity submission = submissionRepo.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Submission not found"));
+        ReportFileEntity report = selectPreferredReport(reportFileRepo.findAllBySubmissionIdOrderByCreatedAtDesc(id));
+        if (report == null) {
             return ResponseEntity.status(404).body(Map.of("message", "Report not yet generated"));
         }
-        requireOwnedTask(reportOpt.get().getTaskId(), teacherId);
-        byte[] bytes = storageService.getBytes(reportOpt.get().getObjectKey());
+        requireOwnedTask(report.getTaskId(), teacherId);
+        byte[] bytes = storageService.getBytes(report.getObjectKey());
         return ResponseEntity.ok()
-                .contentType(MediaType.APPLICATION_PDF)
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=report.pdf")
+                .contentType(resolveMediaType(report))
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=" + resolveDownloadName(submission, report))
                 .body(bytes);
     }
 
@@ -99,13 +103,12 @@ public class GradingExportController {
             return ResponseEntity.status(404).body(Map.of("message", "No submissions found"));
         }
 
-        List<ReportFileEntity> reports = reportFileRepo.findAllByTaskIdAndFileType(id, "pdf");
-        Map<Long, String> reportKeyBySubId = reports.stream()
-                .filter(report -> report.getSubmission() != null && report.getSubmission().getId() != null)
+        Map<Long, ReportFileEntity> reportBySubId = reportFileRepo.findAllByTaskId(id).stream()
+                .filter(report -> report.getSubmissionId() != null)
                 .collect(Collectors.toMap(
-                        report -> report.getSubmission().getId(),
-                        ReportFileEntity::getObjectKey,
-                        (left, right) -> left
+                        ReportFileEntity::getSubmissionId,
+                        report -> report,
+                        this::preferredReport
                 ));
 
         int concurrency = Math.max(1, Math.min(exportMaxConcurrency, submissions.size()));
@@ -116,7 +119,7 @@ public class GradingExportController {
         try {
             int submitted = 0;
             for (GradingSubmissionEntity submission : submissions) {
-                completionService.submit(() -> loadExportPayload(submission, reportKeyBySubId.get(submission.getId())));
+                completionService.submit(() -> loadExportPayload(submission, reportBySubId.get(submission.getId())));
                 submitted++;
                 if (exportSubmitIntervalMs > 0) {
                     Thread.sleep(exportSubmitIntervalMs);
@@ -141,13 +144,13 @@ public class GradingExportController {
                                 ? submission.getStudentName()
                                 : "submission_" + submission.getId()
                 );
-                if (payload != null && payload.pdfBytes() != null && payload.pdfBytes().length > 0) {
+                if (payload != null && payload.bytes() != null && payload.bytes().length > 0) {
                     String filename = uniqueFileName(
                             payload.filename() == null ? baseName + ".pdf" : payload.filename(),
                             usedNames
                     );
                     zos.putNextEntry(new ZipEntry(filename));
-                    zos.write(payload.pdfBytes());
+                    zos.write(payload.bytes());
                     zos.closeEntry();
                     exportedCount++;
                 } else {
@@ -158,7 +161,7 @@ public class GradingExportController {
 
             if (!missingSubmissions.isEmpty()) {
                 StringBuilder sb = new StringBuilder();
-                sb.append("These submissions have no exportable report/original PDF:\n");
+                sb.append("These submissions have no exportable annotated report, score report, or original file:\n");
                 for (String item : missingSubmissions) {
                     sb.append("- ").append(item).append('\n');
                 }
@@ -195,17 +198,22 @@ public class GradingExportController {
         }
     }
 
-    private ExportPayload loadExportPayload(GradingSubmissionEntity submission, String reportObjectKey) {
+    private ExportPayload loadExportPayload(GradingSubmissionEntity submission, ReportFileEntity reportFile) {
         String baseName = sanitizeFileName(
                 submission.getStudentName() != null && !submission.getStudentName().isBlank()
                         ? submission.getStudentName()
                         : "submission_" + submission.getId()
         );
         try {
-            if (reportObjectKey != null && !reportObjectKey.isBlank()) {
-                byte[] reportBytes = storageService.getBytes(reportObjectKey);
+            if (reportFile != null && reportFile.getObjectKey() != null && !reportFile.getObjectKey().isBlank()) {
+                byte[] reportBytes = storageService.getBytes(reportFile.getObjectKey());
                 if (reportBytes != null && reportBytes.length > 0) {
-                    return new ExportPayload(submission.getId(), baseName + ".pdf", reportBytes, "report");
+                    return new ExportPayload(
+                            submission.getId(),
+                            resolveDownloadName(submission, reportFile),
+                            reportBytes,
+                            reportFile.getFileType()
+                    );
                 }
             }
         } catch (Exception ignored) {
@@ -215,7 +223,12 @@ public class GradingExportController {
             if (submission.getPdfObjectKey() != null && !submission.getPdfObjectKey().isBlank()) {
                 byte[] originBytes = storageService.getBytes(submission.getPdfObjectKey());
                 if (originBytes != null && originBytes.length > 0) {
-                    return new ExportPayload(submission.getId(), baseName + "-original.pdf", originBytes, "original");
+                    return new ExportPayload(
+                            submission.getId(),
+                            baseName + "-original" + resolveOriginalExtension(submission),
+                            originBytes,
+                            "original"
+                    );
                 }
             }
         } catch (Exception ignored) {
@@ -253,5 +266,67 @@ public class GradingExportController {
         }
     }
 
-    private record ExportPayload(Long submissionId, String filename, byte[] pdfBytes, String reason) {}
+    private ReportFileEntity preferredReport(ReportFileEntity left, ReportFileEntity right) {
+        return reportPriority(left) >= reportPriority(right) ? left : right;
+    }
+
+    private ReportFileEntity selectPreferredReport(List<ReportFileEntity> reports) {
+        return reports.stream()
+                .max(Comparator.comparingInt(this::reportPriority))
+                .orElse(null);
+    }
+
+    private int reportPriority(ReportFileEntity report) {
+        if (report == null || report.getFileType() == null) {
+            return 0;
+        }
+        return switch (report.getFileType()) {
+            case AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_DOCX -> 4;
+            case AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_PDF -> 3;
+            case "pdf" -> 2;
+            default -> 1;
+        };
+    }
+
+    private MediaType resolveMediaType(ReportFileEntity report) {
+        if (report == null) {
+            return MediaType.APPLICATION_OCTET_STREAM;
+        }
+        return switch (report.getFileType()) {
+            case AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_DOCX ->
+                    MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+            case AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_PDF, "pdf" -> MediaType.APPLICATION_PDF;
+            default -> MediaType.APPLICATION_OCTET_STREAM;
+        };
+    }
+
+    private String resolveDownloadName(GradingSubmissionEntity submission, ReportFileEntity report) {
+        String baseName = sanitizeFileName(
+                submission.getStudentName() != null && !submission.getStudentName().isBlank()
+                        ? submission.getStudentName()
+                        : "submission_" + submission.getId()
+        );
+        if (report == null || report.getFileType() == null) {
+            return baseName + ".bin";
+        }
+        return switch (report.getFileType()) {
+            case AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_DOCX -> baseName + "-annotated.docx";
+            case AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_PDF -> baseName + "-annotated.pdf";
+            case "pdf" -> baseName + "-score-report.pdf";
+            default -> baseName + ".bin";
+        };
+    }
+
+    private String resolveOriginalExtension(GradingSubmissionEntity submission) {
+        String filename = submission.getOriginalFilename();
+        if (filename != null) {
+            int dot = filename.lastIndexOf('.');
+            if (dot >= 0) {
+                return filename.substring(dot);
+            }
+        }
+        return ".pdf";
+    }
+
+    private record ExportPayload(Long submissionId, String filename, byte[] bytes, String reason) {}
 }

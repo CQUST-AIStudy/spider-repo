@@ -6,7 +6,10 @@
       <template #header>
         <div style="display:flex;justify-content:space-between;align-items:center">
           <span>我的评分标准</span>
-          <el-button type="primary" @click="showCreate">+ 新建标准</el-button>
+          <div style="display:flex;gap:8px;align-items:center">
+            <el-button @click="pickTemplate" :loading="drafting">模板生成</el-button>
+            <el-button type="primary" @click="showCreate">+ 新建标准</el-button>
+          </div>
         </div>
       </template>
       <el-table :data="rubrics" v-loading="loading" stripe>
@@ -53,19 +56,22 @@
         <el-button type="primary" @click="saveRubric" :disabled="weightSum !== 100" :loading="saving">保存</el-button>
       </template>
     </el-dialog>
+    <input ref="templateInput" type="file" accept=".pdf,.docx,.doc" style="display:none" @change="onTemplatePicked" />
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getRubrics, createRubric, updateRubric, getRubricDetail } from '@/api/tap'
+import { getRubrics, createRubric, updateRubric, getRubricDetail, draftRubricFromTemplate } from '@/api/tap'
 
 const rubrics = ref([])
 const loading = ref(false)
 const dialogVisible = ref(false)
 const saving = ref(false)
+const drafting = ref(false)
 const editingId = ref(null)
+const templateInput = ref(null)
 
 const form = ref({ name: '', subject: '', description: '', customPrompt: '', dimensions: [] })
 
@@ -88,6 +94,40 @@ function showCreate() {
     { name: '报告规范', description: '格式是否规范', maxScore: 15, weight: 30 },
   ]}
   dialogVisible.value = true
+}
+
+function pickTemplate() {
+  templateInput.value?.click()
+}
+
+async function onTemplatePicked(event) {
+  const file = event?.target?.files?.[0]
+  if (!file) return
+  drafting.value = true
+  try {
+    const res = await draftRubricFromTemplate(file)
+    const draft = res?.data || res
+    editingId.value = null
+    form.value = {
+      name: draft?.name || '',
+      subject: draft?.subject || '',
+      description: draft?.description || '',
+      customPrompt: draft?.customPrompt || '',
+      dimensions: (draft?.dimensions || []).map(d => ({
+        name: d.name,
+        description: d.description,
+        maxScore: Number(d.maxScore || 10),
+        weight: Number(d.weight || 0)
+      }))
+    }
+    dialogVisible.value = true
+    ElMessage.success('已根据模板生成评分标准草案')
+  } catch (e) {
+    ElMessage.error(e.message || '模板生成失败')
+  } finally {
+    drafting.value = false
+    if (event?.target) event.target.value = ''
+  }
 }
 
 async function editRubric(row) {

@@ -34,6 +34,7 @@ public class GradingTaskService {
     private final ObjectStorageService storageService;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
+    private final GradingSubmissionService gradingSubmissionService;
 
     public GradingTaskService(GradingTaskRepository taskRepo,
                               GradingSubmissionRepository submissionRepo,
@@ -41,7 +42,8 @@ public class GradingTaskService {
                               UserRepository userRepo,
                               ObjectStorageService storageService,
                               StringRedisTemplate redisTemplate,
-                              ObjectMapper objectMapper) {
+                              ObjectMapper objectMapper,
+                              GradingSubmissionService gradingSubmissionService) {
         this.taskRepo = taskRepo;
         this.submissionRepo = submissionRepo;
         this.rubricRepo = rubricRepo;
@@ -49,6 +51,7 @@ public class GradingTaskService {
         this.storageService = storageService;
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
+        this.gradingSubmissionService = gradingSubmissionService;
     }
 
     @Transactional
@@ -57,7 +60,7 @@ public class GradingTaskService {
                                            java.math.BigDecimal scoreRangeMax,
                                            MultipartFile[] files) {
         if (files == null || files.length == 0) {
-            throw new IllegalArgumentException("At least one PDF file is required");
+            throw new IllegalArgumentException("At least one PDF or DOCX file is required");
         }
         if (files.length > MAX_BATCH_SIZE) {
             throw new IllegalArgumentException("Batch size exceeds maximum of " + MAX_BATCH_SIZE);
@@ -72,11 +75,11 @@ public class GradingTaskService {
             throw new IllegalArgumentException("Rubric not found");
         }
 
-        // Separate valid PDFs from invalid files
+        // Separate valid documents from invalid files
         List<MultipartFile> validPdfs = new ArrayList<>();
         List<String> rejectedFiles = new ArrayList<>();
         for (MultipartFile file : files) {
-            if (isPdf(file)) {
+            if (isSupportedDocument(file)) {
                 validPdfs.add(file);
             } else {
                 rejectedFiles.add(file.getOriginalFilename());
@@ -84,7 +87,7 @@ public class GradingTaskService {
         }
 
         if (validPdfs.isEmpty()) {
-            throw new IllegalArgumentException("No valid PDF files in the batch");
+            throw new IllegalArgumentException("No valid PDF or DOCX files in the batch");
         }
 
         GradingTaskEntity task = new GradingTaskEntity();
@@ -98,11 +101,12 @@ public class GradingTaskService {
         task.setTotalCount(validPdfs.size());
         task = taskRepo.save(task);
 
-        // Store PDFs and create submissions
+        // Store documents and create submissions
         for (MultipartFile pdf : validPdfs) {
             try {
-                String objectKey = "grading/" + task.getId() + "/" + UUID.randomUUID() + ".pdf";
-                storageService.putBytes(objectKey, pdf.getBytes(), "application/pdf");
+                String extension = resolveExtension(pdf.getOriginalFilename());
+                String objectKey = "grading/" + task.getId() + "/" + UUID.randomUUID() + extension;
+                storageService.putBytes(objectKey, pdf.getBytes(), detectContentType(pdf, extension));
 
                 GradingSubmissionEntity sub = new GradingSubmissionEntity();
                 sub.setTask(task);
@@ -112,14 +116,14 @@ public class GradingTaskService {
                 sub.setStatus(SubmissionStatus.PENDING);
                 submissionRepo.save(sub);
             } catch (Exception e) {
-                log.error("Failed to store PDF: {}", pdf.getOriginalFilename(), e);
+                log.error("Failed to store document: {}", pdf.getOriginalFilename(), e);
                 rejectedFiles.add(pdf.getOriginalFilename() + " (storage error)");
                 task.setTotalCount(task.getTotalCount() - 1);
             }
         }
 
         if (task.getTotalCount() <= 0) {
-            throw new IllegalArgumentException("All PDF files failed to upload");
+            throw new IllegalArgumentException("All PDF or DOCX files failed to upload");
         }
 
         task = taskRepo.save(task);
@@ -294,6 +298,7 @@ public class GradingTaskService {
         sub.setStatus(subStatus);
         sub.setTotalScore(totalScore);
         submissionRepo.save(sub);
+        final Long teacherId = sub.getTask().getTeacherId();
 
         Long taskId = sub.getTaskId();
         GradingTaskEntity task = taskRepo.findById(taskId).orElse(null);
@@ -306,6 +311,16 @@ public class GradingTaskService {
         } else if (task.getStatus() != GradingTaskStatus.PROCESSING) {
             task.setStatus(GradingTaskStatus.PROCESSING);
             taskRepo.save(task);
+        }
+
+        if (subStatus == SubmissionStatus.SCORED || subStatus == SubmissionStatus.NEED_MORE_EVIDENCE) {
+            final Long submissionIdFinal = submissionId;
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    autoFinalizeSubmission(submissionIdFinal, teacherId);
+                }
+            });
         }
     }
 
@@ -328,6 +343,7 @@ public class GradingTaskService {
                 msg.put("taskId", taskId);
                 msg.put("submissionId", sub.getId());
                 msg.put("pdfObjectKey", sub.getPdfObjectKey());
+                msg.put("originalFilename", sub.getOriginalFilename());
                 msg.put("rubricId", rubric.getId());
                 if (customPrompt != null && !customPrompt.isBlank()) {
                     msg.put("customPrompt", customPrompt);
@@ -346,10 +362,14 @@ public class GradingTaskService {
         }
     }
 
-    private boolean isPdf(MultipartFile file) {
+    private boolean isSupportedDocument(MultipartFile file) {
         try {
             if (file.isEmpty()) return false;
-            // Check magic bytes
+            String filename = file.getOriginalFilename();
+            String lower = filename == null ? "" : filename.toLowerCase(Locale.ROOT);
+            if (lower.endsWith(".docx")) {
+                return true;
+            }
             try (InputStream is = file.getInputStream()) {
                 byte[] header = new byte[4];
                 if (is.read(header) < 4) return false;
@@ -363,8 +383,25 @@ public class GradingTaskService {
 
     private String extractStudentName(String filename) {
         if (filename == null) return null;
-        // Remove .pdf extension and use as student name
-        return filename.replaceAll("\\.[pP][dD][fF]$", "");
+        return filename.replaceAll("\\.[^.]+$", "");
+    }
+
+    private String resolveExtension(String filename) {
+        if (filename == null) {
+            return ".pdf";
+        }
+        String lower = filename.toLowerCase(Locale.ROOT);
+        return lower.endsWith(".docx") ? ".docx" : ".pdf";
+    }
+
+    private String detectContentType(MultipartFile file, String extension) {
+        if (file.getContentType() != null && !file.getContentType().isBlank()) {
+            return file.getContentType();
+        }
+        if (".docx".equalsIgnoreCase(extension)) {
+            return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        }
+        return "application/pdf";
     }
 
     private void validateScoreRange(java.math.BigDecimal scoreRangeMin, java.math.BigDecimal scoreRangeMax) {
@@ -399,5 +436,22 @@ public class GradingTaskService {
         int failedCount = submissionRepo.countByTaskIdAndStatus(taskId, SubmissionStatus.FAILED);
         task.setCompletedCount(completedCount);
         task.setFailedCount(failedCount);
+    }
+
+    private void autoFinalizeSubmission(Long submissionId, Long teacherId) {
+        try {
+            GradingSubmissionEntity submission = submissionRepo.findById(submissionId).orElse(null);
+            if (submission == null || teacherId == null) {
+                return;
+            }
+
+            if (submission.getFinalReviewComment() == null || submission.getFinalReviewComment().isBlank()) {
+                gradingSubmissionService.generateFinalReview(submissionId, teacherId);
+            }
+            gradingSubmissionService.publishToStudentReport(submissionId, teacherId);
+            log.info("Auto finalized submission {}", submissionId);
+        } catch (Exception e) {
+            log.warn("Auto finalization failed for submission {}: {}", submissionId, e.getMessage());
+        }
     }
 }

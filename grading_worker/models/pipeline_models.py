@@ -95,6 +95,7 @@ class TaskMessage(BaseModel):
     taskId: int
     submissionId: int
     pdfObjectKey: str
+    originalFilename: Optional[str] = None
     rubricId: int
     customPrompt: Optional[str] = None
     scoreRangeMin: Optional[float] = None

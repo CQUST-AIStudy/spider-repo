@@ -1,4 +1,4 @@
-"""DeepSeek LLM scorer for rubric dimensions."""
+"""LLM scorer for rubric dimensions."""
 import json
 import re
 import time
@@ -7,10 +7,11 @@ import httpx
 import redis
 
 from config import (
-    DEEPSEEK_API_KEY,
-    DEEPSEEK_BASE_URL,
-    DEEPSEEK_MODEL,
-    DEEPSEEK_RATE_LIMIT,
+    GRADING_AI_PROVIDER,
+    GRADING_API_KEY,
+    GRADING_BASE_URL,
+    GRADING_MODEL,
+    GRADING_RATE_LIMIT,
     REDIS_HOST,
     REDIS_PORT,
 )
@@ -31,11 +32,11 @@ def _get_redis():
 
 def _rate_limit_wait():
     """Simple sliding window rate limiter via Redis."""
-    if DEEPSEEK_RATE_LIMIT <= 0:
+    if GRADING_RATE_LIMIT <= 0:
         return
 
     r = _get_redis()
-    key = "ratelimit:deepseek"
+    key = f"ratelimit:{GRADING_AI_PROVIDER}"
     now = time.time()
     window = 60  # 1 minute window
 
@@ -47,7 +48,7 @@ def _rate_limit_wait():
     results = pipe.execute()
 
     count = results[1]
-    if count >= DEEPSEEK_RATE_LIMIT:
+    if count >= GRADING_RATE_LIMIT:
         oldest = r.zrange(key, 0, 0, withscores=True)
         if oldest:
             wait_time = window - (now - oldest[0][1])
@@ -75,20 +76,23 @@ def _extract_json_object(content: str) -> dict:
 
 
 def _post_chat_json(prompt: str, max_tokens: int) -> tuple[dict, dict]:
-    """Call DeepSeek chat completion and parse the first JSON object in the reply."""
-    if not DEEPSEEK_API_KEY:
-        raise RuntimeError("DEEPSEEK_API_KEY is not configured")
+    """Call configured chat completion endpoint and parse the first JSON object in the reply."""
+    if not GRADING_API_KEY:
+        raise RuntimeError(f"{GRADING_AI_PROVIDER} API key is not configured")
 
     resp = httpx.post(
-        f"{DEEPSEEK_BASE_URL}/chat/completions",
+        f"{GRADING_BASE_URL}/chat/completions",
         json={
-            "model": DEEPSEEK_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
+            "model": GRADING_MODEL,
+            "messages": [
+                {"role": "system", "content": "Return strict JSON only."},
+                {"role": "user", "content": prompt},
+            ],
             "temperature": 0.1,
             "max_tokens": max_tokens,
         },
         headers={
-            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Authorization": f"Bearer {GRADING_API_KEY}",
             "Content-Type": "application/json",
         },
         timeout=90.0,
@@ -99,7 +103,7 @@ def _post_chat_json(prompt: str, max_tokens: int) -> tuple[dict, dict]:
     content = data["choices"][0]["message"]["content"]
     parsed = _extract_json_object(content)
     trace_info = {
-        "model_used": DEEPSEEK_MODEL,
+        "model_used": GRADING_MODEL,
         "input_tokens": usage.get("prompt_tokens", 0),
         "output_tokens": usage.get("completion_tokens", 0),
     }
@@ -291,7 +295,7 @@ def score_dimension(
     dimension: dict,  # {id, name, description, max_score, weight}
     custom_prompt: str = None,
 ) -> tuple[ScoreResult, dict]:
-    """Score one rubric dimension using DeepSeek. Returns (ScoreResult, trace_info)."""
+    """Score one rubric dimension using the configured chat model. Returns (ScoreResult, trace_info)."""
     _rate_limit_wait()
 
     evidence_text = "\n\n".join(
@@ -332,7 +336,7 @@ def score_dimension(
   "status": "SCORED"
 }}"""
 
-    trace_info = {"model_used": DEEPSEEK_MODEL, "input_tokens": 0, "output_tokens": 0, "mode": "single"}
+    trace_info = {"model_used": GRADING_MODEL, "input_tokens": 0, "output_tokens": 0, "mode": "single"}
     start = time.time()
 
     for attempt in range(MAX_SCHEMA_RETRIES):

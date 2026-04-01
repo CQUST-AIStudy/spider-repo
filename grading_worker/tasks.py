@@ -1,34 +1,50 @@
 """Celery tasks for the grading pipeline."""
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
-import redis as redis_lib
 from decimal import Decimal
+
 from minio import Minio
+import redis as redis_lib
+
 from celery_app import app
 from config import (
-    MINIO_ENDPOINT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY, MINIO_BUCKET, MINIO_SECURE,
-    REDIS_HOST, REDIS_PORT, RESULT_CHANNEL, DIMENSION_SCORE_CONCURRENCY,
-)
-from models.pipeline_models import (
-    TaskMessage, EvidenceBlock, ImageKind,
+    DIMENSION_SCORE_CONCURRENCY,
+    MINIO_ACCESS_KEY,
+    MINIO_BUCKET,
+    MINIO_ENDPOINT,
+    MINIO_SECURE,
+    MINIO_SECRET_KEY,
+    OCR_STRATEGY,
+    REDIS_HOST,
+    REDIS_PORT,
+    RESULT_CHANNEL,
 )
 from models.db_models import (
-    get_session, GradingSubmission, GradingRubric,
-    EvidenceBlock as EvidenceBlockDB, ScoreItem, ReportFile,
+    EvidenceBlock as EvidenceBlockDB,
+    GradingRubric,
+    GradingSubmission,
+    ReportFile,
+    ScoreItem,
+    get_session,
 )
-from pipeline.pdf_parser import parse_pdf
+from models.pipeline_models import EvidenceBlock, ImageKind, TaskMessage
+from pipeline.document_parser import parse_document
+from pipeline.evidence_builder import build_evidence_packs
 from pipeline.image_classifier import classify_image
 from pipeline.ocr_processor import run_ocr
-from pipeline.vlm_client import call_vlm
-from pipeline.evidence_builder import build_evidence_packs
-from pipeline.scorer import score_dimension, score_dimensions_batch
 from pipeline.score_calculator import calculate_weighted_total
+from pipeline.scorer import score_dimension, score_dimensions_batch
 from pipeline.trace_logger import trace_step
+from pipeline.vlm_client import call_vlm
 
 
 def _get_minio():
-    return Minio(MINIO_ENDPOINT, access_key=MINIO_ACCESS_KEY,
-                 secret_key=MINIO_SECRET_KEY, secure=MINIO_SECURE)
+    return Minio(
+        MINIO_ENDPOINT,
+        access_key=MINIO_ACCESS_KEY,
+        secret_key=MINIO_SECRET_KEY,
+        secure=MINIO_SECURE,
+    )
 
 
 def _get_redis():
@@ -40,6 +56,7 @@ def _upload_image(minio_client, submission_id: int, ev_counter: int, image_bytes
     img_key = f"grading/{submission_id}/img-{ev_counter}.png"
     try:
         import io
+
         minio_client.put_object(
             MINIO_BUCKET,
             img_key,
@@ -60,6 +77,66 @@ def _reset_submission_artifacts(session, submission_id: int):
     session.commit()
 
 
+def _is_useful_ocr(text: str, confidence: float) -> bool:
+    stripped = (text or "").strip()
+    return len(stripped) >= 40 or (len(stripped) >= 20 and float(confidence or 0.0) >= 0.68)
+
+
+def _extract_vlm_text(image_bytes: bytes):
+    result = call_vlm(image_bytes, task="extract_text")
+    payload = result.description_json or {}
+    recognized = str(payload.get("recognized_text") or "").strip()
+    summary = str(payload.get("summary") or "").strip()
+    try:
+        confidence = float(payload.get("confidence") or 0.0)
+    except Exception:
+        confidence = 0.0
+    text = recognized if len(recognized) >= len(summary) else summary
+    useful = ("error" not in payload) and (len(text) >= 20 or confidence >= 0.55)
+    return useful, text, confidence, payload
+
+
+def _vlm_describe_image(submission_id: int, image_bytes: bytes):
+    with trace_step(submission_id, "vlm") as info:
+        result = call_vlm(image_bytes, task="describe")
+    payload = result.description_json or {}
+    useful = payload and "error" not in payload and "VLM not configured" not in str(payload)
+    return useful, payload
+
+
+def _should_try_ocr_first() -> bool:
+    return OCR_STRATEGY == "ocr_first"
+
+
+def _should_allow_ocr_fallback() -> bool:
+    return OCR_STRATEGY in ("ocr_first", "qwen_first")
+
+
+def _run_ocr_if_needed(submission_id: int, image_bytes: bytes):
+    if not _should_allow_ocr_fallback():
+        return "", 0.0
+    with trace_step(submission_id, "ocr") as info:
+        ocr_result = run_ocr(image_bytes)
+    return ocr_result.text.strip(), ocr_result.confidence
+
+
+def _append_image_failure(evidence_blocks, minio_client, submission_id, ev_counter, page_num, img, kind, confidence, payload=None):
+    img_key = _upload_image(minio_client, submission_id, ev_counter, img.image_bytes)
+    metadata = {"image_kind": str(kind), "ocr_empty": True}
+    if payload:
+        metadata["vlm_payload"] = payload
+    evidence_blocks.append(EvidenceBlock(
+        evidence_id=f"ev-{submission_id}-{ev_counter:04d}",
+        kind="vlm_failed",
+        page=page_num,
+        content="Image evidence exists, but the multimodal model did not extract usable content.",
+        confidence=confidence,
+        image_key=img_key,
+        bbox=img.bbox,
+        metadata=metadata,
+    ))
+
+
 @app.task(bind=True, max_retries=3, default_retry_delay=30)
 def process_submission(self, task_message_json: str):
     """Main pipeline task: process a single student submission."""
@@ -68,138 +145,165 @@ def process_submission(self, task_message_json: str):
     r = _get_redis()
 
     try:
-        # Reset stale artifacts so retries do not duplicate evidence/scores/reports.
         sub = session.query(GradingSubmission).get(msg.submissionId)
         if not sub:
             return
+
         _reset_submission_artifacts(session, msg.submissionId)
         sub.status = "PROCESSING"
         sub.total_score = None
         sub.error_message = None
         session.commit()
 
-        # 1. Download PDF from MinIO
         minio_client = _get_minio()
-        with trace_step(msg.submissionId, "pdf_download") as info:
+        with trace_step(msg.submissionId, "document_download") as info:
             response = minio_client.get_object(MINIO_BUCKET, msg.pdfObjectKey)
-            pdf_bytes = response.read()
+            source_bytes = response.read()
             response.close()
             response.release_conn()
 
-        # 2. Parse PDF
-        with trace_step(msg.submissionId, "pdf_parse") as info:
-            parsed = parse_pdf(pdf_bytes)
+        with trace_step(msg.submissionId, "document_parse") as info:
+            parsed = parse_document(source_bytes, msg.originalFilename)
             if parsed.error:
                 _fail_submission(session, sub, parsed.error, r, msg.submissionId)
                 return
 
-        # 3. Classify images and run OCR/VLM
         evidence_blocks: list[EvidenceBlock] = []
         ev_counter = 0
 
         for page in parsed.pages:
-            # Add page text as evidence
             if page.text.strip():
                 ev_counter += 1
                 evidence_blocks.append(EvidenceBlock(
                     evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
-                    kind="text", page=page.page_num,
-                    content=page.text[:2000],  # Truncate long text
+                    kind="text",
+                    page=page.page_num,
+                    content=page.text[:2000],
                 ))
 
             for img in page.images:
-                # Classify
                 with trace_step(msg.submissionId, "image_classify") as info:
                     kind = classify_image(img.image_bytes)
                     img.kind = kind
 
-                # Skip very small images (likely icons/decorations)
                 if img.bbox and len(img.bbox) == 4:
                     w = abs(img.bbox[2] - img.bbox[0])
                     h = abs(img.bbox[3] - img.bbox[1])
                     if w < 20 or h < 20:
                         continue
 
-                # All image types: try OCR first
-                ocr_text = ""
-                ocr_conf = 0.0
-                with trace_step(msg.submissionId, "ocr") as info:
-                    ocr_result = run_ocr(img.image_bytes)
-                    ocr_text = ocr_result.text.strip()
-                    ocr_conf = ocr_result.confidence
-
                 if kind in (ImageKind.DIAGRAM, ImageKind.PLOT):
-                    # For diagrams/plots: try VLM first, fall back to OCR
-                    with trace_step(msg.submissionId, "vlm") as info:
-                        vlm_result = call_vlm(img.image_bytes)
-
-                    vlm_useful = (vlm_result.description_json
-                                  and "error" not in vlm_result.description_json
-                                  and "VLM not configured" not in str(vlm_result.description_json))
-
+                    vlm_useful, vlm_payload = _vlm_describe_image(msg.submissionId, img.image_bytes)
                     if vlm_useful:
                         ev_counter += 1
-                        vlm_content = json.dumps(vlm_result.description_json, ensure_ascii=False)
                         evidence_blocks.append(EvidenceBlock(
                             evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
-                            kind="vlm", page=page.page_num,
-                            content=vlm_content,
-                            bbox=img.bbox,
-                        ))
-                    elif ocr_text:
-                        # VLM unavailable, use OCR result instead
-                        ev_counter += 1
-                        img_key = _upload_image(minio_client, msg.submissionId, ev_counter, img.image_bytes)
-                        evidence_blocks.append(EvidenceBlock(
-                            evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
-                            kind="ocr", page=page.page_num,
-                            content=ocr_text,
-                            confidence=ocr_conf,
-                            image_key=img_key,
-                            bbox=img.bbox,
-                        ))
-                    else:
-                        # Keep image evidence even if OCR/VLM both weak to avoid total evidence loss.
-                        ev_counter += 1
-                        img_key = _upload_image(minio_client, msg.submissionId, ev_counter, img.image_bytes)
-                        evidence_blocks.append(EvidenceBlock(
-                            evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
-                            kind="image",
+                            kind="vlm",
                             page=page.page_num,
-                            content="图片证据（OCR未提取到可用文字）",
-                            confidence=ocr_conf,
-                            image_key=img_key,
-                            bbox=img.bbox,
-                            metadata={"image_kind": str(kind), "ocr_empty": True},
-                        ))
-                else:
-                    # CODE_SCREENSHOT, TERMINAL_LOG, OTHER: use OCR
-                    if ocr_text:
-                        ev_counter += 1
-                        img_key = _upload_image(minio_client, msg.submissionId, ev_counter, img.image_bytes)
-                        evidence_blocks.append(EvidenceBlock(
-                            evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
-                            kind="ocr", page=page.page_num,
-                            content=ocr_text,
-                            confidence=ocr_conf,
-                            image_key=img_key,
+                            content=json.dumps(vlm_payload, ensure_ascii=False),
                             bbox=img.bbox,
                         ))
-                    else:
-                        ev_counter += 1
-                        img_key = _upload_image(minio_client, msg.submissionId, ev_counter, img.image_bytes)
-                        evidence_blocks.append(EvidenceBlock(
-                            evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
-                            kind="image",
-                            page=page.page_num,
-                            content="图片证据（OCR未提取到可用文字）",
-                            confidence=ocr_conf,
-                            image_key=img_key,
-                            bbox=img.bbox,
-                            metadata={"image_kind": str(kind), "ocr_empty": True},
-                        ))
+                        continue
 
-        # 4. Save evidence blocks to DB
+                    ocr_text, ocr_conf = _run_ocr_if_needed(msg.submissionId, img.image_bytes)
+                    if _is_useful_ocr(ocr_text, ocr_conf):
+                        ev_counter += 1
+                        img_key = _upload_image(minio_client, msg.submissionId, ev_counter, img.image_bytes)
+                        evidence_blocks.append(EvidenceBlock(
+                            evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
+                            kind="ocr",
+                            page=page.page_num,
+                            content=ocr_text,
+                            confidence=ocr_conf,
+                            image_key=img_key,
+                            bbox=img.bbox,
+                        ))
+                        continue
+
+                    ev_counter += 1
+                    _append_image_failure(
+                        evidence_blocks,
+                        minio_client,
+                        msg.submissionId,
+                        ev_counter,
+                        page.page_num,
+                        img,
+                        kind,
+                        ocr_conf,
+                        vlm_payload,
+                    )
+                    continue
+
+                ocr_text = ""
+                ocr_conf = 0.0
+                vlm_useful = False
+                vlm_text = ""
+                vlm_conf = 0.0
+                vlm_payload = {}
+
+                if _should_try_ocr_first():
+                    ocr_text, ocr_conf = _run_ocr_if_needed(msg.submissionId, img.image_bytes)
+                    if _is_useful_ocr(ocr_text, ocr_conf):
+                        ev_counter += 1
+                        img_key = _upload_image(minio_client, msg.submissionId, ev_counter, img.image_bytes)
+                        evidence_blocks.append(EvidenceBlock(
+                            evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
+                            kind="ocr",
+                            page=page.page_num,
+                            content=ocr_text,
+                            confidence=ocr_conf,
+                            image_key=img_key,
+                            bbox=img.bbox,
+                        ))
+                        continue
+
+                    with trace_step(msg.submissionId, "vlm_fallback") as info:
+                        vlm_useful, vlm_text, vlm_conf, vlm_payload = _extract_vlm_text(img.image_bytes)
+                else:
+                    with trace_step(msg.submissionId, "vlm_primary") as info:
+                        vlm_useful, vlm_text, vlm_conf, vlm_payload = _extract_vlm_text(img.image_bytes)
+
+                    if not vlm_useful:
+                        ocr_text, ocr_conf = _run_ocr_if_needed(msg.submissionId, img.image_bytes)
+                        if _is_useful_ocr(ocr_text, ocr_conf):
+                            ev_counter += 1
+                            img_key = _upload_image(minio_client, msg.submissionId, ev_counter, img.image_bytes)
+                            evidence_blocks.append(EvidenceBlock(
+                                evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
+                                kind="ocr",
+                                page=page.page_num,
+                                content=ocr_text,
+                                confidence=ocr_conf,
+                                image_key=img_key,
+                                bbox=img.bbox,
+                            ))
+                            continue
+
+                ev_counter += 1
+                img_key = _upload_image(minio_client, msg.submissionId, ev_counter, img.image_bytes)
+                if vlm_useful:
+                    evidence_blocks.append(EvidenceBlock(
+                        evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
+                        kind="vlm",
+                        page=page.page_num,
+                        content=vlm_text,
+                        confidence=max(ocr_conf, vlm_conf),
+                        image_key=img_key,
+                        bbox=img.bbox,
+                        metadata={"image_kind": str(kind), "vlm_payload": vlm_payload},
+                    ))
+                else:
+                    evidence_blocks.append(EvidenceBlock(
+                        evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
+                        kind="vlm_failed",
+                        page=page.page_num,
+                        content="Image evidence exists, but the multimodal model did not extract usable content.",
+                        confidence=max(ocr_conf, vlm_conf),
+                        image_key=img_key,
+                        bbox=img.bbox,
+                        metadata={"image_kind": str(kind), "ocr_empty": True, "vlm_payload": vlm_payload},
+                    ))
+
         with trace_step(msg.submissionId, "save_evidence") as info:
             for eb in evidence_blocks:
                 db_eb = EvidenceBlockDB(
@@ -216,7 +320,6 @@ def process_submission(self, task_message_json: str):
                 session.add(db_eb)
             session.commit()
 
-        # 5. Load rubric dimensions
         rubric = session.query(GradingRubric).get(msg.rubricId)
         if not rubric:
             _fail_submission(session, sub, "Rubric not found", r, msg.submissionId)
@@ -225,16 +328,16 @@ def process_submission(self, task_message_json: str):
         dimensions = []
         for dim in rubric.dimensions:
             dimensions.append({
-                "id": dim.id, "name": dim.name,
+                "id": dim.id,
+                "name": dim.name,
                 "description": dim.description or "",
-                "max_score": float(dim.max_score), "weight": int(dim.weight),
+                "max_score": float(dim.max_score),
+                "weight": int(dim.weight),
             })
 
-        # 6. Build evidence packs
         with trace_step(msg.submissionId, "evidence_build") as info:
             packs = build_evidence_packs(evidence_blocks, dimensions)
 
-        # 7. Score each dimension
         score_guidance = msg.customPrompt
         if msg.scoreRangeMin is not None and msg.scoreRangeMax is not None:
             range_hint = (
@@ -253,7 +356,7 @@ def process_submission(self, task_message_json: str):
                     "max_score": dim["max_score"],
                     "weight": dim["weight"],
                     "status": "NEED_MORE_EVIDENCE",
-                    "comment": "无可用证据",
+                    "comment": "No usable evidence was extracted for this dimension.",
                     "evidence_ids": [],
                 }
 
@@ -317,7 +420,7 @@ def process_submission(self, task_message_json: str):
                 "max_score": dim["max_score"],
                 "weight": dim["weight"],
                 "status": "NEED_MORE_EVIDENCE",
-                "comment": "评分未返回结果",
+                "comment": "Scoring did not return a result for this dimension.",
                 "evidence_ids": [],
             })
 
@@ -336,21 +439,17 @@ def process_submission(self, task_message_json: str):
 
         session.commit()
 
-        # 8. Calculate total score
         total = calculate_weighted_total(score_dicts)
         need_more_count = sum(1 for s in score_dicts if s["status"] == "NEED_MORE_EVIDENCE")
 
         sub.total_score = Decimal(str(total))
-        # Mark submission NEED_MORE_EVIDENCE only when all dimensions lack evidence.
         sub.status = "NEED_MORE_EVIDENCE" if need_more_count == len(score_dicts) else "SCORED"
         session.commit()
 
-        # 9. Generate PDF report
         with trace_step(msg.submissionId, "report_generate") as info:
             try:
                 from pipeline.report_builder import generate_pdf
 
-                # Build score dicts with dimension names for report
                 report_scores = []
                 for dim, sd in zip(dimensions, score_dicts):
                     report_scores.append({
@@ -364,26 +463,33 @@ def process_submission(self, task_message_json: str):
                     })
 
                 report_evidence = [
-                    {"evidence_id": eb.evidence_id, "kind": eb.kind,
-                     "page": eb.page, "content": eb.content}
+                    {
+                        "evidence_id": eb.evidence_id,
+                        "kind": eb.kind,
+                        "page": eb.page,
+                        "content": eb.content,
+                    }
                     for eb in evidence_blocks
                 ]
 
                 pdf_bytes = generate_pdf(
-                    sub.student_name or "未知",
-                    report_scores, report_evidence, float(total)
+                    sub.student_name or "unknown",
+                    report_scores,
+                    report_evidence,
+                    float(total),
                 )
 
-                # Upload to MinIO
                 report_key = f"grading/{msg.submissionId}/report.pdf"
                 import io as _io
+
                 minio_client.put_object(
-                    MINIO_BUCKET, report_key,
-                    _io.BytesIO(pdf_bytes), len(pdf_bytes),
-                    content_type="application/pdf"
+                    MINIO_BUCKET,
+                    report_key,
+                    _io.BytesIO(pdf_bytes),
+                    len(pdf_bytes),
+                    content_type="application/pdf",
                 )
 
-                # Save report file record
                 report_file = ReportFile(
                     task_id=msg.taskId,
                     submission_id=msg.submissionId,
@@ -395,9 +501,7 @@ def process_submission(self, task_message_json: str):
             except Exception as report_err:
                 info["status"] = "FAILED"
                 info["error_message"] = str(report_err)[:500]
-                # Don't fail the whole pipeline for report generation errors
 
-        # 10. Notify Spring Boot via Redis
         _notify_result(r, msg.submissionId, sub.status, total)
 
     except Exception as exc:
@@ -408,7 +512,6 @@ def process_submission(self, task_message_json: str):
                 _fail_submission(session, sub, str(exc)[:500], r, msg.submissionId)
         except Exception:
             pass
-        # Retry on transient errors
         raise self.retry(exc=exc)
     finally:
         session.close()
@@ -433,20 +536,14 @@ def _notify_result(redis_client, submission_id, status, total_score):
         pass
 
 
-# ---------------------------------------------------------------------------
-# RAG document processing task
-# ---------------------------------------------------------------------------
-
 @app.task(bind=True, max_retries=2, default_retry_delay=60)
 def process_rag_document(self, task_message_json: str):
-    """RAG document processing task.
-
-    Expects a JSON string with at least ``courseSpaceDocId``.
-    """
+    """RAG document processing task."""
     try:
         msg = json.loads(task_message_json)
         course_space_doc_id = msg["courseSpaceDocId"]
         from pipeline.rag.rag_processor import process_document
+
         process_document(course_space_doc_id)
     except Exception as exc:
         raise self.retry(exc=exc)
