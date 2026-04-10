@@ -10,6 +10,7 @@ import com.tap.backend.repo.ReportFileRepository;
 import com.tap.backend.security.TeacherPrincipalResolver;
 import com.tap.backend.security.UserPrincipal;
 import com.tap.backend.service.AnnotatedStudentReportService;
+import com.tap.backend.service.GradingSubmissionService;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -49,6 +50,7 @@ public class GradingExportController {
     private final ReportFileRepository reportFileRepo;
     private final ObjectStorageService storageService;
     private final TeacherPrincipalResolver teacherPrincipalResolver;
+    private final GradingSubmissionService gradingSubmissionService;
 
     @Value("${tap.grading.export.max-concurrency:6}")
     private int exportMaxConcurrency;
@@ -61,13 +63,15 @@ public class GradingExportController {
             GradingSubmissionRepository submissionRepo,
             ReportFileRepository reportFileRepo,
             ObjectStorageService storageService,
-            TeacherPrincipalResolver teacherPrincipalResolver
+            TeacherPrincipalResolver teacherPrincipalResolver,
+            GradingSubmissionService gradingSubmissionService
     ) {
         this.taskRepo = taskRepo;
         this.submissionRepo = submissionRepo;
         this.reportFileRepo = reportFileRepo;
         this.storageService = storageService;
         this.teacherPrincipalResolver = teacherPrincipalResolver;
+        this.gradingSubmissionService = gradingSubmissionService;
     }
 
     @GetMapping("/reports/{id}")
@@ -301,6 +305,7 @@ public class GradingExportController {
     }
 
     private String resolveDownloadName(GradingSubmissionEntity submission, ReportFileEntity report) {
+        String originalFilename = sanitizeOriginalFilename(submission);
         String baseName = sanitizeFileName(
                 submission.getStudentName() != null && !submission.getStudentName().isBlank()
                         ? submission.getStudentName()
@@ -310,11 +315,18 @@ public class GradingExportController {
             return baseName + ".bin";
         }
         return switch (report.getFileType()) {
-            case AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_DOCX -> baseName + "-annotated.docx";
-            case AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_PDF -> baseName + "-annotated.pdf";
+            case AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_DOCX -> originalFilename != null ? originalFilename : baseName + ".docx";
+            case AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_PDF -> originalFilename != null ? originalFilename : baseName + ".pdf";
             case "pdf" -> baseName + "-score-report.pdf";
             default -> baseName + ".bin";
         };
+    }
+
+    private String sanitizeOriginalFilename(GradingSubmissionEntity submission) {
+        if (submission == null || submission.getOriginalFilename() == null || submission.getOriginalFilename().isBlank()) {
+            return null;
+        }
+        return sanitizeFileName(submission.getOriginalFilename());
     }
 
     private String resolveOriginalExtension(GradingSubmissionEntity submission) {
@@ -326,6 +338,63 @@ public class GradingExportController {
             }
         }
         return ".pdf";
+    }
+
+    /**
+     * Batch-generate annotated reports for all scored submissions in a task.
+     * This triggers the red-pen annotation rendering for each submission that
+     * has scores but no annotated report yet.
+     */
+    @PostMapping("/tasks/{id}/generate-annotated-reports")
+    public ResponseEntity<?> batchGenerateAnnotatedReports(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserPrincipal principal
+    ) {
+        Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
+        requireOwnedTask(id, teacherId);
+
+        List<GradingSubmissionEntity> submissions = submissionRepo.findAllByTaskId(id);
+        if (submissions.isEmpty()) {
+            return ResponseEntity.status(404).body(Map.of("message", "No submissions found"));
+        }
+
+        int generated = 0;
+        int skipped = 0;
+        List<String> errors = new ArrayList<>();
+
+        for (GradingSubmissionEntity submission : submissions) {
+            try {
+                boolean alreadyHasAnnotated = reportFileRepo.findBySubmissionIdAndFileType(
+                        submission.getId(), AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_DOCX
+                ).isPresent() || reportFileRepo.findBySubmissionIdAndFileType(
+                        submission.getId(), AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_PDF
+                ).isPresent();
+
+                if (alreadyHasAnnotated) {
+                    skipped++;
+                    continue;
+                }
+
+                if (submission.getTotalScore() == null) {
+                    skipped++;
+                    continue;
+                }
+
+                // Trigger annotated report generation via the submission service
+                gradingSubmissionService.publishToStudentReport(submission.getId(), teacherId);
+                generated++;
+            } catch (Exception e) {
+                String name = submission.getStudentName() != null ? submission.getStudentName() : "id=" + submission.getId();
+                errors.add(name + ": " + e.getMessage());
+            }
+        }
+
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("total", submissions.size());
+        result.put("generated", generated);
+        result.put("skipped", skipped);
+        result.put("errors", errors);
+        return ResponseEntity.ok(result);
     }
 
     private record ExportPayload(Long submissionId, String filename, byte[] bytes, String reason) {}

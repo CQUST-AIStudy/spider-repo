@@ -29,6 +29,23 @@
         />
       </div>
       <div class="spacer" />
+      <el-button
+        type="danger"
+        plain
+        @click="doBatchAnnotate"
+        :loading="annotating"
+        :disabled="submissions.length === 0"
+      >
+        🖊️ 生成红笔批改报告
+      </el-button>
+      <el-button
+        type="warning"
+        @click="doBatchExportAnnotated"
+        :loading="exportingAnnotated"
+        :disabled="submissions.length === 0"
+      >
+        📦 导出AI批改报告(ZIP)
+      </el-button>
       <el-button type="primary" @click="showExportDialog" :disabled="submissions.length === 0">导出 Excel</el-button>
     </div>
 
@@ -135,7 +152,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { downloadSubmissionReport, exportGradingExcel, getGradingTaskDetail } from '@/api/tap'
+import { downloadSubmissionReport, exportGradingExcel, exportGradingTask, batchGenerateAnnotatedReports, getGradingTaskDetail } from '@/api/tap'
 
 const route = useRoute()
 const taskId = route.params.id
@@ -150,6 +167,8 @@ const exportSelected = ref([])
 const exportSelectAll = ref(false)
 const exportIncludeComments = ref(true)
 const exporting = ref(false)
+const annotating = ref(false)
+const exportingAnnotated = ref(false)
 
 function statusType(status) {
   return {
@@ -229,6 +248,42 @@ async function doExport() {
   }
 }
 
+async function doBatchAnnotate() {
+  annotating.value = true
+  try {
+    const res = await batchGenerateAnnotatedReports(taskId)
+    const data = res?.data || res
+    ElMessage.success(`批改报告生成完成：共${data.total}份，新生成${data.generated}份，跳过${data.skipped}份`)
+    if (data.errors && data.errors.length > 0) {
+      ElMessage.warning(`${data.errors.length}份生成失败`)
+    }
+    await loadDetail()
+  } catch (error) {
+    ElMessage.error(`生成批改报告失败: ${error.message}`)
+  } finally {
+    annotating.value = false
+  }
+}
+
+async function doBatchExportAnnotated() {
+  exportingAnnotated.value = true
+  try {
+    const res = await exportGradingTask(taskId)
+    const blob = new Blob([res], { type: 'application/zip' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `AI批改报告-任务${taskId}.zip`
+    a.click()
+    URL.revokeObjectURL(url)
+    ElMessage.success('批改报告ZIP导出成功')
+  } catch (error) {
+    ElMessage.error(`导出失败: ${error.message}`)
+  } finally {
+    exportingAnnotated.value = false
+  }
+}
+
 async function downloadReport(row) {
   try {
     const res = await downloadSubmissionReport(row.submissionId)
@@ -237,7 +292,7 @@ async function downloadReport(row) {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${row.studentName || 'submission'}-annotated.${ext}`
+    a.download = row.originalFilename || `${row.studentName || 'submission'}.${ext}`
     a.click()
     URL.revokeObjectURL(url)
   } catch (error) {

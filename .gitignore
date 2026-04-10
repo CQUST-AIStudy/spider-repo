@@ -1,6 +1,8 @@
 # === Java / Maven ===
 AI_Ds/target/
 AI_Ds/.idea/
+AI_Ds/src/main/resources/application-local.yml
+grading_worker/local_settings.py
 *.class
 *.jar
 *.war

@@ -41,7 +41,7 @@
             <el-col :span="16">
               <el-form-item label="期望分数区间">
                 <el-slider v-model="createForm.scoreRange" range :min="0" :max="100" :step="1"
-                  :marks="{ 0: '0', 60: '60', 80: '80', 100: '100' }"
+                  :marks="{ 0: '0', 75: '75', 90: '90', 99: '99', 100: '100' }"
                   style="padding: 0 12px" />
                 <div style="font-size:12px;color:#9aa0a6;margin-top:4px">
                   大多数学生的成绩应落在此区间内（{{ createForm.scoreRange[0] }} - {{ createForm.scoreRange[1] }}分），允许个别异常值
@@ -143,7 +143,7 @@ const tasks = ref([])
 const loading = ref(false)
 const submitting = ref(false)
 const fileList = ref([])
-const createForm = ref({ rubricId: null, experimentId: '', classId: '', scoreRange: [60, 90] })
+const createForm = ref({ rubricId: null, experimentId: '', classId: '', scoreRange: [75, 99] })
 let refreshTimer = null
 
 function statusType(s) {

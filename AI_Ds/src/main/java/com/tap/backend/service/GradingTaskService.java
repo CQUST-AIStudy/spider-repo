@@ -30,6 +30,8 @@ public class GradingTaskService {
     private static final int MAX_BATCH_SIZE = 200;
     private static final String QUEUE_KEY = "grading:tasks";
     private static final byte[] PDF_MAGIC = {0x25, 0x50, 0x44, 0x46}; // %PDF
+    private static final java.math.BigDecimal DEFAULT_SCORE_RANGE_MIN = new java.math.BigDecimal("75");
+    private static final java.math.BigDecimal DEFAULT_SCORE_RANGE_MAX = new java.math.BigDecimal("99");
 
     private final GradingTaskRepository taskRepo;
     private final GradingSubmissionRepository submissionRepo;
@@ -40,6 +42,7 @@ public class GradingTaskService {
     private final ObjectMapper objectMapper;
     private final GradingSubmissionService gradingSubmissionService;
     private final GradingTraceRepository traceRepo;
+    private final OfficeDocumentConversionService officeDocumentConversionService;
 
     @Value("${tap.grading.stuck-scan-enabled:true}")
     private boolean stuckScanEnabled;
@@ -55,7 +58,8 @@ public class GradingTaskService {
                               StringRedisTemplate redisTemplate,
                               ObjectMapper objectMapper,
                               GradingSubmissionService gradingSubmissionService,
-                              GradingTraceRepository traceRepo) {
+                              GradingTraceRepository traceRepo,
+                              OfficeDocumentConversionService officeDocumentConversionService) {
         this.taskRepo = taskRepo;
         this.submissionRepo = submissionRepo;
         this.rubricRepo = rubricRepo;
@@ -65,6 +69,7 @@ public class GradingTaskService {
         this.objectMapper = objectMapper;
         this.gradingSubmissionService = gradingSubmissionService;
         this.traceRepo = traceRepo;
+        this.officeDocumentConversionService = officeDocumentConversionService;
     }
 
     @Transactional
@@ -78,7 +83,8 @@ public class GradingTaskService {
         if (files.length > MAX_BATCH_SIZE) {
             throw new IllegalArgumentException("Batch size exceeds maximum of " + MAX_BATCH_SIZE);
         }
-        validateScoreRange(scoreRangeMin, scoreRangeMax);
+        ScoreRange resolvedScoreRange = resolveScoreRange(scoreRangeMin, scoreRangeMax);
+        validateScoreRange(resolvedScoreRange.min(), resolvedScoreRange.max());
 
         UserEntity teacher = userRepo.findById(teacherId)
                 .orElseThrow(() -> new IllegalArgumentException("Teacher not found"));
@@ -108,8 +114,8 @@ public class GradingTaskService {
         task.setExperimentId(experimentId);
         task.setClassId(classId);
         task.setRubric(rubric);
-        task.setScoreRangeMin(scoreRangeMin);
-        task.setScoreRangeMax(scoreRangeMax);
+        task.setScoreRangeMin(resolvedScoreRange.min());
+        task.setScoreRangeMax(resolvedScoreRange.max());
         task.setStatus(GradingTaskStatus.PENDING);
         task.setTotalCount(validPdfs.size());
         task = taskRepo.save(task);
@@ -117,15 +123,23 @@ public class GradingTaskService {
         // Store documents and create submissions
         for (MultipartFile pdf : validPdfs) {
             try {
-                String extension = resolveExtension(pdf.getOriginalFilename());
+                String originalFilename = pdf.getOriginalFilename();
+                byte[] sourceBytes = pdf.getBytes();
+                String extension = resolveExtension(originalFilename);
+                String contentType = detectContentType(pdf, extension);
+                if (isLegacyWordDocument(originalFilename, contentType)) {
+                    sourceBytes = officeDocumentConversionService.convertWordToPdf(originalFilename, sourceBytes);
+                    extension = ".pdf";
+                    contentType = "application/pdf";
+                }
                 String objectKey = "grading/" + task.getId() + "/" + UUID.randomUUID() + extension;
-                storageService.putBytes(objectKey, pdf.getBytes(), detectContentType(pdf, extension));
+                storageService.putBytes(objectKey, sourceBytes, contentType);
 
                 GradingSubmissionEntity sub = new GradingSubmissionEntity();
                 sub.setTask(task);
                 sub.setPdfObjectKey(objectKey);
-                sub.setOriginalFilename(pdf.getOriginalFilename());
-                sub.setStudentName(extractStudentName(pdf.getOriginalFilename()));
+                sub.setOriginalFilename(originalFilename);
+                sub.setStudentName(extractStudentName(originalFilename));
                 sub.setStatus(SubmissionStatus.PENDING);
                 submissionRepo.save(sub);
             } catch (Exception e) {
@@ -155,6 +169,8 @@ public class GradingTaskService {
         result.put("status", task.getStatus().name());
         result.put("totalCount", task.getTotalCount());
         result.put("rubricId", rubricId);
+        result.put("scoreRangeMin", task.getScoreRangeMin());
+        result.put("scoreRangeMax", task.getScoreRangeMax());
         result.put("createdAt", task.getCreatedAt().toString());
         if (!rejectedFiles.isEmpty()) {
             result.put("rejectedFiles", rejectedFiles);
@@ -410,7 +426,7 @@ public class GradingTaskService {
             if (file.isEmpty()) return false;
             String filename = file.getOriginalFilename();
             String lower = filename == null ? "" : filename.toLowerCase(Locale.ROOT);
-            if (lower.endsWith(".docx")) {
+            if (lower.endsWith(".docx") || lower.endsWith(".doc")) {
                 return true;
             }
             try (InputStream is = file.getInputStream()) {
@@ -434,7 +450,13 @@ public class GradingTaskService {
             return ".pdf";
         }
         String lower = filename.toLowerCase(Locale.ROOT);
-        return lower.endsWith(".docx") ? ".docx" : ".pdf";
+        if (lower.endsWith(".docx")) {
+            return ".docx";
+        }
+        if (lower.endsWith(".doc")) {
+            return ".doc";
+        }
+        return ".pdf";
     }
 
     private String detectContentType(MultipartFile file, String extension) {
@@ -444,7 +466,16 @@ public class GradingTaskService {
         if (".docx".equalsIgnoreCase(extension)) {
             return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
         }
+        if (".doc".equalsIgnoreCase(extension)) {
+            return "application/msword";
+        }
         return "application/pdf";
+    }
+
+    private boolean isLegacyWordDocument(String filename, String contentType) {
+        String lower = filename == null ? "" : filename.toLowerCase(Locale.ROOT);
+        return (lower.endsWith(".doc") && !lower.endsWith(".docx"))
+                || "application/msword".equalsIgnoreCase(contentType);
     }
 
     private void validateScoreRange(java.math.BigDecimal scoreRangeMin, java.math.BigDecimal scoreRangeMax) {
@@ -461,6 +492,13 @@ public class GradingTaskService {
         if (scoreRangeMin.compareTo(scoreRangeMax) > 0) {
             throw new IllegalArgumentException("scoreRangeMin must be less than or equal to scoreRangeMax");
         }
+    }
+
+    private ScoreRange resolveScoreRange(java.math.BigDecimal scoreRangeMin, java.math.BigDecimal scoreRangeMax) {
+        if (scoreRangeMin == null && scoreRangeMax == null) {
+            return new ScoreRange(DEFAULT_SCORE_RANGE_MIN, DEFAULT_SCORE_RANGE_MAX);
+        }
+        return new ScoreRange(scoreRangeMin, scoreRangeMax);
     }
 
     private GradingTaskEntity requireOwnedTask(Long taskId, Long teacherId) {
@@ -558,4 +596,6 @@ public class GradingTaskService {
         log.warn("Recovered {} stale processing submissions and republished {} tasks",
                 recovered, taskIdsToRepublish.size());
     }
+
+    private record ScoreRange(java.math.BigDecimal min, java.math.BigDecimal max) {}
 }

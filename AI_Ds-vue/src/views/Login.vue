@@ -113,9 +113,9 @@ const selectedRole = ref('teacher')
 const isDevelopment = process.env.NODE_ENV === 'development'
 
 const defaultAccounts = isDevelopment ? {
-  teacher: { username: 'teacher1', password: 'password123' },
+  teacher: { username: 'teacher1', password: 'teacher123' },
   student: { username: 'student1', password: 'password123' },
-  admin: { username: 'admin1', password: 'password123' }
+  admin: { username: 'admin', password: 'admin123' }
 } : {}
 
 const loginForm = reactive({

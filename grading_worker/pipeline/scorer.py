@@ -1,4 +1,4 @@
-"""LLM scorer for rubric dimensions."""
+﻿"""LLM scorer for rubric dimensions."""
 import json
 import re
 import time
@@ -25,6 +25,8 @@ SCORE_FLOOR_RATIO_ON_EXTRACT_NOISE = 0.15
 MAX_HTTP_RETRIES = 4
 HTTP_RETRY_BASE_DELAY = 1.5
 RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
+DEFAULT_SCORE_RANGE_MIN = 75.0
+DEFAULT_SCORE_RANGE_MAX = 99.0
 
 _redis_client = None
 
@@ -209,7 +211,7 @@ def _normalize_result(parsed: dict, evidence_pack: EvidencePack, dimension: dict
         if score is None:
             score = round(max_score * SCORE_FLOOR_RATIO_ON_SUBSTANTIAL_EVIDENCE, 2)
         if not comment:
-            comment = "存在可用证据，但覆盖不完整，已按保守策略给分。"
+            comment = "存在可用证据，但覆盖还不够完整，已按保守策略给分。"
         else:
             comment += "（检测到可用证据，已按保守策略评分）"
 
@@ -261,13 +263,13 @@ def score_dimensions_batch(
             f"{custom_prompt.strip()}\n"
         )
 
-    range_section = ""
-    if score_range_min is not None and score_range_max is not None:
-        range_section = (
-            "\nOverall score calibration:\n"
-            f"- The teacher expects most submissions in this batch to fall around {score_range_min:.0f}-{score_range_max:.0f} / 100.\n"
-            "- Use this only as a calibration hint. Do not force every student into that range.\n"
-        )
+    effective_score_range_min = score_range_min if score_range_min is not None else DEFAULT_SCORE_RANGE_MIN
+    effective_score_range_max = score_range_max if score_range_max is not None else DEFAULT_SCORE_RANGE_MAX
+    range_section = (
+        "\nOverall score calibration:\n"
+        f"- The teacher expects most submissions in this batch to fall around {effective_score_range_min:.0f}-{effective_score_range_max:.0f} / 100.\n"
+        "- Use this only as a calibration hint. Do not force every student into that range.\n"
+    )
 
     request_payload = []
     for dim in dimensions:
@@ -303,7 +305,12 @@ def score_dimensions_batch(
         "3. score must be between 0 and max_score.\n"
         "4. evidence_ids must only use IDs that appear in that dimension's evidence_blocks.\n"
         "5. Do not over-penalize extraction uncertainty. If core steps/results exist, avoid near-zero scores.\n"
-        "6. Return JSON only. No markdown.\n"
+        "6. Prioritize whether the student understands the experiment goal, method, result interpretation, and problem-solving process.\n"
+        "7. If the evidence contains sections like 实验目的, 上机要求, 实验要求, or 实验内容, treat them as the target requirements and judge whether the report actually completes them.\n"
+        "8. Do not mainly deduct points for formatting, missing environment/version details, heading style, or layout unless the rubric explicitly requires them.\n"
+        "9. Keep comments in Chinese, specific, and useful. Briefly state what the student has mastered, where the weak point is, and how to improve.\n"
+        "10. If the core knowledge and main experiment flow are correct, prefer a reasonable mid-to-high score instead of harsh low scoring.\n"
+        "11. Return JSON only. No markdown.\n"
         "\nReturn this schema exactly:\n"
         "{\n"
         '  "results": [\n'
@@ -311,7 +318,7 @@ def score_dimensions_batch(
         '      "dimension_id": 1,\n'
         '      "score": 0,\n'
         '      "max_score": 10,\n'
-        '      "comment": "中文评分理由",\n'
+        '      "comment": "涓枃璇勫垎鐞嗙敱",\n'
         '      "evidence_ids": ["ev-1"],\n'
         '      "status": "SCORED"\n'
         "    }\n"
@@ -361,14 +368,14 @@ def score_dimension(
 
     evidence_text = "\n\n".join(
         [
-            f"[证据 {eb.evidence_id}] (类型: {eb.kind}, 页码: {eb.page}, 置信度: {eb.confidence or 'N/A'})\n{eb.content}"
+            f"[璇佹嵁 {eb.evidence_id}] (绫诲瀷: {eb.kind}, 椤电爜: {eb.page}, 缃俊搴? {eb.confidence or 'N/A'})\n{eb.content}"
             for eb in evidence_pack.blocks
         ]
     )
 
     custom_section = ""
     if custom_prompt and custom_prompt.strip():
-        custom_section = f"\n## 教师自定义评分要求\n{custom_prompt.strip()}\n"
+        custom_section = f"\n## 鏁欏笀鑷畾涔夎瘎鍒嗚姹俓n{custom_prompt.strip()}\n"
 
     prompt = f"""你是一个公平、严谨的实验报告评分助手。请根据以下评分维度和证据材料进行评分。{custom_section}
 ## 评分维度
@@ -383,9 +390,12 @@ def score_dimension(
 1. 只要存在部分相关证据，必须返回 status=SCORED，并给出合理的部分分。
 2. 只有在所有证据都与该维度完全无关时，才可返回 status=NEED_MORE_EVIDENCE。
 3. score 必须在 0 到 {dimension["max_score"]} 之间。
-4. evidence_ids 只能填写上面已出现的证据ID。
-5. 不要因识别噪声过度扣分；核心步骤或结果已出现时，不应给接近零分。
-
+4. evidence_ids 只能填写上面已经出现的证据 ID。
+5. 不要因为识别噪声过度扣分；核心步骤或结果已经出现时，不应给接近零分。
+6. 优先关注学生对实验原理、方法步骤、结果分析和问题定位的掌握情况。
+7. 除非评分维度明确要求，否则不要主要因排版、格式、实验环境、Python 版本等细节扣分。
+8. comment 必须用中文，简要说明“学生已掌握什么”“薄弱点在哪里”“后续如何改进”。
+9. 如果核心知识和主要实验流程是对的，优先给出合理的中高分，不要过度严苛。
 ## 输出要求
 只输出严格 JSON，不要任何额外文字：
 {{
@@ -418,7 +428,7 @@ def score_dimension(
                             dimension_id=dimension["id"],
                             score=round(float(dimension["max_score"]) * SCORE_FLOOR_RATIO_ON_SUBSTANTIAL_EVIDENCE, 2),
                             max_score=dimension["max_score"],
-                            comment=f"模型响应格式异常，已按保守策略评分：{str(e)[:120]}",
+                            comment=f"妯″瀷鍝嶅簲鏍煎紡寮傚父锛屽凡鎸変繚瀹堢瓥鐣ヨ瘎鍒嗭細{str(e)[:120]}",
                             evidence_ids=[evidence_pack.blocks[0].evidence_id] if evidence_pack.blocks else [],
                             status="SCORED",
                         ),
@@ -429,7 +439,7 @@ def score_dimension(
                         dimension_id=dimension["id"],
                         score=None,
                         max_score=dimension["max_score"],
-                        comment=f"评分失败: JSON解析错误 ({str(e)[:120]})",
+                        comment=f"璇勫垎澶辫触: JSON瑙ｆ瀽閿欒 ({str(e)[:120]})",
                         evidence_ids=[],
                         status="NEED_MORE_EVIDENCE",
                     ),
@@ -439,3 +449,5 @@ def score_dimension(
         except Exception:
             trace_info["duration_ms"] = int((time.time() - start) * 1000)
             raise
+
+

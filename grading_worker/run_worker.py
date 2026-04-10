@@ -18,4 +18,5 @@ if __name__ == "__main__":
         f"--concurrency={concurrency}",
         "-Q", "grading",
         f"--pool={pool}",
+        "--prefetch-multiplier=1",
     ])

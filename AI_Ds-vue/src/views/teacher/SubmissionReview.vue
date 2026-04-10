@@ -302,7 +302,7 @@ async function downloadReport() {
   try {
     const blob = await downloadSubmissionReport(subId)
     const ext = detail.value?.preferredReportFileType === 'annodoc' ? 'docx' : 'pdf'
-    const filename = `${detail.value?.studentName || 'submission'}-annotated.${ext}`
+    const filename = detail.value?.originalFilename || `${detail.value?.studentName || 'submission'}.${ext}`
     const url = URL.createObjectURL(new Blob([blob]))
     const a = document.createElement('a')
     a.href = url

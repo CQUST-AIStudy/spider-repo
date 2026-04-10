@@ -328,6 +328,10 @@ export function exportGradingExcel(id, submissionIds, includeComments) {
     { responseType: 'blob', timeout: 60000 })
 }
 
+export function batchGenerateAnnotatedReports(taskId) {
+  return tapClient.post(`/api/grading/tasks/${taskId}/generate-annotated-reports`, null, { timeout: 300000 })
+}
+
 // ========== Grading - Final Review ==========
 export function generateFinalReview(submissionId) {
   return tapClient.post(`/api/grading/submissions/${submissionId}/generate-review`)

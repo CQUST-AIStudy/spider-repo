@@ -16,6 +16,7 @@ import com.tap.backend.domain.grading.EvidenceBlockEntity;
 import com.tap.backend.domain.grading.GradingSubmissionEntity;
 import com.tap.backend.domain.grading.GradingTraceEntity;
 import com.tap.backend.domain.grading.ReportFileEntity;
+import com.tap.backend.domain.grading.RubricDimensionEntity;
 import com.tap.backend.domain.grading.ScoreItemEntity;
 import com.tap.backend.domain.grading.ScoreItemStatus;
 import com.tap.backend.domain.grading.ScoreOverrideEntity;
@@ -31,11 +32,14 @@ import com.tap.backend.repo.UserRepository;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -101,6 +105,7 @@ public class GradingSubmissionService {
         result.put("submissionId", submission.getId());
         result.put("taskId", submission.getTaskId());
         result.put("studentName", submission.getStudentName());
+        result.put("originalFilename", submission.getOriginalFilename());
         result.put("className", submission.getClassName());
         result.put("studentNo", submission.getStudentNo());
         result.put("status", submission.getStatus().name());
@@ -181,40 +186,10 @@ public class GradingSubmissionService {
     public String generateFinalReview(Long submissionId, Long teacherId) {
         GradingSubmissionEntity submission = requireOwnedSubmission(submissionId, teacherId);
         List<ScoreItemEntity> scores = scoreItemRepo.findAllBySubmissionId(submissionId);
+        Map<Long, String> dimensionNames = buildDimensionNameMap(submission);
+        ExperimentContext experimentContext = extractExperimentContext(submissionId);
 
-        StringBuilder scoreSummary = new StringBuilder();
-        for (ScoreItemEntity score : scores) {
-            scoreSummary.append("- 维度(ID:")
-                    .append(score.getDimensionId())
-                    .append("): 得分 ")
-                    .append(score.getScore() != null ? score.getScore() : "N/A")
-                    .append("/")
-                    .append(score.getMaxScore())
-                    .append(", 评语: ")
-                    .append(score.getComment() != null ? score.getComment() : "无")
-                    .append('\n');
-        }
-
-        String prompt = "你是一位实验课程教师，请根据以下分项评分为学生撰写简洁、客观、可执行的总评。\n"
-                + "要求：控制在 80 到 220 字，先概括完成度，再指出优点和不足，最后给出改进建议。\n\n"
-                + "学生姓名：" + (submission.getStudentName() != null ? submission.getStudentName() : "未知") + "\n"
-                + "总分：" + (submission.getTotalScore() != null ? submission.getTotalScore() : "N/A") + "\n"
-                + "分项评分：\n" + scoreSummary;
-
-        try {
-            var summaryResult = aiProvider.structuredSummary(
-                    new AiProvider.StructuredSummaryInput("review", submissionId.toString(), prompt, 120, 260));
-            String review = summaryResult.researchProblemMotivation();
-            if (review != null && !review.isBlank()) {
-                submission.setFinalReviewComment(review);
-                submissionRepo.save(submission);
-                refreshAnnotatedReportIfPresent(submission);
-                return review;
-            }
-        } catch (Exception ignored) {
-        }
-
-        String review = generateSimpleReview(submission, scores);
+        String review = generateStructuredReview(submission, scores, dimensionNames, experimentContext);
         submission.setFinalReviewComment(review);
         submissionRepo.save(submission);
         refreshAnnotatedReportIfPresent(submission);
@@ -233,7 +208,9 @@ public class GradingSubmissionService {
     public Map<String, Object> publishToStudentReport(Long submissionId, Long teacherId) {
         GradingSubmissionEntity submission = requireOwnedSubmission(submissionId, teacherId);
         List<ScoreItemEntity> scores = scoreItemRepo.findAllBySubmissionId(submissionId);
-        String teacherComment = buildTeacherComment(submission, scores);
+        Map<Long, String> dimensionNames = buildDimensionNameMap(submission);
+        ExperimentContext experimentContext = extractExperimentContext(submissionId);
+        String teacherComment = buildTeacherComment(submission, scores, dimensionNames, experimentContext);
         AnnotatedReportArtifact annotatedReport = createAnnotatedReport(submission, scores, teacherComment);
 
         Map<String, Object> result = new LinkedHashMap<>();
@@ -302,13 +279,8 @@ public class GradingSubmissionService {
                                                           List<ScoreItemEntity> scores,
                                                           String teacherComment) {
         byte[] originalBytes = storageService.getBytes(submission.getPdfObjectKey());
-        List<String> dimensionComments = scores.stream()
-                .map(ScoreItemEntity::getComment)
-                .filter(Objects::nonNull)
-                .map(String::trim)
-                .filter(comment -> !comment.isBlank())
-                .limit(4)
-                .toList();
+        Map<Long, String> dimensionNames = buildDimensionNameMap(submission);
+        List<String> dimensionComments = buildAnnotationHighlights(scores, dimensionNames);
 
         AnnotatedStudentReportService.RenderedReport rendered = annotatedStudentReportService.render(
                 submission.getOriginalFilename(),
@@ -345,7 +317,9 @@ public class GradingSubmissionService {
             return;
         }
         List<ScoreItemEntity> scores = scoreItemRepo.findAllBySubmissionId(submission.getId());
-        String teacherComment = buildTeacherComment(submission, scores);
+        Map<Long, String> dimensionNames = buildDimensionNameMap(submission);
+        ExperimentContext experimentContext = extractExperimentContext(submission.getId());
+        String teacherComment = buildTeacherComment(submission, scores, dimensionNames, experimentContext);
         createAnnotatedReport(submission, scores, teacherComment);
     }
 
@@ -396,28 +370,70 @@ public class GradingSubmissionService {
         }
         return total.setScale(2, RoundingMode.HALF_UP);
     }
+    private String generateStructuredReview(GradingSubmissionEntity submission,
+                                            List<ScoreItemEntity> scores,
+                                            Map<Long, String> dimensionNames,
+                                            ExperimentContext experimentContext) {
+        if (scores == null || scores.isEmpty()) {
+            return generateSimpleReview(submission, List.of(), dimensionNames, experimentContext);
+        }
 
-    private String generateSimpleReview(GradingSubmissionEntity submission, List<ScoreItemEntity> scores) {
         BigDecimal total = submission.getTotalScore();
-        String name = submission.getStudentName() != null ? submission.getStudentName() : "同学";
+        String name = submission.getStudentName() != null ? submission.getStudentName() : "该同学";
+        List<DimensionInsight> rankedInsights = buildRankedInsights(scores, dimensionNames);
+        List<DimensionInsight> strengths = rankedInsights.stream()
+                .sorted(Comparator.comparing(DimensionInsight::ratio).reversed())
+                .limit(2)
+                .toList();
+        List<DimensionInsight> weaknesses = rankedInsights.stream()
+                .sorted(Comparator.comparing(DimensionInsight::ratio))
+                .filter(insight -> insight.ratio() < 0.9d)
+                .limit(2)
+                .toList();
+
         StringBuilder builder = new StringBuilder();
-        builder.append(name).append("：");
+        builder.append("总体评价：")
+                .append(name)
+                .append("本次实验")
+                .append(overallPerformanceText(total))
+                .append("，本次批改重点关注你对实验原理、实现过程、结果分析和结论提炼的掌握情况，不以格式性细节作为主要扣分依据。");
 
-        if (total != null && total.compareTo(new BigDecimal("85")) >= 0) {
-            builder.append("本次实验报告整体完成质量较好。");
-        } else if (total != null && total.compareTo(new BigDecimal("70")) >= 0) {
-            builder.append("本次实验报告基本达到要求，但仍有进一步打磨空间。");
-        } else {
-            builder.append("本次实验报告存在较多不足，需要继续完善。");
+        String requirementFocus = experimentContext.toReviewLine();
+        if (!requirementFocus.isBlank()) {
+            builder.append("\n实验要求对照：").append(requirementFocus);
         }
 
-        for (ScoreItemEntity score : scores) {
-            if (score.getComment() != null && !score.getComment().isBlank()) {
-                builder.append(score.getComment().trim()).append(' ');
-            }
-        }
-        builder.append("建议后续重点补强过程说明、结果分析和实验结论。");
+        builder.append("\n知识掌握情况：")
+                .append(buildKnowledgeSummary(total, strengths, weaknesses));
+
+        builder.append("\n主要优点：")
+                .append(buildInsightSummary(strengths, "整体完成较稳定，说明你对实验核心内容已经具备基础理解。", false));
+
+        builder.append("\n当前薄弱点：")
+                .append(buildInsightSummary(weaknesses, "目前没有明显短板，后续可继续提升分析深度和迁移应用能力。", true));
+
+        builder.append("\n改进建议：")
+                .append(buildImprovementAdvice(weaknesses, strengths));
         return builder.toString().trim();
+    }
+
+    private String generateSimpleReview(GradingSubmissionEntity submission,
+                                        List<ScoreItemEntity> scores,
+                                        Map<Long, String> dimensionNames,
+                                        ExperimentContext experimentContext) {
+        BigDecimal total = submission.getTotalScore();
+        String name = submission.getStudentName() != null ? submission.getStudentName() : "该同学";
+        List<DimensionInsight> weaknesses = buildRankedInsights(scores, dimensionNames).stream()
+                .sorted(Comparator.comparing(DimensionInsight::ratio))
+                .filter(insight -> !insight.formatOnly())
+                .limit(2)
+                .toList();
+        String requirementFocus = experimentContext.toReviewLine();
+        return "总体评价：" + name + "本次实验" + overallPerformanceText(total)
+                + (requirementFocus.isBlank() ? "" : "。本次实验应重点围绕" + requirementFocus)
+                + "。后续请重点加强"
+                + buildInsightSummary(weaknesses, "实验原理理解、结果解释和结论提炼", true)
+                + "，写报告时优先说明自己为什么这样做、结果说明了什么。";
     }
 
     private Map<String, Object> scoreDto(ScoreItemEntity scoreItem) {
@@ -504,7 +520,6 @@ public class GradingSubmissionService {
         }
         return "";
     }
-
     private void upsertLegacyScore(Student student,
                                    GradingSubmissionEntity gradingSubmission,
                                    Experiment experiment,
@@ -559,9 +574,11 @@ public class GradingSubmissionService {
                                         List<ScoreItemEntity> scoreItems) {
         String baseReport = latestSubmission != null ? latestSubmission.getReport() : null;
         String normalizedBase = normalizeBaseReport(baseReport, experiment);
-        String teacherComment = buildTeacherComment(gradingSubmission, scoreItems);
+        Map<Long, String> dimensionNames = buildDimensionNameMap(gradingSubmission);
+        ExperimentContext experimentContext = extractExperimentContext(gradingSubmission.getId());
+        String teacherComment = buildTeacherComment(gradingSubmission, scoreItems, dimensionNames, experimentContext);
         String scoreText = gradingSubmission.getTotalScore() == null
-                ? "待评分"
+                ? "待评"
                 : gradingSubmission.getTotalScore().setScale(1, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString() + " 分";
 
         return normalizedBase.trim()
@@ -586,25 +603,35 @@ public class GradingSubmissionService {
         return normalized.trim();
     }
 
-    private String buildTeacherComment(GradingSubmissionEntity gradingSubmission, List<ScoreItemEntity> scoreItems) {
+    private String buildTeacherComment(GradingSubmissionEntity gradingSubmission,
+                                       List<ScoreItemEntity> scoreItems,
+                                       Map<Long, String> dimensionNames,
+                                       ExperimentContext experimentContext) {
         StringBuilder builder = new StringBuilder();
         if (gradingSubmission.getFinalReviewComment() != null && !gradingSubmission.getFinalReviewComment().isBlank()) {
             builder.append(gradingSubmission.getFinalReviewComment().trim());
         }
 
-        List<String> dimensionComments = scoreItems.stream()
-                .map(ScoreItemEntity::getComment)
-                .filter(Objects::nonNull)
-                .map(String::trim)
-                .filter(comment -> !comment.isBlank())
-                .toList();
-        if (!dimensionComments.isEmpty()) {
+        String requirementFocus = experimentContext.toTeacherCommentLine();
+        if (!requirementFocus.isBlank()) {
             if (builder.length() > 0) {
                 builder.append("\n\n");
             }
-            builder.append("分项意见：\n");
-            for (String comment : dimensionComments) {
-                builder.append("- ").append(comment).append('\n');
+            builder.append("实验要求：").append(requirementFocus);
+        }
+
+        List<String> scoreLines = scoreItems.stream()
+                .sorted(Comparator.comparing(ScoreItemEntity::getDimensionId))
+                .map(scoreItem -> formatScoreLine(scoreItem, dimensionNames))
+                .filter(Objects::nonNull)
+                .toList();
+        if (!scoreLines.isEmpty()) {
+            if (builder.length() > 0) {
+                builder.append("\n\n");
+            }
+            builder.append("具体得分：\n");
+            for (String line : scoreLines) {
+                builder.append("- ").append(line).append('\n');
             }
         }
 
@@ -614,5 +641,304 @@ public class GradingSubmissionService {
         return builder.toString().trim();
     }
 
+    private ExperimentContext extractExperimentContext(Long submissionId) {
+        List<EvidenceBlockEntity> evidenceBlocks = evidenceRepo.findAllBySubmissionId(submissionId);
+        List<String> lines = new ArrayList<>();
+        for (EvidenceBlockEntity evidenceBlock : evidenceBlocks) {
+            if (evidenceBlock == null || evidenceBlock.getContent() == null || evidenceBlock.getContent().isBlank()) {
+                continue;
+            }
+            String kind = evidenceBlock.getKind() == null ? "" : evidenceBlock.getKind().name();
+            if ("VLM_FAILED".equalsIgnoreCase(kind)) {
+                continue;
+            }
+            for (String line : evidenceBlock.getContent().replace('\r', '\n').split("\n")) {
+                String normalized = normalizeEvidenceLine(line);
+                if (!normalized.isBlank()) {
+                    lines.add(normalized);
+                }
+                if (lines.size() >= 160) {
+                    break;
+                }
+            }
+            if (lines.size() >= 160) {
+                break;
+            }
+        }
+        return new ExperimentContext(
+                extractSectionSnippet(lines, List.of("实验目的", "实验目标", "目的")),
+                extractSectionSnippet(lines, List.of("上机要求", "实验要求", "任务要求", "要求")),
+                extractSectionSnippet(lines, List.of("实验内容", "实验任务", "实验原理", "主要内容"))
+        );
+    }
+
+    private Map<Long, String> buildDimensionNameMap(GradingSubmissionEntity submission) {
+        Map<Long, String> result = new HashMap<>();
+        if (submission == null || submission.getTask() == null || submission.getTask().getRubric() == null) {
+            return result;
+        }
+        for (RubricDimensionEntity dimension : submission.getTask().getRubric().getDimensions()) {
+            result.put(dimension.getId(), dimension.getName());
+        }
+        return result;
+    }
+
+    private List<DimensionInsight> buildRankedInsights(List<ScoreItemEntity> scores, Map<Long, String> dimensionNames) {
+        return scores.stream()
+                .map(score -> toInsight(score, dimensionNames))
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
+    private DimensionInsight toInsight(ScoreItemEntity scoreItem, Map<Long, String> dimensionNames) {
+        if (scoreItem == null || scoreItem.getMaxScore() == null || scoreItem.getMaxScore().compareTo(BigDecimal.ZERO) <= 0) {
+            return null;
+        }
+        double ratio = scoreItem.getScore() == null
+                ? 0d
+                : scoreItem.getScore().divide(scoreItem.getMaxScore(), 4, RoundingMode.HALF_UP).doubleValue();
+        String dimensionName = dimensionNames.getOrDefault(scoreItem.getDimensionId(), "维度" + scoreItem.getDimensionId());
+        String comment = normalizeComment(scoreItem.getComment());
+        boolean formatOnly = isFormatOnlyComment(comment);
+        return new DimensionInsight(dimensionName, ratio, comment, scoreItem.getScore(), scoreItem.getMaxScore(), formatOnly);
+    }
+
+    private String normalizeComment(String comment) {
+        if (comment == null) {
+            return "";
+        }
+        return comment.replace('\r', ' ').replace('\n', ' ').replaceAll("\\s+", " ").trim();
+    }
+
+    private String normalizeEvidenceLine(String line) {
+        if (line == null) {
+            return "";
+        }
+        return line.replace('\u3000', ' ')
+                .replaceAll("^[#>*\\-\\d.\\s]+", "")
+                .replaceAll("\\s+", " ")
+                .trim();
+    }
+
+    private String extractSectionSnippet(List<String> lines, List<String> sectionKeywords) {
+        if (lines == null || lines.isEmpty()) {
+            return "";
+        }
+        for (int i = 0; i < lines.size(); i++) {
+            String current = lines.get(i);
+            if (!containsAnyKeyword(current, sectionKeywords)) {
+                continue;
+            }
+            List<String> parts = new ArrayList<>();
+            parts.add(trimSectionPrefix(current, sectionKeywords));
+            for (int j = i + 1; j < lines.size() && parts.size() < 4; j++) {
+                String next = lines.get(j);
+                if (looksLikeAnotherSection(next)) {
+                    break;
+                }
+                if (!next.isBlank()) {
+                    parts.add(next);
+                }
+            }
+            String snippet = String.join("；", parts).replaceAll("；+", "；").trim();
+            if (!snippet.isBlank()) {
+                return snippet.length() > 120 ? snippet.substring(0, 120) : snippet;
+            }
+        }
+        return "";
+    }
+
+    private boolean containsAnyKeyword(String text, List<String> keywords) {
+        for (String keyword : keywords) {
+            if (text.contains(keyword)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String trimSectionPrefix(String text, List<String> keywords) {
+        String result = text;
+        for (String keyword : keywords) {
+            result = result.replace(keyword, "");
+        }
+        result = result.replaceFirst("^[：:：\\-\\s]+", "").trim();
+        return result.isBlank() ? text.trim() : result;
+    }
+
+    private boolean looksLikeAnotherSection(String text) {
+        return containsAnyKeyword(text, List.of(
+                "实验目的", "实验目标", "上机要求", "实验要求", "任务要求",
+                "实验内容", "实验任务", "实验原理", "实验步骤", "实验结果", "实验总结", "结论"
+        ));
+    }
+
+    private boolean isFormatOnlyComment(String comment) {
+        if (comment == null || comment.isBlank()) {
+            return false;
+        }
+        String normalized = comment.toLowerCase();
+        boolean hasFormatKeyword = Set.of(
+                "格式", "排版", "版面", "字体", "实验环境", "环境配置",
+                "python版本", "python 版本", "页码", "封面", "截图", "命名规范"
+        ).stream().anyMatch(normalized::contains);
+        boolean hasKnowledgeKeyword = Set.of(
+                "原理", "方法", "步骤", "结果", "分析", "结论",
+                "理解", "知识点", "思路", "实现", "数据", "误差", "问题", "验证"
+        ).stream().anyMatch(normalized::contains);
+        return hasFormatKeyword && !hasKnowledgeKeyword;
+    }
+
+    private String overallPerformanceText(BigDecimal total) {
+        if (total == null) {
+            return "仍在等待评分结果";
+        }
+        if (total.compareTo(new BigDecimal("90")) >= 0) {
+            return "表现较好，对核心知识和实验任务的掌握较为扎实";
+        }
+        if (total.compareTo(new BigDecimal("80")) >= 0) {
+            return "完成度较高，已经体现出较好的知识理解和实验分析能力";
+        }
+        if (total.compareTo(new BigDecimal("75")) >= 0) {
+            return "整体达到要求，核心内容基本掌握，但部分知识点的应用还不够稳定";
+        }
+        return "还有进一步提升空间，建议重点回看关键知识点和实验分析过程";
+    }
+
+    private String buildKnowledgeSummary(BigDecimal total,
+                                         List<DimensionInsight> strengths,
+                                         List<DimensionInsight> weaknesses) {
+        if (total == null) {
+            return "当前尚未形成完整评分，建议先查看分项结果。";
+        }
+        StringBuilder builder = new StringBuilder();
+        if (!strengths.isEmpty()) {
+            builder.append("在")
+                    .append(joinDimensionNames(strengths))
+                    .append("方面表现较稳，说明对相关知识点已有一定理解。");
+        }
+        if (!weaknesses.isEmpty()) {
+            if (builder.length() > 0) {
+                builder.append(" ");
+            }
+            builder.append("后续应重点补强")
+                    .append(joinDimensionNames(weaknesses))
+                    .append("，尤其要把“会做”进一步提升到“会解释、会分析、会总结”。");
+        }
+        return builder.length() == 0
+                ? "本次实验结果说明你对基础内容已有一定掌握，后续可继续提升分析深度和迁移应用能力。"
+                : builder.toString();
+    }
+    private String buildInsightSummary(List<DimensionInsight> insights, String fallback, boolean focusWeakness) {
+        if (insights == null || insights.isEmpty()) {
+            return fallback;
+        }
+        List<String> parts = new ArrayList<>();
+        for (DimensionInsight insight : insights) {
+            String detail = insight.comment();
+            if (detail.isBlank() || (focusWeakness && insight.formatOnly())) {
+                detail = focusWeakness
+                        ? "需要进一步结合实验现象解释思路与依据"
+                        : "完成情况较为稳定";
+            }
+            parts.add(insight.dimensionName() + "方面" + detail);
+        }
+        return String.join("；", parts) + "。";
+    }
+
+    private String buildImprovementAdvice(List<DimensionInsight> weaknesses, List<DimensionInsight> strengths) {
+        List<String> advice = new ArrayList<>();
+        if (weaknesses != null && !weaknesses.isEmpty()) {
+            advice.add("先围绕" + joinDimensionNames(weaknesses) + "复盘实验过程，明确每一步为什么这样做、结果说明了什么。");
+        }
+        advice.add("撰写实验报告时优先说明原理理解、关键步骤、结果分析和问题定位，不必把精力过多放在实验环境、版本号或排版等格式性细节上。");
+        if (strengths != null && !strengths.isEmpty()) {
+            advice.add("把你在" + joinDimensionNames(strengths) + "中的已有优势继续保留下来，并尝试迁移到薄弱环节。");
+        }
+        return String.join("", advice);
+    }
+
+    private String joinDimensionNames(List<DimensionInsight> insights) {
+        return insights.stream()
+                .map(DimensionInsight::dimensionName)
+                .distinct()
+                .limit(3)
+                .reduce((left, right) -> left + "、" + right)
+                .orElse("相关维度");
+    }
+
+    private String formatScoreLine(ScoreItemEntity scoreItem, Map<Long, String> dimensionNames) {
+        if (scoreItem == null) {
+            return null;
+        }
+        String name = dimensionNames.getOrDefault(scoreItem.getDimensionId(), "维度" + scoreItem.getDimensionId());
+        String scoreText = (scoreItem.getScore() == null ? "待评" : scoreItem.getScore().stripTrailingZeros().toPlainString())
+                + "/" + (scoreItem.getMaxScore() == null ? "-" : scoreItem.getMaxScore().stripTrailingZeros().toPlainString());
+        String comment = normalizeComment(scoreItem.getComment());
+        if (comment.isBlank()) {
+            return name + "：" + scoreText;
+        }
+        return name + "：" + scoreText + "。点评：" + comment;
+    }
+
+    private List<String> buildAnnotationHighlights(List<ScoreItemEntity> scores, Map<Long, String> dimensionNames) {
+        List<DimensionInsight> ranked = buildRankedInsights(scores, dimensionNames);
+        List<String> highlights = new ArrayList<>();
+        ranked.stream()
+                .sorted(Comparator.comparing(DimensionInsight::ratio).reversed())
+                .limit(2)
+                .forEach(insight -> highlights.add("优点：" + insight.dimensionName() + "表现较稳，" + conciseInsightComment(insight, false)));
+        ranked.stream()
+                .sorted(Comparator.comparing(DimensionInsight::ratio))
+                .filter(insight -> !insight.formatOnly())
+                .limit(2)
+                .forEach(insight -> highlights.add("薄弱点：" + insight.dimensionName() + "需要加强，" + conciseInsightComment(insight, true)));
+        return highlights.stream().distinct().limit(4).toList();
+    }
+
+    private String conciseInsightComment(DimensionInsight insight, boolean weak) {
+        if (insight.comment().isBlank()) {
+            return weak ? "建议补充原理说明、结果分析和结论依据。" : "说明你对该部分知识掌握较好。";
+        }
+        return insight.comment().endsWith("。") ? insight.comment() : insight.comment() + "。";
+    }
+
     private record AnnotatedReportArtifact(String fileType, String contentType, String objectKey) {}
+
+    private record DimensionInsight(String dimensionName,
+                                    double ratio,
+                                    String comment,
+                                    BigDecimal score,
+                                    BigDecimal maxScore,
+                                    boolean formatOnly) {}
+
+    private record ExperimentContext(String objective, String requirements, String contents) {
+        private String toReviewLine() {
+            List<String> parts = new ArrayList<>();
+            if (objective != null && !objective.isBlank()) {
+                parts.add("实验目的为" + objective);
+            }
+            if (requirements != null && !requirements.isBlank()) {
+                parts.add("上机要求包括" + requirements);
+            }
+            if (contents != null && !contents.isBlank()) {
+                parts.add("实验内容涉及" + contents);
+            }
+            return String.join("；", parts);
+        }
+
+        private String toTeacherCommentLine() {
+            List<String> parts = new ArrayList<>();
+            if (objective != null && !objective.isBlank()) {
+                parts.add("目的：" + objective);
+            }
+            if (requirements != null && !requirements.isBlank()) {
+                parts.add("要求：" + requirements);
+            }
+            if (contents != null && !contents.isBlank()) {
+                parts.add("内容：" + contents);
+            }
+            return String.join("；", parts);
+        }
+    }
 }

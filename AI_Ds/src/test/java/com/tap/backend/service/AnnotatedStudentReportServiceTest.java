@@ -66,6 +66,7 @@ class AnnotatedStudentReportServiceTest {
         assertTrue(rendered.bytes().length > source.length);
 
         try (PDDocument pdf = PDDocument.load(rendered.bytes())) {
+            assertEquals(1, pdf.getNumberOfPages());
             String text = new PDFTextStripper().getText(pdf);
             assertTrue(text.contains("91") || text.toLowerCase().contains("score"));
         }

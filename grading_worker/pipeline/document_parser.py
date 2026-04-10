@@ -9,6 +9,8 @@ from pipeline.pdf_parser import parse_pdf
 
 def parse_document(file_bytes: bytes, filename: str | None) -> ParsedDocument:
     lower = (filename or "").lower()
+    if file_bytes.startswith(b"%PDF"):
+        return parse_pdf(file_bytes)
     if lower.endswith(".docx"):
         return parse_docx(file_bytes)
     if lower.endswith(".pdf") or not lower:

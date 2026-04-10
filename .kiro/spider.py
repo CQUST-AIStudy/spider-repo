@@ -211,7 +211,7 @@ class PTAClient:
             if resp.status_code == 200:
                 print("Cookie 有效")
                 return True
-            elif resp.status_code == 401:
+            elif resp.status_code in (401, 403):
                 print("Cookie 无效（未认证）")
             else:
                 print(f"  [调试] 验证状态码: {resp.status_code}")
@@ -331,6 +331,19 @@ class PTAClient:
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--remote-debugging-port=0")
+        chrome_options.add_argument("--window-size=1440,900")
+        chrome_options.add_argument("--disable-software-rasterizer")
+        chrome_options.add_argument("--disable-extensions")
+        chrome_options.add_argument("--disable-background-networking")
+        chrome_options.add_argument("--no-first-run")
+        chrome_options.add_argument("--no-default-browser-check")
+        chrome_options.add_argument("--disable-popup-blocking")
+        chrome_options.add_argument("--disable-features=Translate,AutomationControlled")
+        if _env_flag("PTA_HEADLESS", True):
+            # The spider usually runs in the background; headless mode avoids
+            # Chrome startup failures in service environments.
+            chrome_options.add_argument("--headless=new")
 
         # 优先使用本地缓存的 ChromeDriver，避免网络下载失败
         import glob
@@ -346,7 +359,13 @@ class PTAClient:
         else:
             print("本地无缓存，尝试在线下载 ChromeDriver...")
             service = Service(ChromeDriverManager().install())
-        self.driver = webdriver.Chrome(service=service, options=chrome_options)
+        try:
+            self.driver = webdriver.Chrome(service=service, options=chrome_options)
+        except Exception as e:
+            raise RuntimeError(
+                "failed to start Chrome for PTA auto-login; "
+                "try updating Chrome/ChromeDriver or set PTA_HEADLESS=false for interactive debug"
+            ) from e
         self.driver.implicitly_wait(10)
 
         try:
@@ -442,7 +461,7 @@ class PTAClient:
         for attempt in range(max_retries + 1):
             _rate_limiter.acquire()
             resp = self.session.get(f"{API_BASE}{path}", params=params, timeout=30)
-            if resp.status_code == 401:
+            if resp.status_code in (401, 403):
                 print("认证失效，重新登录...")
                 self.ensure_login()
                 resp = self.session.get(f"{API_BASE}{path}", params=params, timeout=30)
