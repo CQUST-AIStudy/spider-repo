@@ -13,8 +13,13 @@ if (-not (Test-Path $LOG_DIR)) {
     New-Item -ItemType Directory -Path $LOG_DIR | Out-Null
 }
 
-if (-not $env:CELERY_CONCURRENCY) { $env:CELERY_CONCURRENCY = "6" }
-if (-not $env:CELERY_POOL) { $env:CELERY_POOL = "threads" }
+& $PYTHON -c "import cryptography" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    throw "Missing Python dependency: cryptography. Install grading_worker/requirements.txt in $PYTHON before starting the grading worker."
+}
+
+if (-not $env:CELERY_CONCURRENCY) { $env:CELERY_CONCURRENCY = "1" }
+if (-not $env:CELERY_POOL) { $env:CELERY_POOL = "solo" }
 if (-not $env:DIMENSION_SCORE_CONCURRENCY) { $env:DIMENSION_SCORE_CONCURRENCY = "1" }
 if (-not $env:OCR_STRATEGY) { $env:OCR_STRATEGY = "vlm_only" }
 
@@ -29,16 +34,34 @@ foreach ($path in @($workerOut, $workerErr, $consumerOut, $consumerErr)) {
     }
 }
 
-$workerCmd = "cd /d `"$PSScriptRoot`" && `"$PYTHON`" run_worker.py 1>>`"$workerOut`" 2>>`"$workerErr`""
-$consumerCmd = "cd /d `"$PSScriptRoot`" && `"$PYTHON`" run_consumer.py 1>>`"$consumerOut`" 2>>`"$consumerErr`""
-
 Write-Host "Starting grading worker with OCR_STRATEGY=$env:OCR_STRATEGY" -ForegroundColor Green
 Write-Host "Logs: $workerOut / $consumerOut" -ForegroundColor DarkCyan
 
-$workerProc = Start-Process -FilePath "C:\Windows\System32\cmd.exe" -ArgumentList "/c", $workerCmd -WindowStyle Hidden -PassThru
+$workerCmd = "cd /d `"$PSScriptRoot`" && `"$PYTHON`" -u run_worker.py 1>>`"$workerOut`" 2>>`"$workerErr`""
+$consumerCmd = "cd /d `"$PSScriptRoot`" && `"$PYTHON`" -u run_consumer.py 1>>`"$consumerOut`" 2>>`"$consumerErr`""
+
+$workerProc = Start-Process `
+    -FilePath "C:\Windows\System32\cmd.exe" `
+    -ArgumentList "/c", $workerCmd `
+    -WindowStyle Hidden `
+    -PassThru
 Start-Sleep -Seconds 3
-$consumerProc = Start-Process -FilePath "C:\Windows\System32\cmd.exe" -ArgumentList "/c", $consumerCmd -WindowStyle Hidden -PassThru
+$consumerProc = Start-Process `
+    -FilePath "C:\Windows\System32\cmd.exe" `
+    -ArgumentList "/c", $consumerCmd `
+    -WindowStyle Hidden `
+    -PassThru
+
+Start-Sleep -Seconds 2
+$workerAlive = Get-Process -Id $workerProc.Id -ErrorAction SilentlyContinue
+$consumerAlive = Get-Process -Id $consumerProc.Id -ErrorAction SilentlyContinue
 
 Write-Host "Worker launcher PID: $($workerProc.Id)" -ForegroundColor Cyan
 Write-Host "Consumer launcher PID: $($consumerProc.Id)" -ForegroundColor Cyan
 Write-Host "Use Get-Content -Tail on the log files to inspect progress." -ForegroundColor Yellow
+if (-not $workerAlive) {
+    Write-Host "Worker process exited unexpectedly. Check: $workerErr" -ForegroundColor Red
+}
+if (-not $consumerAlive) {
+    Write-Host "Consumer process exited unexpectedly. Check: $consumerErr" -ForegroundColor Red
+}

@@ -3,12 +3,16 @@ import hashlib
 import json
 import base64
 import re
+import time
 import redis
 import httpx
 from config import VLM_API_URL, VLM_API_KEY, VLM_MODEL, REDIS_HOST, REDIS_PORT
 from models.pipeline_models import VlmResult
 
 _redis_client = None
+MAX_HTTP_RETRIES = 4
+HTTP_RETRY_BASE_DELAY = 1.2
+RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 
 
 def _get_redis():
@@ -71,6 +75,20 @@ def _extract_json_from_text(raw: str):
     return None
 
 
+def _is_retryable_http_error(exc: httpx.HTTPError) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response is not None and exc.response.status_code in RETRYABLE_STATUS_CODES
+    if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, httpx.ProtocolError)):
+        return True
+    message = str(exc).lower()
+    return (
+        "eof occurred in violation of protocol" in message
+        or "connection reset" in message
+        or "temporarily unavailable" in message
+        or "server disconnected" in message
+    )
+
+
 def call_vlm(image_bytes: bytes, task: str = "describe") -> VlmResult:
     """Call VLM API for multimodal extraction/understanding, with Redis caching."""
     img_hash = compute_image_hash(image_bytes)
@@ -124,8 +142,19 @@ def call_vlm(image_bytes: bytes, task: str = "describe") -> VlmResult:
         }
 
         headers = {"Authorization": f"Bearer {VLM_API_KEY}", "Content-Type": "application/json"}
-        resp = httpx.post(VLM_API_URL, json=payload, headers=headers, timeout=30.0)
-        resp.raise_for_status()
+        last_error = None
+        for attempt in range(MAX_HTTP_RETRIES):
+            try:
+                resp = httpx.post(VLM_API_URL, json=payload, headers=headers, timeout=30.0)
+                resp.raise_for_status()
+                break
+            except httpx.HTTPError as exc:
+                last_error = exc
+                if attempt == MAX_HTTP_RETRIES - 1 or not _is_retryable_http_error(exc):
+                    raise
+                time.sleep(HTTP_RETRY_BASE_DELAY * (attempt + 1))
+        else:
+            raise last_error
 
         data = resp.json()
         message = data.get("choices", [{}])[0].get("message", {}) or {}

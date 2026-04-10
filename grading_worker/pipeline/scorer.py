@@ -22,6 +22,9 @@ MAX_EVIDENCE_BLOCKS_PER_DIM = 4
 MAX_EVIDENCE_CHARS_PER_BLOCK = 600
 SCORE_FLOOR_RATIO_ON_SUBSTANTIAL_EVIDENCE = 0.35
 SCORE_FLOOR_RATIO_ON_EXTRACT_NOISE = 0.15
+MAX_HTTP_RETRIES = 4
+HTTP_RETRY_BASE_DELAY = 1.5
+RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 
 _redis_client = None
 
@@ -77,38 +80,63 @@ def _extract_json_object(content: str) -> dict:
     return json.loads(match.group(0))
 
 
+def _is_retryable_http_error(exc: httpx.HTTPError) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response is not None and exc.response.status_code in RETRYABLE_STATUS_CODES
+    if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, httpx.ProtocolError)):
+        return True
+    message = str(exc).lower()
+    return (
+        "eof occurred in violation of protocol" in message
+        or "connection reset" in message
+        or "temporarily unavailable" in message
+        or "server disconnected" in message
+    )
+
+
 def _post_chat_json(prompt: str, max_tokens: int) -> tuple[dict, dict]:
     if not GRADING_API_KEY:
         raise RuntimeError(f"{GRADING_AI_PROVIDER} API key is not configured")
 
-    resp = httpx.post(
-        f"{GRADING_BASE_URL}/chat/completions",
-        json={
-            "model": GRADING_MODEL,
-            "messages": [
-                {"role": "system", "content": "Return strict JSON only."},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.1,
-            "max_tokens": max_tokens,
-        },
-        headers={
-            "Authorization": f"Bearer {GRADING_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        timeout=90.0,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    usage = data.get("usage", {})
-    content = data["choices"][0]["message"]["content"]
-    parsed = _extract_json_object(content)
-    trace_info = {
-        "model_used": GRADING_MODEL,
-        "input_tokens": usage.get("prompt_tokens", 0),
-        "output_tokens": usage.get("completion_tokens", 0),
-    }
-    return parsed, trace_info
+    last_error = None
+    for attempt in range(MAX_HTTP_RETRIES):
+        try:
+            resp = httpx.post(
+                f"{GRADING_BASE_URL}/chat/completions",
+                json={
+                    "model": GRADING_MODEL,
+                    "messages": [
+                        {"role": "system", "content": "Return strict JSON only."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": max_tokens,
+                },
+                headers={
+                    "Authorization": f"Bearer {GRADING_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                timeout=90.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            usage = data.get("usage", {})
+            content = data["choices"][0]["message"]["content"]
+            parsed = _extract_json_object(content)
+            trace_info = {
+                "model_used": GRADING_MODEL,
+                "input_tokens": usage.get("prompt_tokens", 0),
+                "output_tokens": usage.get("completion_tokens", 0),
+                "http_attempts": attempt + 1,
+            }
+            return parsed, trace_info
+        except httpx.HTTPError as exc:
+            last_error = exc
+            if attempt == MAX_HTTP_RETRIES - 1 or not _is_retryable_http_error(exc):
+                raise
+            time.sleep(HTTP_RETRY_BASE_DELAY * (attempt + 1))
+
+    raise last_error
 
 
 def _to_float(value, default=None):

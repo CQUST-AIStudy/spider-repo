@@ -22,10 +22,16 @@ import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.apache.pdfbox.pdmodel.font.PDType0Font;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.apache.pdfbox.text.PDFTextStripper;
+import org.apache.pdfbox.text.TextPosition;
+import org.apache.pdfbox.util.Matrix;
 import org.apache.poi.xwpf.usermodel.ParagraphAlignment;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import org.apache.poi.xwpf.usermodel.XWPFRun;
+import org.apache.poi.xwpf.usermodel.XWPFTable;
+import org.apache.poi.xwpf.usermodel.XWPFTableCell;
+import org.apache.poi.xwpf.usermodel.XWPFTableRow;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -34,8 +40,12 @@ public class AnnotatedStudentReportService {
     public static final String FILE_TYPE_ANNOTATED_PDF = "annopdf";
 
     private static final String RED_HEX = "D62828";
+    private static final Color RED_COLOR = new Color(214, 40, 40);
     private static final String HANDWRITING_FONT = "华文行楷";
+    private static final String HANDWRITING_FALLBACK = "楷体";
+    private static final String CHECK_MARK = "√";
     private static final byte[] PDF_MAGIC = {0x25, 0x50, 0x44, 0x46};
+    private static final List<String> SCORE_KEYWORDS = List.of("得分", "分数", "成绩", "评分", "score");
 
     public RenderedReport render(String originalFilename,
                                  byte[] sourceBytes,
@@ -69,21 +79,12 @@ public class AnnotatedStudentReportService {
         try (XWPFDocument document = new XWPFDocument(new ByteArrayInputStream(sourceBytes));
              ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
             Random random = buildRandom(studentName, totalScore);
+            List<XWPFParagraph> paragraphs = collectDocxParagraphs(document);
 
-            List<XWPFParagraph> candidates = document.getParagraphs().stream()
-                    .filter(paragraph -> paragraph.getText() != null && !paragraph.getText().trim().isBlank())
-                    .toList();
-            for (Integer index : pickIndices(candidates.size(), Math.min(4, Math.max(2, candidates.size() / 8)), random)) {
-                XWPFParagraph paragraph = candidates.get(index);
-                XWPFRun run = paragraph.createRun();
-                run.setColor(RED_HEX);
-                run.setBold(true);
-                run.setFontFamily(HANDWRITING_FONT);
-                run.setFontSize(22);
-                run.setText("  √");
-            }
+            insertDocxScoreInFrontMatter(document, paragraphs, totalScore);
+            appendRandomDocxCheckMarks(paragraphs, random);
+            appendDocxReviewBlock(document, teacherComment, dimensionComments);
 
-            appendDocxReviewBlock(document, totalScore, teacherComment, dimensionComments);
             document.write(outputStream);
             return new RenderedReport(
                     FILE_TYPE_ANNOTATED_DOCX,
@@ -94,8 +95,64 @@ public class AnnotatedStudentReportService {
         }
     }
 
+    private List<XWPFParagraph> collectDocxParagraphs(XWPFDocument document) {
+        List<XWPFParagraph> result = new ArrayList<>(document.getParagraphs());
+        for (XWPFTable table : document.getTables()) {
+            collectTableParagraphs(table, result);
+        }
+        return result;
+    }
+
+    private void collectTableParagraphs(XWPFTable table, List<XWPFParagraph> target) {
+        for (XWPFTableRow row : table.getRows()) {
+            for (XWPFTableCell cell : row.getTableCells()) {
+                target.addAll(cell.getParagraphs());
+                for (XWPFTable nested : cell.getTables()) {
+                    collectTableParagraphs(nested, target);
+                }
+            }
+        }
+    }
+
+    private void insertDocxScoreInFrontMatter(XWPFDocument document,
+                                              List<XWPFParagraph> paragraphs,
+                                              BigDecimal totalScore) {
+        String scoreText = " AI评分：" + formatScore(totalScore) + "分";
+        int inspected = 0;
+        for (XWPFParagraph paragraph : paragraphs) {
+            String text = safeText(paragraph.getText());
+            if (text.isBlank()) {
+                continue;
+            }
+            inspected++;
+            if (containsScoreKeyword(text)) {
+                appendDocxRun(paragraph, scoreText, 18, true);
+                return;
+            }
+            if (inspected >= 24) {
+                break;
+            }
+        }
+
+        XWPFParagraph fallback = paragraphs.stream()
+                .filter(paragraph -> !safeText(paragraph.getText()).isBlank())
+                .findFirst()
+                .orElseGet(document::createParagraph);
+        appendDocxRun(fallback, "  " + scoreText.trim(), 18, true);
+    }
+
+    private void appendRandomDocxCheckMarks(List<XWPFParagraph> paragraphs, Random random) {
+        List<XWPFParagraph> candidates = paragraphs.stream()
+                .filter(paragraph -> !safeText(paragraph.getText()).isBlank())
+                .toList();
+        int desired = Math.min(6, Math.max(3, candidates.size() / 7));
+        for (Integer index : pickIndices(candidates.size(), desired, random)) {
+            XWPFParagraph paragraph = candidates.get(index);
+            appendDocxRun(paragraph, "  " + CHECK_MARK, 28, true);
+        }
+    }
+
     private void appendDocxReviewBlock(XWPFDocument document,
-                                       BigDecimal totalScore,
                                        String teacherComment,
                                        List<String> dimensionComments) {
         XWPFParagraph spacer = document.createParagraph();
@@ -104,28 +161,28 @@ public class AnnotatedStudentReportService {
         XWPFParagraph title = document.createParagraph();
         title.setAlignment(ParagraphAlignment.LEFT);
         XWPFRun titleRun = title.createRun();
-        titleRun.setColor(RED_HEX);
-        titleRun.setBold(true);
-        titleRun.setFontFamily(HANDWRITING_FONT);
-        titleRun.setFontSize(18);
-        titleRun.setText("教师批注");
-
-        XWPFParagraph scoreParagraph = document.createParagraph();
-        XWPFRun scoreRun = scoreParagraph.createRun();
-        scoreRun.setColor(RED_HEX);
-        scoreRun.setFontFamily(HANDWRITING_FONT);
-        scoreRun.setFontSize(16);
-        scoreRun.setBold(true);
-        scoreRun.setText("得分：" + formatScore(totalScore));
+        styleDocxRun(titleRun, 18, true);
+        titleRun.setText("教师评语");
 
         for (String line : buildReviewLines(teacherComment, dimensionComments)) {
             XWPFParagraph paragraph = document.createParagraph();
             XWPFRun run = paragraph.createRun();
-            run.setColor(RED_HEX);
-            run.setFontFamily(HANDWRITING_FONT);
-            run.setFontSize(14);
+            styleDocxRun(run, 14, false);
             run.setText(line);
         }
+    }
+
+    private void appendDocxRun(XWPFParagraph paragraph, String text, int fontSize, boolean bold) {
+        XWPFRun run = paragraph.createRun();
+        styleDocxRun(run, fontSize, bold);
+        run.setText(text);
+    }
+
+    private void styleDocxRun(XWPFRun run, int fontSize, boolean bold) {
+        run.setColor(RED_HEX);
+        run.setBold(bold);
+        run.setFontFamily(HANDWRITING_FONT);
+        run.setFontSize(fontSize);
     }
 
     private RenderedReport renderPdf(byte[] sourceBytes,
@@ -137,106 +194,106 @@ public class AnnotatedStudentReportService {
              ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
             Random random = buildRandom(studentName, totalScore);
             FontSelection fontSelection = loadPdfFont(document);
-            PDFont font = fontSelection.font();
 
-            if (!document.getPages().iterator().hasNext()) {
+            if (document.getNumberOfPages() == 0) {
                 document.addPage(new PDPage(PDRectangle.A4));
             }
 
             List<PDPage> pages = new ArrayList<>();
             document.getPages().forEach(pages::add);
 
-            PDPage firstPage = pages.get(0);
-            try (PDPageContentStream stream = new PDPageContentStream(document, firstPage, AppendMode.APPEND, true, true)) {
-                stream.setNonStrokingColor(Color.RED);
-                drawText(stream, font, 18, firstPage.getMediaBox().getWidth() - 140, firstPage.getMediaBox().getHeight() - 48,
-                        normalizeForFont(fontSelection, "得分：" + formatScore(totalScore), "Score: " + formatScore(totalScore)));
-            }
+            drawPdfScoreOnFirstPage(document, pages.get(0), fontSelection, totalScore);
+            appendRandomPdfCheckMarks(document, pages, fontSelection, random);
+            drawPdfReviewOnLastPage(document, pages.get(pages.size() - 1), fontSelection, teacherComment, dimensionComments);
 
-            List<Integer> pageIndices = pickIndices(pages.size(), Math.min(3, pages.size()), random);
-            for (Integer pageIndex : pageIndices) {
-                PDPage page = pages.get(pageIndex);
-                PDRectangle box = page.getMediaBox();
-                float baseX = box.getWidth() - 78f - random.nextInt(18);
-                float baseY = Math.max(90f, box.getHeight() * (0.45f + (random.nextFloat() * 0.3f)));
-                try (PDPageContentStream stream = new PDPageContentStream(document, page, AppendMode.APPEND, true, true)) {
-                    stream.setNonStrokingColor(Color.RED);
-                    drawText(stream, font, 28, baseX, baseY, normalizeForFont(fontSelection, "√", "V"));
-                }
-            }
-
-            appendPdfReviewPage(document, fontSelection, totalScore, teacherComment, dimensionComments);
             document.save(outputStream);
             return new RenderedReport(FILE_TYPE_ANNOTATED_PDF, ".pdf", "application/pdf", outputStream.toByteArray());
         }
     }
 
-    private void appendPdfReviewPage(PDDocument document,
-                                     FontSelection fontSelection,
-                                     BigDecimal totalScore,
-                                     String teacherComment,
-                                     List<String> dimensionComments) throws IOException {
-        PDFont font = fontSelection.font();
-        PDPage page = new PDPage(PDRectangle.A4);
-        document.addPage(page);
+    private void drawPdfScoreOnFirstPage(PDDocument document,
+                                         PDPage page,
+                                         FontSelection fontSelection,
+                                         BigDecimal totalScore) throws IOException {
+        String label = normalizeForFont(fontSelection, "AI评分：" + formatScore(totalScore) + "分",
+                "AI Score: " + formatScore(totalScore));
+        PdfTextAnchor anchor = locatePdfKeyword(document, 1, SCORE_KEYWORDS);
+        PDRectangle box = page.getMediaBox();
+        float x = anchor != null ? Math.min(box.getWidth() - 170f, anchor.endX() + 10f) : box.getWidth() - 170f;
+        float y = anchor != null ? Math.max(48f, box.getHeight() - anchor.yDirAdj() - 4f) : box.getHeight() - 52f;
 
-        float margin = 54f;
-        float width = page.getMediaBox().getWidth() - margin * 2;
-        float y = page.getMediaBox().getHeight() - 56f;
+        try (PDPageContentStream stream = new PDPageContentStream(document, page, AppendMode.APPEND, true, true)) {
+            stream.setNonStrokingColor(RED_COLOR);
+            drawPdfText(stream, fontSelection.font(), 18f, x, y, label);
+        }
+    }
 
-        try (PDPageContentStream stream = new PDPageContentStream(document, page, AppendMode.OVERWRITE, true, true)) {
-            stream.setNonStrokingColor(Color.RED);
-            String title = normalizeForFont(fontSelection, "教师批注", "Teacher Review");
-            drawText(stream, font, 20, margin, y, title);
-            y -= 34f;
+    private void appendRandomPdfCheckMarks(PDDocument document,
+                                           List<PDPage> pages,
+                                           FontSelection fontSelection,
+                                           Random random) throws IOException {
+        int desired = Math.min(5, Math.max(2, pages.size() + 1));
+        for (Integer pageIndex : pickIndices(pages.size(), desired, random)) {
+            PDPage page = pages.get(pageIndex);
+            PDRectangle box = page.getMediaBox();
+            float x = 42f + random.nextFloat() * Math.max(60f, box.getWidth() - 160f);
+            float y = 90f + random.nextFloat() * Math.max(120f, box.getHeight() - 220f);
+            float angle = (float) Math.toRadians(-18 + random.nextInt(37));
 
-            String scoreLine = normalizeForFont(fontSelection, "得分：" + formatScore(totalScore), "Score: " + formatScore(totalScore));
-            drawText(stream, font, 16, margin, y, scoreLine);
-            y -= 28f;
+            try (PDPageContentStream stream = new PDPageContentStream(document, page, AppendMode.APPEND, true, true)) {
+                stream.beginText();
+                stream.setNonStrokingColor(RED_COLOR);
+                stream.setFont(fontSelection.font(), 34f);
+                stream.setTextMatrix(Matrix.getRotateInstance(angle, x, y));
+                stream.showText(normalizeForFont(fontSelection, CHECK_MARK, "V"));
+                stream.endText();
+            }
+        }
+    }
 
-            for (String rawLine : buildReviewLines(teacherComment, dimensionComments)) {
-                for (String wrapped : wrapText(font, normalizeForFont(fontSelection, rawLine, rawLine), 12f, width)) {
-                    if (y < 60f) {
-                        page = new PDPage(PDRectangle.A4);
-                        document.addPage(page);
-                        y = page.getMediaBox().getHeight() - 56f;
-                        stream.close();
-                        throw new IllegalStateException("Unexpected PDF review overflow");
+    private void drawPdfReviewOnLastPage(PDDocument document,
+                                         PDPage page,
+                                         FontSelection fontSelection,
+                                         String teacherComment,
+                                         List<String> dimensionComments) throws IOException {
+        PDRectangle box = page.getMediaBox();
+        float margin = 52f;
+        float maxWidth = box.getWidth() - margin * 2;
+        float topY = Math.min(210f, Math.max(150f, box.getHeight() * 0.28f));
+        List<String> lines = new ArrayList<>();
+        lines.add(normalizeForFont(fontSelection, "教师评语", "Teacher Review"));
+        lines.addAll(buildReviewLines(teacherComment, dimensionComments));
+
+        try (PDPageContentStream stream = new PDPageContentStream(
+                document,
+                page,
+                AppendMode.APPEND,
+                true,
+                true
+        )) {
+            stream.setNonStrokingColor(RED_COLOR);
+            float y = topY;
+            for (int i = 0; i < lines.size(); i++) {
+                float fontSize = i == 0 ? 18f : 13f;
+                for (String wrapped : wrapPdfText(fontSelection.font(), normalizeForFont(fontSelection, lines.get(i), lines.get(i)), fontSize, maxWidth)) {
+                    if (y < 44f) {
+                        return;
                     }
-                    drawText(stream, font, 12, margin, y, wrapped);
-                    y -= 20f;
+                    drawPdfText(stream, fontSelection.font(), fontSize, margin, y, wrapped);
+                    y -= fontSize + 8f;
                 }
-                y -= 4f;
-            }
-        } catch (IllegalStateException overflow) {
-            // Review text in this workflow is intentionally short; keep a compact fallback instead of complex pagination.
-            rewriteCompactPdfReviewPage(document, fontSelection, totalScore, teacherComment);
-        }
-    }
-
-    private void rewriteCompactPdfReviewPage(PDDocument document,
-                                             FontSelection fontSelection,
-                                             BigDecimal totalScore,
-                                             String teacherComment) throws IOException {
-        PDPage lastPage = document.getPage(document.getNumberOfPages() - 1);
-        PDFont font = fontSelection.font();
-        try (PDPageContentStream stream = new PDPageContentStream(document, lastPage, AppendMode.OVERWRITE, true, true)) {
-            stream.setNonStrokingColor(Color.RED);
-            drawText(stream, font, 18, 54f, lastPage.getMediaBox().getHeight() - 56f,
-                    normalizeForFont(fontSelection, "教师批注", "Teacher Review"));
-            drawText(stream, font, 14, 54f, lastPage.getMediaBox().getHeight() - 88f,
-                    normalizeForFont(fontSelection, "得分：" + formatScore(totalScore), "Score: " + formatScore(totalScore)));
-            String compact = teacherComment == null || teacherComment.isBlank()
-                    ? normalizeForFont(fontSelection, "已完成评分，请查看分项意见。", "Scored. Please see item comments.")
-                    : teacherComment.trim();
-            for (int i = 0; i < Math.min(10, wrapText(font, normalizeForFont(fontSelection, compact, compact), 12f, 480f).size()); i++) {
-                drawText(stream, font, 12, 54f, lastPage.getMediaBox().getHeight() - 120f - i * 20f,
-                        wrapText(font, normalizeForFont(fontSelection, compact, compact), 12f, 480f).get(i));
+                y -= 2f;
             }
         }
     }
 
-    private void drawText(PDPageContentStream stream, PDFont font, float fontSize, float x, float y, String text)
+    private PdfTextAnchor locatePdfKeyword(PDDocument document, int pageNumber, List<String> keywords) throws IOException {
+        PdfKeywordLocator locator = new PdfKeywordLocator(pageNumber, keywords);
+        locator.getText(document);
+        return locator.anchor();
+    }
+
+    private void drawPdfText(PDPageContentStream stream, PDFont font, float fontSize, float x, float y, String text)
             throws IOException {
         stream.beginText();
         stream.setFont(font, fontSize);
@@ -245,12 +302,12 @@ public class AnnotatedStudentReportService {
         stream.endText();
     }
 
-    private List<String> wrapText(PDFont font, String text, float fontSize, float maxWidth) throws IOException {
-        if (text == null || text.isBlank()) {
+    private List<String> wrapPdfText(PDFont font, String text, float fontSize, float maxWidth) throws IOException {
+        if (safeText(text).isBlank()) {
             return List.of("");
         }
         List<String> lines = new ArrayList<>();
-        for (String rawLine : text.replace("\r", "").split("\n")) {
+        for (String rawLine : safeText(text).split("\n")) {
             if (rawLine.isBlank()) {
                 lines.add("");
                 continue;
@@ -275,9 +332,9 @@ public class AnnotatedStudentReportService {
 
     private FontSelection loadPdfFont(PDDocument document) throws IOException {
         List<Path> candidates = List.of(
-                Path.of("C:\\Windows\\Fonts\\simkai.ttf"),
                 Path.of("C:\\Windows\\Fonts\\STXINGKA.TTF"),
-                Path.of("C:\\Windows\\Fonts\\simhei.ttf"),
+                Path.of("C:\\Windows\\Fonts\\simkai.ttf"),
+                Path.of("C:\\Windows\\Fonts\\KAIU.TTF"),
                 Path.of("C:\\Windows\\Fonts\\msyh.ttf"),
                 Path.of("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"),
                 Path.of("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc")
@@ -298,6 +355,16 @@ public class AnnotatedStudentReportService {
         return fontSelection.supportsChinese() ? preferred : fallback;
     }
 
+    private boolean containsScoreKeyword(String text) {
+        String lower = safeText(text).toLowerCase(Locale.ROOT);
+        for (String keyword : SCORE_KEYWORDS) {
+            if (lower.contains(keyword.toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private List<String> buildReviewLines(String teacherComment, List<String> dimensionComments) {
         List<String> lines = new ArrayList<>();
         if (teacherComment != null && !teacherComment.isBlank()) {
@@ -308,29 +375,21 @@ public class AnnotatedStudentReportService {
                 }
             }
         }
-
         if (dimensionComments != null) {
             for (String comment : dimensionComments) {
-                if (comment == null) {
-                    continue;
-                }
-                String trimmed = comment.trim();
+                String trimmed = safeText(comment);
                 if (!trimmed.isBlank()) {
-                    lines.add("• " + trimmed);
+                    lines.add("· " + trimmed);
                 }
                 if (lines.size() >= 8) {
                     break;
                 }
             }
         }
-
         if (lines.isEmpty()) {
-            lines.add("请继续完善实验过程说明和结果分析。");
+            lines.add("批阅完成，请继续完善实验过程说明、结果分析与总结。");
         }
-        if (lines.size() > 8) {
-            return lines.subList(0, 8);
-        }
-        return lines;
+        return lines.size() > 8 ? lines.subList(0, 8) : lines;
     }
 
     private List<Integer> pickIndices(int size, int desiredCount, Random random) {
@@ -371,7 +430,47 @@ public class AnnotatedStudentReportService {
         return totalScore.setScale(1, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();
     }
 
+    private String safeText(String value) {
+        return value == null ? "" : value;
+    }
+
     public record RenderedReport(String fileType, String extension, String contentType, byte[] bytes) {}
 
     private record FontSelection(PDFont font, boolean supportsChinese) {}
+
+    private record PdfTextAnchor(float endX, float yDirAdj) {}
+
+    private static final class PdfKeywordLocator extends PDFTextStripper {
+        private final List<String> keywords;
+        private PdfTextAnchor anchor;
+
+        private PdfKeywordLocator(int pageNumber, List<String> keywords) throws IOException {
+            this.keywords = keywords;
+            setStartPage(pageNumber);
+            setEndPage(pageNumber);
+            setSortByPosition(true);
+        }
+
+        @Override
+        protected void writeString(String text, List<TextPosition> positions) throws IOException {
+            if (anchor != null || text == null || positions == null || positions.isEmpty()) {
+                return;
+            }
+            String lower = text.toLowerCase(Locale.ROOT);
+            for (String keyword : keywords) {
+                int start = lower.indexOf(keyword.toLowerCase(Locale.ROOT));
+                if (start < 0 || start >= positions.size()) {
+                    continue;
+                }
+                int end = Math.min(positions.size() - 1, start + keyword.length() - 1);
+                TextPosition endPos = positions.get(end);
+                anchor = new PdfTextAnchor(endPos.getXDirAdj() + endPos.getWidthDirAdj(), endPos.getYDirAdj());
+                return;
+            }
+        }
+
+        private PdfTextAnchor anchor() {
+            return anchor;
+        }
+    }
 }

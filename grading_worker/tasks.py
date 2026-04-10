@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 from decimal import Decimal
+import uuid
 
 from minio import Minio
 import redis as redis_lib
@@ -67,6 +68,11 @@ def _upload_image(minio_client, submission_id: int, ev_counter: int, image_bytes
         return img_key
     except Exception:
         return None
+
+
+def _next_evidence_id(submission_id: int, run_tag: str, ev_counter: int) -> str:
+    """Generate per-run evidence ids so retries do not clash with stale rows."""
+    return f"ev-{submission_id}-{run_tag}-{ev_counter:04d}"
 
 
 def _reset_submission_artifacts(session, submission_id: int):
@@ -148,13 +154,13 @@ def _run_ocr_if_needed(submission_id: int, image_bytes: bytes):
     return ocr_result.text.strip(), ocr_result.confidence
 
 
-def _append_image_failure(evidence_blocks, minio_client, submission_id, ev_counter, page_num, img, kind, confidence, payload=None):
+def _append_image_failure(evidence_blocks, minio_client, submission_id, run_tag, ev_counter, page_num, img, kind, confidence, payload=None):
     img_key = _upload_image(minio_client, submission_id, ev_counter, img.image_bytes)
     metadata = {"image_kind": str(kind), "ocr_empty": True}
     if payload:
         metadata["vlm_payload"] = payload
     evidence_blocks.append(EvidenceBlock(
-        evidence_id=f"ev-{submission_id}-{ev_counter:04d}",
+        evidence_id=_next_evidence_id(submission_id, run_tag, ev_counter),
         kind="vlm_failed",
         page=page_num,
         content="Image evidence exists, but the multimodal model did not extract usable content.",
@@ -199,13 +205,14 @@ def process_submission(self, task_message_json: str):
         evidence_blocks: list[EvidenceBlock] = []
         ev_counter = 0
         failure_pages = set()
+        run_tag = uuid.uuid4().hex[:8]
 
         for page in parsed.pages:
             has_page_text = bool(page.text.strip())
             if page.text.strip():
                 ev_counter += 1
                 evidence_blocks.append(EvidenceBlock(
-                    evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
+                    evidence_id=_next_evidence_id(msg.submissionId, run_tag, ev_counter),
                     kind="text",
                     page=page.page_num,
                     content=page.text[:2000],
@@ -227,7 +234,7 @@ def process_submission(self, task_message_json: str):
                     if vlm_useful:
                         ev_counter += 1
                         evidence_blocks.append(EvidenceBlock(
-                            evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
+                            evidence_id=_next_evidence_id(msg.submissionId, run_tag, ev_counter),
                             kind="vlm",
                             page=page.page_num,
                             content=json.dumps(vlm_payload, ensure_ascii=False),
@@ -240,7 +247,7 @@ def process_submission(self, task_message_json: str):
                         ev_counter += 1
                         img_key = _upload_image(minio_client, msg.submissionId, ev_counter, img.image_bytes)
                         evidence_blocks.append(EvidenceBlock(
-                            evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
+                            evidence_id=_next_evidence_id(msg.submissionId, run_tag, ev_counter),
                             kind="ocr",
                             page=page.page_num,
                             content=ocr_text,
@@ -256,6 +263,7 @@ def process_submission(self, task_message_json: str):
                             evidence_blocks,
                             minio_client,
                             msg.submissionId,
+                            run_tag,
                             ev_counter,
                             page.page_num,
                             img,
@@ -279,7 +287,7 @@ def process_submission(self, task_message_json: str):
                         ev_counter += 1
                         img_key = _upload_image(minio_client, msg.submissionId, ev_counter, img.image_bytes)
                         evidence_blocks.append(EvidenceBlock(
-                            evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
+                            evidence_id=_next_evidence_id(msg.submissionId, run_tag, ev_counter),
                             kind="ocr",
                             page=page.page_num,
                             content=ocr_text,
@@ -301,7 +309,7 @@ def process_submission(self, task_message_json: str):
                             ev_counter += 1
                             img_key = _upload_image(minio_client, msg.submissionId, ev_counter, img.image_bytes)
                             evidence_blocks.append(EvidenceBlock(
-                                evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
+                                evidence_id=_next_evidence_id(msg.submissionId, run_tag, ev_counter),
                                 kind="ocr",
                                 page=page.page_num,
                                 content=ocr_text,
@@ -315,7 +323,7 @@ def process_submission(self, task_message_json: str):
                 img_key = _upload_image(minio_client, msg.submissionId, ev_counter, img.image_bytes)
                 if vlm_useful:
                     evidence_blocks.append(EvidenceBlock(
-                        evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
+                        evidence_id=_next_evidence_id(msg.submissionId, run_tag, ev_counter),
                         kind="vlm",
                         page=page.page_num,
                         content=vlm_text,
@@ -327,7 +335,7 @@ def process_submission(self, task_message_json: str):
                 else:
                     if page.page_num not in failure_pages or not has_page_text:
                         evidence_blocks.append(EvidenceBlock(
-                            evidence_id=f"ev-{msg.submissionId}-{ev_counter:04d}",
+                            evidence_id=_next_evidence_id(msg.submissionId, run_tag, ev_counter),
                             kind="vlm_failed",
                             page=page.page_num,
                             content="Image evidence exists, but the multimodal model did not extract usable content.",
