@@ -211,6 +211,10 @@ public class GradingSubmissionService {
         Map<Long, String> dimensionNames = buildDimensionNameMap(submission);
         ExperimentContext experimentContext = extractExperimentContext(submissionId);
         String teacherComment = buildTeacherComment(submission, scores, dimensionNames, experimentContext);
+        if (submission.getFinalReviewComment() == null || submission.getFinalReviewComment().isBlank()) {
+            submission.setFinalReviewComment(teacherComment);
+            submissionRepo.save(submission);
+        }
         AnnotatedReportArtifact annotatedReport = createAnnotatedReport(submission, scores, teacherComment);
 
         Map<String, Object> result = new LinkedHashMap<>();

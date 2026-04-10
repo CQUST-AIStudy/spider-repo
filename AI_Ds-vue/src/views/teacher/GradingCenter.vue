@@ -51,7 +51,7 @@
           </el-row>
           <el-form-item label="上传PDF">
             <el-upload ref="uploadRef" :auto-upload="false" :on-change="onFileChange"
-                       accept=".pdf,.docx" multiple drag :file-list="fileList" :on-remove="onFileRemove">
+                       accept=".pdf,.docx,.doc" multiple drag :file-list="fileList" :on-remove="onFileRemove">
               <el-icon style="font-size:40px;color:#9aa0a6"><UploadFilled /></el-icon>
               <div style="color:#5f6368;margin-top:8px">拖拽 PDF 文件到此处，或点击上传（最多 200 份）</div>
             </el-upload>

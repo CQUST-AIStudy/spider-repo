@@ -107,6 +107,8 @@ public class GradingExportController {
             return ResponseEntity.status(404).body(Map.of("message", "No submissions found"));
         }
 
+        List<String> generationErrors = ensureAnnotatedReports(submissions, teacherId);
+
         Map<Long, ReportFileEntity> reportBySubId = reportFileRepo.findAllByTaskId(id).stream()
                 .filter(report -> report.getSubmissionId() != null)
                 .collect(Collectors.toMap(
@@ -169,7 +171,22 @@ public class GradingExportController {
                 for (String item : missingSubmissions) {
                     sb.append("- ").append(item).append('\n');
                 }
+                if (!generationErrors.isEmpty()) {
+                    sb.append('\n').append("Annotated report generation errors:\n");
+                    for (String item : generationErrors) {
+                        sb.append("- ").append(item).append('\n');
+                    }
+                }
                 zos.putNextEntry(new ZipEntry("README-missing-reports.txt"));
+                zos.write(sb.toString().getBytes(StandardCharsets.UTF_8));
+                zos.closeEntry();
+            } else if (!generationErrors.isEmpty()) {
+                StringBuilder sb = new StringBuilder();
+                sb.append("Some annotated reports failed to refresh before export:\n");
+                for (String item : generationErrors) {
+                    sb.append("- ").append(item).append('\n');
+                }
+                zos.putNextEntry(new ZipEntry("README-generation-warnings.txt"));
                 zos.write(sb.toString().getBytes(StandardCharsets.UTF_8));
                 zos.closeEntry();
             }
@@ -315,8 +332,10 @@ public class GradingExportController {
             return baseName + ".bin";
         }
         return switch (report.getFileType()) {
-            case AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_DOCX -> originalFilename != null ? originalFilename : baseName + ".docx";
-            case AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_PDF -> originalFilename != null ? originalFilename : baseName + ".pdf";
+            case AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_DOCX ->
+                    normalizeDownloadName(originalFilename, baseName, ".docx");
+            case AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_PDF ->
+                    normalizeDownloadName(originalFilename, baseName, ".pdf");
             case "pdf" -> baseName + "-score-report.pdf";
             default -> baseName + ".bin";
         };
@@ -359,30 +378,25 @@ public class GradingExportController {
         }
 
         int generated = 0;
+        int refreshed = 0;
         int skipped = 0;
         List<String> errors = new ArrayList<>();
 
         for (GradingSubmissionEntity submission : submissions) {
             try {
-                boolean alreadyHasAnnotated = reportFileRepo.findBySubmissionIdAndFileType(
-                        submission.getId(), AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_DOCX
-                ).isPresent() || reportFileRepo.findBySubmissionIdAndFileType(
-                        submission.getId(), AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_PDF
-                ).isPresent();
-
-                if (alreadyHasAnnotated) {
-                    skipped++;
-                    continue;
-                }
-
                 if (submission.getTotalScore() == null) {
                     skipped++;
                     continue;
                 }
 
-                // Trigger annotated report generation via the submission service
+                boolean alreadyHasAnnotated = hasAnnotatedReport(submission.getId());
+                ensureFinalReview(submission, teacherId);
                 gradingSubmissionService.publishToStudentReport(submission.getId(), teacherId);
-                generated++;
+                if (alreadyHasAnnotated) {
+                    refreshed++;
+                } else {
+                    generated++;
+                }
             } catch (Exception e) {
                 String name = submission.getStudentName() != null ? submission.getStudentName() : "id=" + submission.getId();
                 errors.add(name + ": " + e.getMessage());
@@ -392,9 +406,60 @@ public class GradingExportController {
         Map<String, Object> result = new java.util.LinkedHashMap<>();
         result.put("total", submissions.size());
         result.put("generated", generated);
+        result.put("refreshed", refreshed);
         result.put("skipped", skipped);
         result.put("errors", errors);
         return ResponseEntity.ok(result);
+    }
+
+    private List<String> ensureAnnotatedReports(List<GradingSubmissionEntity> submissions, Long teacherId) {
+        List<String> errors = new ArrayList<>();
+        for (GradingSubmissionEntity submission : submissions) {
+            if (submission.getTotalScore() == null) {
+                continue;
+            }
+            try {
+                if (!hasAnnotatedReport(submission.getId())) {
+                    ensureFinalReview(submission, teacherId);
+                    gradingSubmissionService.publishToStudentReport(submission.getId(), teacherId);
+                }
+            } catch (Exception e) {
+                String name = submission.getStudentName() != null ? submission.getStudentName() : "id=" + submission.getId();
+                errors.add(name + ": " + e.getMessage());
+            }
+        }
+        return errors;
+    }
+
+    private boolean hasAnnotatedReport(Long submissionId) {
+        return reportFileRepo.findBySubmissionIdAndFileType(
+                submissionId,
+                AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_DOCX
+        ).isPresent() || reportFileRepo.findBySubmissionIdAndFileType(
+                submissionId,
+                AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_PDF
+        ).isPresent();
+    }
+
+    private void ensureFinalReview(GradingSubmissionEntity submission, Long teacherId) {
+        if (submission.getFinalReviewComment() == null || submission.getFinalReviewComment().isBlank()) {
+            gradingSubmissionService.generateFinalReview(submission.getId(), teacherId);
+        }
+    }
+
+    private String normalizeDownloadName(String originalFilename, String baseName, String requiredExtension) {
+        if (originalFilename == null || originalFilename.isBlank()) {
+            return baseName + requiredExtension;
+        }
+        String lower = originalFilename.toLowerCase();
+        if (lower.endsWith(requiredExtension)) {
+            return originalFilename;
+        }
+        int dot = originalFilename.lastIndexOf('.');
+        if (dot >= 0) {
+            return originalFilename.substring(0, dot) + requiredExtension;
+        }
+        return originalFilename + requiredExtension;
     }
 
     private record ExportPayload(Long submissionId, String filename, byte[] bytes, String reason) {}

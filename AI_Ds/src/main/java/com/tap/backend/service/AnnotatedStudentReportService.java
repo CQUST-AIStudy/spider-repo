@@ -244,7 +244,7 @@ public class AnnotatedStudentReportService {
         separator.setAlignment(ParagraphAlignment.CENTER);
         XWPFRun sepRun = separator.createRun();
         styleDocxRun(sepRun, 11, false);
-        sepRun.setText("─────────── ✦ 教师批阅 ✦ ───────────");
+        sepRun.setText("----------- 教师批阅 -----------");
 
         // Title line
         XWPFParagraph anchor = document.createParagraph();
@@ -429,7 +429,7 @@ public class AnnotatedStudentReportService {
 
         // Separator
         styledLines.add(new StyledLine(normalizeForFont(fontSelection,
-                "──── ✦ 教师批阅 ✦ ────", "---- Teacher Review ----"), 12f));
+                "---- 教师批阅 ----", "---- Teacher Review ----"), 12f));
 
         // Title
         styledLines.add(new StyledLine(normalizeForFont(fontSelection, "教师评语", "Teacher Review"), 16f));
@@ -545,7 +545,7 @@ public class AnnotatedStudentReportService {
         stream.beginText();
         stream.setFont(font, fontSize);
         stream.newLineAtOffset(x, y);
-        stream.showText(text);
+        stream.showText(sanitizeForPdfFont(font, text));
         stream.endText();
     }
 
@@ -605,7 +605,39 @@ public class AnnotatedStudentReportService {
     }
 
     private String normalizeForFont(FontSelection fontSelection, String preferred, String fallback) {
-        return fontSelection.supportsChinese() ? preferred : fallback;
+        String candidate = fontSelection.supportsChinese() ? preferred : fallback;
+        String normalized = sanitizeForPdfFont(fontSelection.font(), candidate);
+        if (!normalized.isBlank()) {
+            return normalized;
+        }
+        return sanitizeForPdfFont(fontSelection.font(), fallback);
+    }
+
+    private String sanitizeForPdfFont(PDFont font, String text) {
+        String value = safeText(text);
+        if (value.isBlank()) {
+            return value;
+        }
+        try {
+            font.encode(value);
+            return value;
+        } catch (Exception ignored) {
+        }
+
+        StringBuilder sanitized = new StringBuilder();
+        for (char ch : value.toCharArray()) {
+            if (Character.isWhitespace(ch)) {
+                sanitized.append(ch);
+                continue;
+            }
+            try {
+                font.encode(String.valueOf(ch));
+                sanitized.append(ch);
+            } catch (Exception ignored) {
+                sanitized.append(' ');
+            }
+        }
+        return sanitized.toString().replaceAll(" {2,}", " ").trim();
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -636,7 +668,7 @@ public class AnnotatedStudentReportService {
             for (String comment : dimensionComments) {
                 String trimmed = safeText(comment);
                 if (!trimmed.isBlank()) {
-                    lines.add("· " + trimmed);
+                    lines.add("- " + trimmed);
                 }
                 if (lines.size() >= 12) {
                     break;

@@ -78,7 +78,7 @@ public class GradingTaskService {
                                            java.math.BigDecimal scoreRangeMax,
                                            MultipartFile[] files) {
         if (files == null || files.length == 0) {
-            throw new IllegalArgumentException("At least one PDF or DOCX file is required");
+            throw new IllegalArgumentException("At least one PDF or Word file is required");
         }
         if (files.length > MAX_BATCH_SIZE) {
             throw new IllegalArgumentException("Batch size exceeds maximum of " + MAX_BATCH_SIZE);
@@ -106,7 +106,7 @@ public class GradingTaskService {
         }
 
         if (validPdfs.isEmpty()) {
-            throw new IllegalArgumentException("No valid PDF or DOCX files in the batch");
+            throw new IllegalArgumentException("No valid PDF or Word files in the batch");
         }
 
         GradingTaskEntity task = new GradingTaskEntity();
@@ -150,7 +150,7 @@ public class GradingTaskService {
         }
 
         if (task.getTotalCount() <= 0) {
-            throw new IllegalArgumentException("All PDF or DOCX files failed to upload");
+            throw new IllegalArgumentException("All PDF or Word files failed to upload");
         }
 
         task = taskRepo.save(task);
