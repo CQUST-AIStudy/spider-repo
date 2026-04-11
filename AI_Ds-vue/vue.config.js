@@ -1,13 +1,10 @@
 module.exports = {
   devServer: {
-    port: Number(process.env.PORT || 8082),
+    port: Number(process.env.PORT || 8080),
     proxy: {
       '/api': {
         target: 'http://localhost:8081',
         changeOrigin: true,
-        pathRewrite: {
-          '^/api': '',
-        },
       },
       '/spider': {
         target: 'http://127.0.0.1:8100',

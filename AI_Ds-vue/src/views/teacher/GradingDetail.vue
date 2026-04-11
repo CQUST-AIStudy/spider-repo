@@ -1,6 +1,6 @@
 <template>
   <div class="grading-detail">
-    <el-page-header @back="$router.push('/teacher/grading')" title="返回" :content="`批改任务 #${taskId}`" />
+    <el-page-header @back="router.push('/teacher/grading')" title="返回" :content="`批改任务 #${taskId}`" />
 
     <div v-if="task" class="task-overview">
       <div class="overview-item">
@@ -8,45 +8,27 @@
         <el-tag :type="statusType(task.status)" effect="light" round>{{ statusText(task.status) }}</el-tag>
       </div>
       <div class="overview-item">
-        <span class="ov-value">{{ task.totalCount }}</span>
+        <span class="ov-value">{{ task.totalCount || 0 }}</span>
         <span class="ov-label">总数</span>
       </div>
       <div class="overview-item">
-        <span class="ov-value success">{{ task.completedCount }}</span>
-        <span class="ov-label">完成</span>
+        <span class="ov-value success">{{ task.completedCount || 0 }}</span>
+        <span class="ov-label">已完成</span>
       </div>
       <div class="overview-item">
-        <span class="ov-value danger">{{ task.failedCount }}</span>
+        <span class="ov-value danger">{{ task.failedCount || 0 }}</span>
         <span class="ov-label">失败</span>
       </div>
-      <div class="overview-item" v-if="task.totalCount > 0">
-        <el-progress
-          type="circle"
-          :percentage="Math.round(((task.completedCount + task.failedCount) / task.totalCount) * 100)"
-          :width="56"
-          :stroke-width="5"
-          :status="task.failedCount > 0 ? 'exception' : task.status === 'COMPLETED' ? 'success' : ''"
-        />
-      </div>
       <div class="spacer" />
-      <el-button
-        type="danger"
-        plain
-        @click="doBatchAnnotate"
-        :loading="annotating"
-        :disabled="submissions.length === 0"
-      >
-        🖊️ 生成红笔批改报告
+      <el-button type="danger" plain :loading="annotating" :disabled="submissions.length === 0" @click="doBatchAnnotate">
+        生成红笔批改报告
       </el-button>
-      <el-button
-        type="warning"
-        @click="doBatchExportAnnotated"
-        :loading="exportingAnnotated"
-        :disabled="submissions.length === 0"
-      >
-        📦 导出AI批改报告(ZIP)
+      <el-button type="warning" :loading="exportingAnnotated" :disabled="submissions.length === 0" @click="doBatchExportAnnotated">
+        导出 AI 批改报告 ZIP
       </el-button>
-      <el-button type="primary" @click="showExportDialog" :disabled="submissions.length === 0">导出 Excel</el-button>
+      <el-button type="primary" :disabled="submissions.length === 0" @click="showExportDialog">
+        导出 Excel
+      </el-button>
     </div>
 
     <div class="card">
@@ -57,8 +39,10 @@
           <el-radio-button label="SCORED">已评分</el-radio-button>
           <el-radio-button label="FAILED">失败</el-radio-button>
           <el-radio-button label="NEED_MORE_EVIDENCE">证据不足</el-radio-button>
+          <el-radio-button label="PROCESSING">处理中</el-radio-button>
         </el-radio-group>
       </div>
+
       <div class="card-body">
         <el-table
           :data="filteredSubs"
@@ -66,10 +50,10 @@
           stripe
           :header-cell-style="{ background: '#f8f9fa', color: '#202124', fontWeight: 600 }"
         >
-          <el-table-column prop="submissionId" label="ID" width="70" />
-          <el-table-column prop="studentName" label="学生" min-width="100" />
-          <el-table-column prop="className" label="班级" width="120" />
-          <el-table-column label="状态" width="120">
+          <el-table-column prop="submissionId" label="ID" width="80" />
+          <el-table-column prop="studentName" label="学生" min-width="160" show-overflow-tooltip />
+          <el-table-column prop="className" label="班级" width="140" show-overflow-tooltip />
+          <el-table-column prop="status" label="状态" width="120">
             <template #default="{ row }">
               <el-tag :type="statusType(row.status)" size="small" effect="light" round>
                 {{ statusText(row.status) }}
@@ -83,32 +67,27 @@
               </span>
             </template>
           </el-table-column>
-          <el-table-column prop="originalFilename" label="文件名" min-width="180" show-overflow-tooltip />
-          <el-table-column label="报告" width="120">
+          <el-table-column prop="originalFilename" label="原始文件" min-width="220" show-overflow-tooltip />
+          <el-table-column label="报告" width="130">
             <template #default="{ row }">
               <el-tag v-if="row.hasDownloadableReport" size="small" type="success" effect="light">
                 {{ reportTypeLabel(row.preferredReportFileType) }}
               </el-tag>
-              <span v-else class="muted-text">生成中</span>
+              <span v-else class="muted-text">未生成</span>
             </template>
           </el-table-column>
-          <el-table-column label="总评" min-width="220" show-overflow-tooltip>
+          <el-table-column label="总评" min-width="260" show-overflow-tooltip>
             <template #default="{ row }">
-              <span v-if="row.finalReviewComment" class="review-text">{{ row.finalReviewComment }}</span>
+              <span v-if="row.finalReviewComment">{{ row.finalReviewComment }}</span>
               <span v-else class="muted-text">暂无</span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="180">
+          <el-table-column label="操作" width="180" fixed="right">
             <template #default="{ row }">
-              <el-button
-                v-if="row.hasDownloadableReport"
-                link
-                type="success"
-                @click="downloadReport(row)"
-              >
+              <el-button v-if="row.hasDownloadableReport" link type="success" @click="downloadReport(row)">
                 下载报告
               </el-button>
-              <el-button link type="primary" @click="$router.push(`/teacher/grading/submission/${row.submissionId}`)">
+              <el-button link type="primary" @click="router.push(`/teacher/grading/submission/${row.submissionId}`)">
                 查看详情
               </el-button>
             </template>
@@ -118,7 +97,7 @@
     </div>
 
     <el-dialog v-model="exportVisible" title="导出成绩 Excel" width="600px">
-      <el-form label-width="100px">
+      <el-form label-width="90px">
         <el-form-item label="选择学生">
           <el-checkbox v-model="exportSelectAll" @change="toggleSelectAll">全选</el-checkbox>
         </el-form-item>
@@ -126,7 +105,7 @@
           <el-checkbox-group v-model="exportSelected">
             <div v-for="sub in submissions" :key="sub.submissionId" class="export-item">
               <el-checkbox :label="sub.submissionId">
-                {{ sub.studentName || '未知' }}
+                {{ sub.studentName || '未知学生' }}
                 <span class="muted-inline">{{ sub.className || '' }}</span>
                 <span class="score-inline">{{ sub.totalScore != null ? `${formatScore(sub.totalScore)}分` : '-' }}</span>
               </el-checkbox>
@@ -135,13 +114,12 @@
         </div>
         <el-form-item label="包含总评">
           <el-switch v-model="exportIncludeComments" />
-          <span class="hint-inline">导出时包含 AI/教师总评</span>
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="exportVisible = false">取消</el-button>
-        <el-button type="primary" @click="doExport" :loading="exporting" :disabled="exportSelected.length === 0">
-          导出 ({{ exportSelected.length }})
+        <el-button type="primary" :loading="exporting" :disabled="exportSelected.length === 0" @click="doExport">
+          导出
         </el-button>
       </template>
     </el-dialog>
@@ -150,11 +128,18 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { downloadSubmissionReport, exportGradingExcel, exportGradingTask, batchGenerateAnnotatedReports, getGradingTaskDetail } from '@/api/tap'
+import {
+  batchGenerateAnnotatedReports,
+  downloadSubmissionReport,
+  exportGradingExcel,
+  exportGradingTask,
+  getGradingTaskDetail,
+} from '@/api/tap'
 
 const route = useRoute()
+const router = useRouter()
 const taskId = route.params.id
 
 const task = ref(null)
@@ -169,6 +154,11 @@ const exportIncludeComments = ref(true)
 const exporting = ref(false)
 const annotating = ref(false)
 const exportingAnnotated = ref(false)
+
+const filteredSubs = computed(() => {
+  if (!statusFilter.value) return submissions.value
+  return submissions.value.filter(item => item.status === statusFilter.value)
+})
 
 function statusType(status) {
   return {
@@ -194,8 +184,9 @@ function statusText(status) {
 
 function scoreClass(score) {
   if (score == null) return ''
-  if (Number(score) >= 80) return 'score-good'
-  if (Number(score) >= 60) return 'score-ok'
+  const num = Number(score)
+  if (num >= 80) return 'score-good'
+  if (num >= 60) return 'score-ok'
   return 'score-low'
 }
 
@@ -212,11 +203,6 @@ function reportTypeLabel(type) {
     pdf: '评分 PDF',
   }[type] || '已生成'
 }
-
-const filteredSubs = computed(() => {
-  if (!statusFilter.value) return submissions.value
-  return submissions.value.filter(item => item.status === statusFilter.value)
-})
 
 function showExportDialog() {
   exportSelected.value = submissions.value.map(item => item.submissionId)
@@ -253,9 +239,9 @@ async function doBatchAnnotate() {
   try {
     const res = await batchGenerateAnnotatedReports(taskId)
     const data = res?.data || res
-    ElMessage.success(`批改报告生成完成：共${data.total}份，新生成${data.generated}份，跳过${data.skipped}份`)
+    ElMessage.success(`批改报告处理完成：共${data.total || 0}份，新生成${data.generated || 0}份，刷新${data.refreshed || 0}份，跳过${data.skipped || 0}份`)
     if (data.errors && data.errors.length > 0) {
-      ElMessage.warning(`${data.errors.length}份生成失败`)
+      ElMessage.warning(`${data.errors.length}份生成失败，请查看后端返回信息`)
     }
     await loadDetail()
   } catch (error) {
@@ -276,7 +262,7 @@ async function doBatchExportAnnotated() {
     a.download = `AI批改报告-任务${taskId}.zip`
     a.click()
     URL.revokeObjectURL(url)
-    ElMessage.success('批改报告ZIP导出成功')
+    ElMessage.success('批改报告 ZIP 导出成功')
   } catch (error) {
     ElMessage.error(`导出失败: ${error.message}`)
   } finally {
@@ -287,17 +273,29 @@ async function doBatchExportAnnotated() {
 async function downloadReport(row) {
   try {
     const res = await downloadSubmissionReport(row.submissionId)
-    const ext = row.preferredReportFileType === 'annodoc' ? 'docx' : 'pdf'
     const blob = new Blob([res])
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = row.originalFilename || `${row.studentName || 'submission'}.${ext}`
+    a.download = resolveAnnotatedFilename(row.originalFilename, row.studentName, row.preferredReportFileType)
     a.click()
     URL.revokeObjectURL(url)
   } catch (error) {
     ElMessage.error(`下载失败: ${error.message}`)
   }
+}
+
+function resolveAnnotatedFilename(originalFilename, studentName, reportType) {
+  const ext = reportType === 'annodoc' ? 'docx' : 'pdf'
+  if (!originalFilename) {
+    return `${studentName || 'submission'}.${ext}`
+  }
+  const lower = originalFilename.toLowerCase()
+  if (lower.endsWith(`.${ext}`)) {
+    return originalFilename
+  }
+  const dot = originalFilename.lastIndexOf('.')
+  return dot >= 0 ? `${originalFilename.slice(0, dot)}.${ext}` : `${originalFilename}.${ext}`
 }
 
 async function loadDetail() {
@@ -325,20 +323,18 @@ onMounted(loadDetail)
 .task-overview {
   display: flex;
   align-items: center;
-  gap: 32px;
+  gap: 24px;
   background: #fff;
   border-radius: 16px;
-  padding: 24px 32px;
+  padding: 20px 24px;
   margin-top: 20px;
   margin-bottom: 20px;
   border: 1px solid #dadce0;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
 .overview-item {
   display: flex;
   flex-direction: column;
-  align-items: center;
   gap: 4px;
 }
 
@@ -358,7 +354,7 @@ onMounted(loadDetail)
 
 .ov-label {
   font-size: 13px;
-  color: #9aa0a6;
+  color: #5f6368;
 }
 
 .spacer {
@@ -368,17 +364,17 @@ onMounted(loadDetail)
 .card {
   background: #fff;
   border-radius: 16px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
   border: 1px solid #dadce0;
   overflow: hidden;
 }
 
 .card-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding: 16px 24px;
-  border-bottom: 1px solid #f1f3f4;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border-bottom: 1px solid #eceff1;
 }
 
 .card-title {
@@ -388,7 +384,7 @@ onMounted(loadDetail)
 }
 
 .card-body {
-  padding: 0;
+  padding: 16px 20px 20px;
 }
 
 .score-cell {
@@ -407,42 +403,25 @@ onMounted(loadDetail)
   color: #dc2626;
 }
 
-.muted-text {
-  color: #9aa0a6;
-  font-size: 12px;
-}
-
-.review-text {
-  color: #3c4043;
-  font-size: 12px;
-}
-
-.export-list {
-  max-height: 300px;
-  overflow-y: auto;
-  border: 1px solid #e8eaed;
-  border-radius: 8px;
-  padding: 12px;
-  margin-bottom: 16px;
-}
-
-.export-item {
-  margin-bottom: 6px;
-}
-
+.muted-text,
 .muted-inline {
   color: #9aa0a6;
-  margin-left: 8px;
 }
 
 .score-inline {
-  color: #5f6368;
   margin-left: 8px;
+  color: #5f6368;
 }
 
-.hint-inline {
-  margin-left: 8px;
-  color: #9aa0a6;
-  font-size: 12px;
+.export-list {
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid #eceff1;
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.export-item + .export-item {
+  margin-top: 10px;
 }
 </style>

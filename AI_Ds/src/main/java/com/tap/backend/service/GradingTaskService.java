@@ -373,13 +373,7 @@ public class GradingTaskService {
         }
 
         if (subStatus == SubmissionStatus.SCORED || subStatus == SubmissionStatus.NEED_MORE_EVIDENCE) {
-            final Long submissionIdFinal = submissionId;
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    autoFinalizeSubmission(submissionIdFinal, teacherId);
-                }
-            });
+            autoFinalizeSubmission(submissionId, teacherId);
         }
     }
 
@@ -525,13 +519,14 @@ public class GradingTaskService {
             if (submission == null || teacherId == null) {
                 return;
             }
-
-            if (submission.getFinalReviewComment() == null || submission.getFinalReviewComment().isBlank()) {
-                gradingSubmissionService.generateFinalReview(submissionId, teacherId);
-            }
-            gradingSubmissionService.publishToStudentReport(submissionId, teacherId);
+            gradingSubmissionService.ensureReviewAndAnnotatedReport(submissionId, teacherId);
             log.info("Auto finalized submission {}", submissionId);
         } catch (Exception e) {
+            GradingSubmissionEntity submission = submissionRepo.findById(submissionId).orElse(null);
+            if (submission != null) {
+                submission.setErrorMessage("Auto finalization failed: " + e.getMessage());
+                submissionRepo.save(submission);
+            }
             log.warn("Auto finalization failed for submission {}: {}", submissionId, e.getMessage());
         }
     }

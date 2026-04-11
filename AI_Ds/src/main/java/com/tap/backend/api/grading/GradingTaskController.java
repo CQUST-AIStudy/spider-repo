@@ -8,6 +8,7 @@ import com.tap.backend.repo.ReportFileRepository;
 import com.tap.backend.security.TeacherPrincipalResolver;
 import com.tap.backend.security.UserPrincipal;
 import com.tap.backend.service.AnnotatedStudentReportService;
+import com.tap.backend.service.GradingSubmissionService;
 import com.tap.backend.service.GradingTaskService;
 import com.tap.common.api.ApiResponse;
 import java.util.Comparator;
@@ -35,15 +36,18 @@ import org.springframework.web.multipart.MultipartFile;
 public class GradingTaskController {
 
     private final GradingTaskService taskService;
+    private final GradingSubmissionService gradingSubmissionService;
     private final ReportFileRepository reportFileRepo;
     private final TeacherPrincipalResolver teacherPrincipalResolver;
 
     public GradingTaskController(
             GradingTaskService taskService,
+            GradingSubmissionService gradingSubmissionService,
             ReportFileRepository reportFileRepo,
             TeacherPrincipalResolver teacherPrincipalResolver
     ) {
         this.taskService = taskService;
+        this.gradingSubmissionService = gradingSubmissionService;
         this.reportFileRepo = reportFileRepo;
         this.teacherPrincipalResolver = teacherPrincipalResolver;
     }
@@ -108,8 +112,14 @@ public class GradingTaskController {
             List<GradingSubmissionEntity> submissions = taskService.getTaskSubmissions(id, teacherId);
             Map<Long, ReportFileEntity> preferredReports = buildPreferredReportMap(id);
 
+            if (backfillSubmissionArtifacts(submissions, preferredReports, teacherId)) {
+                submissions = taskService.getTaskSubmissions(id, teacherId);
+                preferredReports = buildPreferredReportMap(id);
+            }
+
+            final Map<Long, ReportFileEntity> reportMap = preferredReports;
             Map<String, Object> dto = new LinkedHashMap<>(toListDto(task));
-            dto.put("submissions", submissions.stream().map(submission -> toSubDto(submission, preferredReports.get(submission.getId()))).toList());
+            dto.put("submissions", submissions.stream().map(submission -> toSubDto(submission, reportMap.get(submission.getId()))).toList());
             return ResponseEntity.ok(ApiResponse.of(dto));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(404).body(Map.of("message", e.getMessage()));
@@ -218,6 +228,31 @@ public class GradingTaskController {
             case "pdf" -> 2;
             default -> 1;
         };
+    }
+
+    private boolean backfillSubmissionArtifacts(
+            List<GradingSubmissionEntity> submissions,
+            Map<Long, ReportFileEntity> preferredReports,
+            Long teacherId
+    ) {
+        boolean changed = false;
+        for (GradingSubmissionEntity submission : submissions) {
+            if (submission.getTotalScore() == null) {
+                continue;
+            }
+            ReportFileEntity preferredReport = preferredReports.get(submission.getId());
+            boolean hasAnnotatedReport = preferredReport != null && reportPriority(preferredReport) >= 3;
+            boolean missingReview = submission.getFinalReviewComment() == null || submission.getFinalReviewComment().isBlank();
+            if (!missingReview && hasAnnotatedReport) {
+                continue;
+            }
+            try {
+                gradingSubmissionService.ensureReviewAndAnnotatedReport(submission.getId(), teacherId);
+                changed = true;
+            } catch (Exception ignored) {
+            }
+        }
+        return changed;
     }
 
     private Map<String, Object> toSubDto(GradingSubmissionEntity submission, ReportFileEntity preferredReport) {

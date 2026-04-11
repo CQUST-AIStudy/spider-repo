@@ -1,4 +1,4 @@
-package com.tap.backend.service;
+﻿package com.tap.backend.service;
 
 import java.awt.BasicStroke;
 import java.awt.Color;
@@ -52,7 +52,7 @@ import org.springframework.stereotype.Service;
  * <p>
  * Supports both DOCX and PDF input files.  The output looks as if a teacher
  * physically marked the paper with a red pen: handwriting-style score on the
- * first page, scattered red check-marks (√) in the body, and a teacher review
+ * first page, scattered red check-marks (鈭? in the body, and a teacher review
  * block appended at the end.
  */
 @Service
@@ -60,27 +60,34 @@ public class AnnotatedStudentReportService {
     public static final String FILE_TYPE_ANNOTATED_DOCX = "annodoc";
     public static final String FILE_TYPE_ANNOTATED_PDF = "annopdf";
 
-    /* ── colour palette ── */
+    /* 鈹€鈹€ colour palette 鈹€鈹€ */
     private static final String RED_HEX = "D62828";
     private static final Color RED_COLOR = new Color(214, 40, 40);
     private static final Color RED_LIGHT = new Color(214, 40, 40, 180);
 
-    /* ── font names ── */
-    private static final String HANDWRITING_FONT = "华文行楷";
-    private static final String HANDWRITING_FALLBACK = "楷体";
+    /* 鈹€鈹€ font names 鈹€鈹€ */
+    private static final String HANDWRITING_FONT = "\u534e\u6587\u884c\u6977";
+    private static final String HANDWRITING_FALLBACK = "\u6977\u4f53";
 
-    /* ── marks ── */
-    private static final String DOCX_CHECK_MARK = "√";
+    /* 鈹€鈹€ marks 鈹€鈹€ */
+    private static final String DOCX_CHECK_MARK = "\u221a";
     private static final String PDF_CHECK_MARK = "V";
     private static final byte[] PDF_MAGIC = {0x25, 0x50, 0x44, 0x46};
-    private static final List<String> SCORE_KEYWORDS = List.of("得分", "分数", "成绩", "评分", "score", "总分");
+    private static final List<String> SCORE_KEYWORDS = List.of(
+            "\u5f97\u5206",
+            "\u5206\u6570",
+            "\u6210\u7ee9",
+            "\u8bc4\u5206",
+            "score",
+            "\u603b\u5206"
+    );
 
-    /* ── check-mark image cache (thread-safe lazy init) ── */
+    /* 鈹€鈹€ check-mark image cache (thread-safe lazy init) 鈹€鈹€ */
     private volatile byte[] checkMarkPngBytes;
 
-    // ════════════════════════════════════════════════════════════════════
+    // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
     //  Public entry point
-    // ════════════════════════════════════════════════════════════════════
+    // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
 
     public RenderedReport render(String originalFilename,
                                  byte[] sourceBytes,
@@ -106,9 +113,9 @@ public class AnnotatedStudentReportService {
         throw new IllegalArgumentException("Only PDF and DOCX student reports are supported");
     }
 
-    // ════════════════════════════════════════════════════════════════════
+    // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
     //  DOCX rendering
-    // ════════════════════════════════════════════════════════════════════
+    // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
 
     private RenderedReport renderDocx(byte[] sourceBytes,
                                       String studentName,
@@ -160,12 +167,12 @@ public class AnnotatedStudentReportService {
 
     /**
      * Insert a red handwriting-style score near the top of the document,
-     * next to an existing "得分" / "成绩" keyword if found.
+     * next to an existing "寰楀垎" / "鎴愮哗" keyword if found.
      */
     private void insertDocxScoreInFrontMatter(XWPFDocument document,
                                               List<XWPFParagraph> paragraphs,
                                               BigDecimal totalScore) {
-        String scoreText = " AI评分：" + formatScore(totalScore) + " 分 ";
+        String scoreText = " " + formatScore(totalScore) + "\u5206 ";
         int inspected = 0;
         for (XWPFParagraph paragraph : paragraphs) {
             String text = safeText(paragraph.getText());
@@ -191,7 +198,7 @@ public class AnnotatedStudentReportService {
     }
 
     /**
-     * Insert handwriting-style check-mark images (red √) into random paragraphs.
+     * Insert handwriting-style check-mark images (red 鈭? into random paragraphs.
      */
     private void appendDocxCheckMarkImages(XWPFDocument document,
                                            List<XWPFParagraph> paragraphs,
@@ -215,17 +222,17 @@ public class AnnotatedStudentReportService {
                             new ByteArrayInputStream(checkImg),
                             XWPFDocument.PICTURE_TYPE_PNG,
                             "check.png",
-                            Units.toEMU(28 + random.nextInt(8)),
-                            Units.toEMU(24 + random.nextInt(6))
+                            Units.toEMU(42 + random.nextInt(14)),
+                            Units.toEMU(34 + random.nextInt(10))
                     );
                 } else {
                     // Text-based red check mark with slight variation
                     String mark = random.nextBoolean() ? "  " + DOCX_CHECK_MARK : " " + DOCX_CHECK_MARK + " ";
-                    appendDocxRun(paragraph, mark, 26 + random.nextInt(8), true);
+                    appendDocxRun(paragraph, mark, 34 + random.nextInt(10), true);
                 }
             } catch (Exception ignored) {
                 // Fallback to text check mark
-                appendDocxRun(paragraph, "  " + DOCX_CHECK_MARK, 28, true);
+                appendDocxRun(paragraph, "  " + DOCX_CHECK_MARK, 38, true);
             }
         }
     }
@@ -244,7 +251,7 @@ public class AnnotatedStudentReportService {
         separator.setAlignment(ParagraphAlignment.CENTER);
         XWPFRun sepRun = separator.createRun();
         styleDocxRun(sepRun, 11, false);
-        sepRun.setText("----------- 教师批阅 -----------");
+        sepRun.setText("\u002d\u002d\u002d\u002d\u002d\u002d\u002d\u002d \u6559\u5e08\u6279\u9605 \u002d\u002d\u002d\u002d\u002d\u002d\u002d\u002d");
 
         // Title line
         XWPFParagraph anchor = document.createParagraph();
@@ -254,7 +261,7 @@ public class AnnotatedStudentReportService {
 
         XWPFRun titleRun = anchor.createRun();
         styleDocxRun(titleRun, 18, true);
-        titleRun.setText("教师评语：");
+        titleRun.setText("\u6559\u5e08\u8bc4\u8bed\uff1a");
 
         // Score summary line
         if (totalScore != null) {
@@ -263,7 +270,7 @@ public class AnnotatedStudentReportService {
             scorePara.setSpacingAfter(40);
             XWPFRun scoreRun = scorePara.createRun();
             styleDocxRun(scoreRun, 16, true);
-            scoreRun.setText("本次批改总分：" + formatScore(totalScore) + " 分");
+            scoreRun.setText("\u5b9e\u9a8c\u6210\u7ee9\uff1a" + formatScore(totalScore) + "\u5206");
         }
 
         // Review lines
@@ -283,7 +290,7 @@ public class AnnotatedStudentReportService {
         sigPara.setSpacingBefore(160);
         XWPFRun sigRun = sigPara.createRun();
         styleDocxRun(sigRun, 14, true);
-        sigRun.setText("AI 教学助手  批阅");
+        sigRun.setText("\u6559\u5e08\u6279\u9605");
     }
 
     private void appendDocxRun(XWPFParagraph paragraph, String text, int fontSize, boolean bold) {
@@ -305,9 +312,9 @@ public class AnnotatedStudentReportService {
         fonts.setEastAsia(HANDWRITING_FONT);
     }
 
-    // ════════════════════════════════════════════════════════════════════
+    // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
     //  PDF rendering
-    // ════════════════════════════════════════════════════════════════════
+    // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
 
     private RenderedReport renderPdf(byte[] sourceBytes,
                                      String studentName,
@@ -346,8 +353,8 @@ public class AnnotatedStudentReportService {
                                          FontSelection fontSelection,
                                          BigDecimal totalScore) throws IOException {
         String scoreLabel = normalizeForFont(fontSelection,
-                "AI评分：" + formatScore(totalScore) + " 分",
-                "AI Score: " + formatScore(totalScore));
+                formatScore(totalScore) + "\u5206",
+                "Score: " + formatScore(totalScore));
         PdfTextAnchor anchor = locatePdfKeyword(document, 1, SCORE_KEYWORDS);
         PDRectangle box = page.getMediaBox();
 
@@ -391,77 +398,70 @@ public class AnnotatedStudentReportService {
             float x = 30f + random.nextFloat() * Math.max(60f, box.getWidth() - 140f);
             float y = 80f + random.nextFloat() * Math.max(120f, box.getHeight() - 200f);
             float angle = (float) Math.toRadians(-22 + random.nextInt(45));
-            float size = 28f + random.nextInt(12);
+            float size = 44f + random.nextInt(18);
 
             try (PDPageContentStream stream = new PDPageContentStream(document, page, AppendMode.APPEND, true, true)) {
-                stream.beginText();
-                stream.setNonStrokingColor(RED_COLOR);
-                stream.setFont(fontSelection.font(), size);
-                stream.setTextMatrix(Matrix.getRotateInstance(angle, x, y));
-                stream.showText(PDF_CHECK_MARK);
-                stream.endText();
-
-                // Optionally draw a small tick-like stroke for more natural look
-                if (random.nextInt(3) == 0) {
-                    stream.setStrokingColor(RED_LIGHT);
-                    stream.setLineWidth(1.5f);
-                    float sx = x + size * 0.6f;
-                    float sy = y + size * 0.2f;
-                    stream.moveTo(sx, sy);
-                    stream.lineTo(sx + 6f + random.nextFloat() * 4f, sy + 8f + random.nextFloat() * 4f);
-                    stream.stroke();
-                }
+                drawPdfCheckStroke(stream, x, y, size, angle);
             }
         }
     }
 
-    private void drawPdfReviewOnLastPage(PDDocument document,
+    private void drawPdfCheckStroke(PDPageContentStream stream,
+                                    float x,
+                                    float y,
+                                    float size,
+                                    float angle) throws IOException {
+        stream.saveGraphicsState();
+        stream.transform(Matrix.getRotateInstance(angle, x, y));
+        stream.setStrokingColor(RED_COLOR);
+        stream.setLineWidth(Math.max(3.8f, size / 10f));
+        stream.moveTo(x - size * 0.48f, y + size * 0.02f);
+        stream.curveTo(
+                x - size * 0.34f, y - size * 0.02f,
+                x - size * 0.22f, y + size * 0.20f,
+                x - size * 0.08f, y + size * 0.40f
+        );
+        stream.curveTo(
+                x + size * 0.10f, y + size * 0.18f,
+                x + size * 0.34f, y - size * 0.18f,
+                x + size * 0.64f, y - size * 0.50f
+        );
+        stream.stroke();
+        stream.restoreGraphicsState();
+    }
+
+        private void drawPdfReviewOnLastPage(PDDocument document,
                                          PDPage page,
                                          FontSelection fontSelection,
                                          String teacherComment,
                                          List<String> dimensionComments,
                                          BigDecimal totalScore) throws IOException {
-        PDRectangle box = page.getMediaBox();
-        float margin = 44f;
-        float maxWidth = box.getWidth() - margin * 2;
-
         List<StyledLine> styledLines = new ArrayList<>();
-
-        // Separator
         styledLines.add(new StyledLine(normalizeForFont(fontSelection,
-                "---- 教师批阅 ----", "---- Teacher Review ----"), 12f));
-
-        // Title
-        styledLines.add(new StyledLine(normalizeForFont(fontSelection, "教师评语", "Teacher Review"), 16f));
-
-        // Score line
+                "-------- 教师批阅 --------", "-------- Teacher Review --------"), 12f));
+        styledLines.add(new StyledLine(normalizeForFont(fontSelection,
+                "教师评语", "Teacher Review"), 16f));
         if (totalScore != null) {
             styledLines.add(new StyledLine(normalizeForFont(fontSelection,
-                    "本次批改总分：" + formatScore(totalScore) + " 分",
-                    "Total Score: " + formatScore(totalScore)), 14f));
+                    "实验成绩：" + formatScore(totalScore) + "分",
+                    "Score: " + formatScore(totalScore)), 14f));
         }
-
-        // Review content
         for (String line : buildReviewLines(teacherComment, dimensionComments)) {
             styledLines.add(new StyledLine(normalizeForFont(fontSelection, line, line), 11f));
         }
-
-        // Signature
         styledLines.add(new StyledLine(normalizeForFont(fontSelection,
-                "AI 教学助手  批阅", "AI Teaching Assistant"), 12f));
+                "教师批阅", "Teacher Review"), 12f));
 
-        float y = Math.min(240f, box.getHeight() * 0.30f);
-        try (PDPageContentStream stream = new PDPageContentStream(document, page, AppendMode.APPEND, true, true)) {
+        PDRectangle templateBox = page.getMediaBox();
+        float margin = 44f;
+        float maxWidth = templateBox.getWidth() - margin * 2;
+        PDPage currentPage = page;
+        float y;
+
+        PDPageContentStream stream = new PDPageContentStream(document, currentPage, AppendMode.APPEND, true, true);
+        try {
             stream.setNonStrokingColor(RED_COLOR);
-
-            // Draw a thin separator line
-            stream.setStrokingColor(RED_LIGHT);
-            stream.setLineWidth(0.8f);
-            stream.moveTo(margin, y + 8f);
-            stream.lineTo(box.getWidth() - margin, y + 8f);
-            stream.stroke();
-
-            y -= 4f;
+            y = startPdfReviewSection(stream, templateBox, margin, fontSelection, false);
             for (StyledLine styledLine : styledLines) {
                 List<String> wrapped = wrapPdfText(
                         fontSelection.font(),
@@ -470,20 +470,49 @@ public class AnnotatedStudentReportService {
                         maxWidth
                 );
                 for (String line : wrapped) {
-                    if (y < 36f) {
-                        return;
+                    float nextLineHeight = styledLine.fontSize() + 6f;
+                    if (y - nextLineHeight < 40f) {
+                        stream.close();
+                        currentPage = new PDPage(templateBox);
+                        document.addPage(currentPage);
+                        stream = new PDPageContentStream(document, currentPage, AppendMode.APPEND, true, true);
+                        stream.setNonStrokingColor(RED_COLOR);
+                        y = startPdfReviewSection(stream, templateBox, margin, fontSelection, true);
                     }
                     drawPdfText(stream, fontSelection.font(), styledLine.fontSize(), margin, y, line);
-                    y -= styledLine.fontSize() + 6f;
+                    y -= nextLineHeight;
                 }
                 y -= 4f;
             }
+        } finally {
+            stream.close();
         }
     }
 
-    // ════════════════════════════════════════════════════════════════════
+    private float startPdfReviewSection(PDPageContentStream stream,
+                                        PDRectangle box,
+                                        float margin,
+                                        FontSelection fontSelection,
+                                        boolean continued) throws IOException {
+        float y = continued ? box.getHeight() - 72f : Math.min(240f, box.getHeight() * 0.30f);
+        stream.setStrokingColor(RED_LIGHT);
+        stream.setLineWidth(0.9f);
+        stream.moveTo(margin, y + 10f);
+        stream.lineTo(box.getWidth() - margin, y + 10f);
+        stream.stroke();
+        if (continued) {
+            drawPdfText(stream, fontSelection.font(), 14f, margin, y - 2f,
+                    normalizeForFont(fontSelection, "教师评语（续）", "Teacher Review (Cont.)"));
+            y -= 24f;
+        } else {
+            y -= 4f;
+        }
+        return y;
+    }
+
+    // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
     //  Check-mark image generation (for DOCX)
-    // ════════════════════════════════════════════════════════════════════
+    // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
 
     /**
      * Generate a red handwriting-style check-mark as a PNG image.
@@ -506,21 +535,20 @@ public class AnnotatedStudentReportService {
         return checkMarkPngBytes;
     }
 
-    private byte[] renderCheckMarkImage() throws IOException {
-        int w = 48, h = 44;
+        private byte[] renderCheckMarkImage() throws IOException {
+        int w = 92, h = 76;
         BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = img.createGraphics();
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE);
 
-        // Draw a hand-drawn style check mark
         g.setColor(RED_COLOR);
-        g.setStroke(new BasicStroke(3.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        g.setStroke(new BasicStroke(5.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
 
         Path2D.Float path = new Path2D.Float();
-        path.moveTo(6, 24);
-        path.curveTo(10, 26, 14, 32, 18, 38);
-        path.curveTo(22, 34, 30, 18, 42, 6);
+        path.moveTo(10, 38);
+        path.curveTo(18, 44, 24, 50, 32, 62);
+        path.curveTo(42, 50, 58, 28, 82, 10);
 
         g.draw(path);
         g.dispose();
@@ -530,9 +558,9 @@ public class AnnotatedStudentReportService {
         return baos.toByteArray();
     }
 
-    // ════════════════════════════════════════════════════════════════════
+    // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
     //  PDF text utilities
-    // ════════════════════════════════════════════════════════════════════
+    // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
 
     private PdfTextAnchor locatePdfKeyword(PDDocument document, int pageNumber, List<String> keywords) throws IOException {
         PdfKeywordLocator locator = new PdfKeywordLocator(pageNumber, keywords);
@@ -640,9 +668,9 @@ public class AnnotatedStudentReportService {
         return sanitized.toString().replaceAll(" {2,}", " ").trim();
     }
 
-    // ════════════════════════════════════════════════════════════════════
+    // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
     //  Shared utilities
-    // ════════════════════════════════════════════════════════════════════
+    // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
 
     private boolean containsScoreKeyword(String text) {
         String lower = safeText(text).toLowerCase(Locale.ROOT);
@@ -654,7 +682,7 @@ public class AnnotatedStudentReportService {
         return false;
     }
 
-    private List<String> buildReviewLines(String teacherComment, List<String> dimensionComments) {
+        private List<String> buildReviewLines(String teacherComment, List<String> dimensionComments) {
         List<String> lines = new ArrayList<>();
         if (teacherComment != null && !teacherComment.isBlank()) {
             for (String line : teacherComment.replace("\r", "").split("\n")) {
@@ -670,15 +698,15 @@ public class AnnotatedStudentReportService {
                 if (!trimmed.isBlank()) {
                     lines.add("- " + trimmed);
                 }
-                if (lines.size() >= 12) {
+                if (lines.size() >= 24) {
                     break;
                 }
             }
         }
         if (lines.isEmpty()) {
-            lines.add("批阅完成，请继续完善实验过程说明、结果分析与总结。");
+            lines.add("批阅完成，请继续围绕实验任务、原理理解、结果分析与总结反思进一步完善报告。");
         }
-        return lines.size() > 12 ? lines.subList(0, 12) : lines;
+        return lines.size() > 24 ? lines.subList(0, 24) : lines;
     }
 
     private List<Integer> pickIndices(int size, int desiredCount, Random random) {
@@ -723,9 +751,9 @@ public class AnnotatedStudentReportService {
         return value == null ? "" : value;
     }
 
-    // ════════════════════════════════════════════════════════════════════
+    // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
     //  Records & inner classes
-    // ════════════════════════════════════════════════════════════════════
+    // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
 
     public record RenderedReport(String fileType, String extension, String contentType, byte[] bytes) {}
 
@@ -769,3 +797,4 @@ public class AnnotatedStudentReportService {
         }
     }
 }
+

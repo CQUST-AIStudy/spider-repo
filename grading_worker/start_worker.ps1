@@ -18,8 +18,8 @@ if ($LASTEXITCODE -ne 0) {
     throw "Missing Python dependency: cryptography. Install grading_worker/requirements.txt in $PYTHON before starting the grading worker."
 }
 
-if (-not $env:CELERY_CONCURRENCY) { $env:CELERY_CONCURRENCY = "1" }
-if (-not $env:CELERY_POOL) { $env:CELERY_POOL = "solo" }
+if (-not $env:CELERY_CONCURRENCY) { $env:CELERY_CONCURRENCY = "3" }
+if (-not $env:CELERY_POOL) { $env:CELERY_POOL = "threads" }
 if (-not $env:DIMENSION_SCORE_CONCURRENCY) { $env:DIMENSION_SCORE_CONCURRENCY = "1" }
 if (-not $env:OCR_STRATEGY) { $env:OCR_STRATEGY = "vlm_only" }
 
@@ -34,7 +34,7 @@ foreach ($path in @($workerOut, $workerErr, $consumerOut, $consumerErr)) {
     }
 }
 
-Write-Host "Starting grading worker with OCR_STRATEGY=$env:OCR_STRATEGY" -ForegroundColor Green
+Write-Host "Starting grading worker with OCR_STRATEGY=$env:OCR_STRATEGY, CELERY_POOL=$env:CELERY_POOL, CELERY_CONCURRENCY=$env:CELERY_CONCURRENCY" -ForegroundColor Green
 Write-Host "Logs: $workerOut / $consumerOut" -ForegroundColor DarkCyan
 
 $workerCmd = "cd /d `"$PSScriptRoot`" && `"$PYTHON`" -u run_worker.py 1>>`"$workerOut`" 2>>`"$workerErr`""

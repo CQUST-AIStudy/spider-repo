@@ -102,7 +102,7 @@ public class GradingSubmissionController {
     ) {
         Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
         try {
-            return ResponseEntity.ok(ApiResponse.of(submissionService.publishToStudentReport(id, teacherId)));
+            return ResponseEntity.ok(ApiResponse.of(submissionService.ensureReviewAndAnnotatedReport(id, teacherId)));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
         }

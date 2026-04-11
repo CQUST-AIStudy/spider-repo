@@ -1,4 +1,4 @@
-package com.tap.backend.service;
+﻿package com.tap.backend.service;
 
 import com.cqust.ai_server.dao.ExperimentDao;
 import com.cqust.ai_server.dao.ScoreDao;
@@ -238,6 +238,36 @@ public class GradingSubmissionService {
         return result;
     }
 
+    @Transactional
+    public Map<String, Object> ensureReviewAndAnnotatedReport(Long submissionId, Long teacherId) {
+        GradingSubmissionEntity submission = requireOwnedSubmission(submissionId, teacherId);
+        if (submission.getTotalScore() == null) {
+            throw new IllegalStateException("Submission has not been scored yet");
+        }
+
+        boolean needsReview = submission.getFinalReviewComment() == null || submission.getFinalReviewComment().isBlank();
+        boolean needsAnnotatedReport = !hasAnnotatedReport(submissionId);
+
+        if (needsReview) {
+            generateFinalReview(submissionId, teacherId);
+            submission = requireOwnedSubmission(submissionId, teacherId);
+        }
+
+        if (needsAnnotatedReport || needsReview) {
+            return publishToStudentReport(submissionId, teacherId);
+        }
+
+        ReportFileEntity preferredReport = selectPreferredReport(submissionId);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("submissionId", submissionId);
+        result.put("studentName", submission.getStudentName());
+        result.put("finalReviewComment", submission.getFinalReviewComment());
+        result.put("annotatedReady", preferredReport != null);
+        result.put("annotatedFileType", preferredReport != null ? preferredReport.getFileType() : null);
+        result.put("annotatedObjectKey", preferredReport != null ? preferredReport.getObjectKey() : null);
+        return result;
+    }
+
     private void publishLegacyReport(GradingSubmissionEntity submission,
                                      List<ScoreItemEntity> scores,
                                      int experimentId,
@@ -310,14 +340,7 @@ public class GradingSubmissionService {
     }
 
     private void refreshAnnotatedReportIfPresent(GradingSubmissionEntity submission) {
-        boolean hasAnnotatedReport = reportFileRepo.findBySubmissionIdAndFileType(
-                submission.getId(),
-                AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_DOCX
-        ).isPresent() || reportFileRepo.findBySubmissionIdAndFileType(
-                submission.getId(),
-                AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_PDF
-        ).isPresent();
-        if (!hasAnnotatedReport) {
+        if (!hasAnnotatedReport(submission.getId())) {
             return;
         }
         List<ScoreItemEntity> scores = scoreItemRepo.findAllBySubmissionId(submission.getId());
@@ -325,6 +348,16 @@ public class GradingSubmissionService {
         ExperimentContext experimentContext = extractExperimentContext(submission.getId());
         String teacherComment = buildTeacherComment(submission, scores, dimensionNames, experimentContext);
         createAnnotatedReport(submission, scores, teacherComment);
+    }
+
+    public boolean hasAnnotatedReport(Long submissionId) {
+        return reportFileRepo.findBySubmissionIdAndFileType(
+                submissionId,
+                AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_DOCX
+        ).isPresent() || reportFileRepo.findBySubmissionIdAndFileType(
+                submissionId,
+                AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_PDF
+        ).isPresent();
     }
 
     private ReportFileEntity selectPreferredReport(Long submissionId) {
@@ -381,9 +414,10 @@ public class GradingSubmissionService {
         if (scores == null || scores.isEmpty()) {
             return generateSimpleReview(submission, List.of(), dimensionNames, experimentContext);
         }
-
         BigDecimal total = submission.getTotalScore();
-        String name = submission.getStudentName() != null ? submission.getStudentName() : "该同学";
+        String name = submission.getStudentName() != null
+                ? submission.getStudentName()
+                : "\u8be5\u540c\u5b66";
         List<DimensionInsight> rankedInsights = buildRankedInsights(scores, dimensionNames);
         List<DimensionInsight> strengths = rankedInsights.stream()
                 .sorted(Comparator.comparing(DimensionInsight::ratio).reversed())
@@ -394,52 +428,59 @@ public class GradingSubmissionService {
                 .filter(insight -> insight.ratio() < 0.9d)
                 .limit(2)
                 .toList();
-
         StringBuilder builder = new StringBuilder();
-        builder.append("总体评价：")
+        builder.append("\u603b\u4f53\u8bc4\u4ef7\uff1a")
                 .append(name)
-                .append("本次实验")
+                .append("\u672c\u6b21\u5b9e\u9a8c")
                 .append(overallPerformanceText(total))
-                .append("，本次批改重点关注你对实验原理、实现过程、结果分析和结论提炼的掌握情况，不以格式性细节作为主要扣分依据。");
-
-        String requirementFocus = experimentContext.toReviewLine();
-        if (!requirementFocus.isBlank()) {
-            builder.append("\n实验要求对照：").append(requirementFocus);
-        }
-
-        builder.append("\n知识掌握情况：")
+                .append("\u3002\u6279\u6539\u91cd\u70b9\u5173\u6ce8\u5b9e\u9a8c\u4efb\u52a1\u5b8c\u6210\u5ea6\u3001\u77e5\u8bc6\u638c\u63e1\u60c5\u51b5\u3001\u7ed3\u679c\u5206\u6790\u4e0e\u7ed3\u8bba\u8868\u8fbe\uff0c\u800c\u4e0d\u662f\u683c\u5f0f\u6027\u7ec6\u8282\u3002");
+        builder.append("\n\u5b9e\u9a8c\u4efb\u52a1\u5b8c\u6210\u60c5\u51b5\uff1a")
+                .append(buildTaskCompletionSummary(total, weaknesses, experimentContext));
+        builder.append("\n\u77e5\u8bc6\u638c\u63e1\u60c5\u51b5\uff1a")
                 .append(buildKnowledgeSummary(total, strengths, weaknesses));
-
-        builder.append("\n主要优点：")
-                .append(buildInsightSummary(strengths, "整体完成较稳定，说明你对实验核心内容已经具备基础理解。", false));
-
-        builder.append("\n当前薄弱点：")
-                .append(buildInsightSummary(weaknesses, "目前没有明显短板，后续可继续提升分析深度和迁移应用能力。", true));
-
-        builder.append("\n改进建议：")
+        builder.append("\n\u672c\u6b21\u5b66\u4e60\u8868\u73b0\uff1a")
+                .append(buildInsightSummary(
+                        strengths,
+                        "\u80fd\u591f\u6309\u7167\u5b9e\u9a8c\u8981\u6c42\u5b8c\u6210\u4e3b\u8981\u6b65\u9aa4\uff0c\u5e76\u5bf9\u5173\u952e\u77e5\u8bc6\u70b9\u7ed9\u51fa\u57fa\u672c\u8bf4\u660e\u3002",
+                        false
+                ));
+        builder.append("\n\u5f53\u524d\u9700\u8981\u52a0\u5f3a\uff1a")
+                .append(buildInsightSummary(
+                        weaknesses,
+                        "\u5f53\u524d\u6ca1\u6709\u660e\u663e\u7684\u77e5\u8bc6\u77ed\u677f\uff0c\u540e\u7eed\u53ef\u4ee5\u7ee7\u7eed\u63d0\u9ad8\u5206\u6790\u6df1\u5ea6\u548c\u603b\u7ed3\u8868\u8fbe\u7684\u51c6\u786e\u5ea6\u3002",
+                        true
+                ));
+        builder.append("\n\u6559\u5b66\u5efa\u8bae\uff1a")
                 .append(buildImprovementAdvice(weaknesses, strengths));
+        builder.append("\n\u9f13\u52b1\uff1a")
+                .append(buildEncouragement(total, strengths));
         return builder.toString().trim();
     }
-
     private String generateSimpleReview(GradingSubmissionEntity submission,
                                         List<ScoreItemEntity> scores,
                                         Map<Long, String> dimensionNames,
                                         ExperimentContext experimentContext) {
         BigDecimal total = submission.getTotalScore();
-        String name = submission.getStudentName() != null ? submission.getStudentName() : "该同学";
+        String name = submission.getStudentName() != null
+                ? submission.getStudentName()
+                : "\u8be5\u540c\u5b66";
         List<DimensionInsight> weaknesses = buildRankedInsights(scores, dimensionNames).stream()
                 .sorted(Comparator.comparing(DimensionInsight::ratio))
                 .filter(insight -> !insight.formatOnly())
                 .limit(2)
                 .toList();
-        String requirementFocus = experimentContext.toReviewLine();
-        return "总体评价：" + name + "本次实验" + overallPerformanceText(total)
-                + (requirementFocus.isBlank() ? "" : "。本次实验应重点围绕" + requirementFocus)
-                + "。后续请重点加强"
-                + buildInsightSummary(weaknesses, "实验原理理解、结果解释和结论提炼", true)
-                + "，写报告时优先说明自己为什么这样做、结果说明了什么。";
+        return "\u603b\u4f53\u8bc4\u4ef7\uff1a" + name + "\u672c\u6b21\u5b9e\u9a8c" + overallPerformanceText(total)
+                + "\u3002\u5b9e\u9a8c\u4efb\u52a1\u5b8c\u6210\u60c5\u51b5\uff1a"
+                + buildTaskCompletionSummary(total, weaknesses, experimentContext)
+                + "\u3002\u5f53\u524d\u5efa\u8bae\u91cd\u70b9\u52a0\u5f3a"
+                + buildInsightSummary(
+                        weaknesses,
+                        "\u5b9e\u9a8c\u539f\u7406\u7406\u89e3\u3001\u7ed3\u679c\u89e3\u91ca\u548c\u7ed3\u8bba\u63d0\u70bc",
+                        true
+                )
+                + "\u3002"
+                + buildEncouragement(total, List.of());
     }
-
     private Map<String, Object> scoreDto(ScoreItemEntity scoreItem) {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("dimensionId", scoreItem.getDimensionId());
@@ -572,7 +613,7 @@ public class GradingSubmissionService {
         }
     }
 
-    private String buildPublishedReport(Experiment experiment,
+        private String buildPublishedReport(Experiment experiment,
                                         Submission latestSubmission,
                                         GradingSubmissionEntity gradingSubmission,
                                         List<ScoreItemEntity> scoreItems) {
@@ -593,7 +634,7 @@ public class GradingSubmissionService {
                 + "\n";
     }
 
-    private String normalizeBaseReport(String baseReport, Experiment experiment) {
+        private String normalizeBaseReport(String baseReport, Experiment experiment) {
         String fallback = "# " + experiment.getName() + "实验报告\n\n"
                 + "## 实验目的\n待补充\n\n"
                 + "## 实验环境\n待补充\n\n"
@@ -611,40 +652,42 @@ public class GradingSubmissionService {
                                        List<ScoreItemEntity> scoreItems,
                                        Map<Long, String> dimensionNames,
                                        ExperimentContext experimentContext) {
-        StringBuilder builder = new StringBuilder();
-        if (gradingSubmission.getFinalReviewComment() != null && !gradingSubmission.getFinalReviewComment().isBlank()) {
-            builder.append(gradingSubmission.getFinalReviewComment().trim());
+        List<DimensionInsight> rankedInsights = buildRankedInsights(scoreItems, dimensionNames);
+        List<DimensionInsight> strengths = rankedInsights.stream()
+                .sorted(Comparator.comparing(DimensionInsight::ratio).reversed())
+                .limit(2)
+                .toList();
+        List<DimensionInsight> weaknesses = rankedInsights.stream()
+                .sorted(Comparator.comparing(DimensionInsight::ratio))
+                .filter(insight -> insight.ratio() < 0.9d)
+                .limit(2)
+                .toList();
+        String reviewBody = gradingSubmission.getFinalReviewComment();
+        if (reviewBody == null || reviewBody.isBlank()) {
+            reviewBody = generateStructuredReview(gradingSubmission, scoreItems, dimensionNames, experimentContext);
         }
-
-        String requirementFocus = experimentContext.toTeacherCommentLine();
-        if (!requirementFocus.isBlank()) {
-            if (builder.length() > 0) {
-                builder.append("\n\n");
-            }
-            builder.append("实验要求：").append(requirementFocus);
+        StringBuilder builder = new StringBuilder(reviewBody.trim());
+        if (!builder.toString().contains("\u5b9e\u9a8c\u4efb\u52a1\u5b8c\u6210\u60c5\u51b5")) {
+            builder.append("\n\n\u5b9e\u9a8c\u4efb\u52a1\u5b8c\u6210\u60c5\u51b5\uff1a")
+                    .append(buildTaskCompletionSummary(gradingSubmission.getTotalScore(), weaknesses, experimentContext));
         }
-
         List<String> scoreLines = scoreItems.stream()
                 .sorted(Comparator.comparing(ScoreItemEntity::getDimensionId))
                 .map(scoreItem -> formatScoreLine(scoreItem, dimensionNames))
                 .filter(Objects::nonNull)
                 .toList();
-        if (!scoreLines.isEmpty()) {
-            if (builder.length() > 0) {
-                builder.append("\n\n");
-            }
-            builder.append("具体得分：\n");
+        if (!scoreLines.isEmpty() && !builder.toString().contains("\u5206\u9879\u5f97\u5206\u53c2\u8003")) {
+            builder.append("\n\n\u5206\u9879\u5f97\u5206\u53c2\u8003\uff1a\n");
             for (String line : scoreLines) {
                 builder.append("- ").append(line).append('\n');
             }
         }
-
-        if (builder.length() == 0) {
-            builder.append("教师暂未填写评语。");
+        if (!builder.toString().contains("\u9f13\u52b1\uff1a")) {
+            builder.append("\n\u9f13\u52b1\uff1a")
+                    .append(buildEncouragement(gradingSubmission.getTotalScore(), strengths));
         }
         return builder.toString().trim();
     }
-
     private ExperimentContext extractExperimentContext(Long submissionId) {
         List<EvidenceBlockEntity> evidenceBlocks = evidenceRepo.findAllBySubmissionId(submissionId);
         List<String> lines = new ArrayList<>();
@@ -766,7 +809,7 @@ public class GradingSubmissionService {
         for (String keyword : keywords) {
             result = result.replace(keyword, "");
         }
-        result = result.replaceFirst("^[：:：\\-\\s]+", "").trim();
+        result = result.replaceFirst("^[：:;；、,，.。\\-\\s]+", "").trim();
         return result.isBlank() ? text.trim() : result;
     }
 
@@ -777,7 +820,7 @@ public class GradingSubmissionService {
         ));
     }
 
-    private boolean isFormatOnlyComment(String comment) {
+        private boolean isFormatOnlyComment(String comment) {
         if (comment == null || comment.isBlank()) {
             return false;
         }
@@ -795,42 +838,41 @@ public class GradingSubmissionService {
 
     private String overallPerformanceText(BigDecimal total) {
         if (total == null) {
-            return "仍在等待评分结果";
+            return "\u4ecd\u5728\u7b49\u5f85\u8bc4\u5206\u7ed3\u679c";
         }
         if (total.compareTo(new BigDecimal("90")) >= 0) {
-            return "表现较好，对核心知识和实验任务的掌握较为扎实";
+            return "\u5b8c\u6210\u8d28\u91cf\u8f83\u9ad8\uff0c\u5bf9\u5b9e\u9a8c\u4efb\u52a1\u548c\u6838\u5fc3\u77e5\u8bc6\u70b9\u7684\u638c\u63e1\u6bd4\u8f83\u624e\u5b9e";
         }
         if (total.compareTo(new BigDecimal("80")) >= 0) {
-            return "完成度较高，已经体现出较好的知识理解和实验分析能力";
+            return "\u6574\u4f53\u5b8c\u6210\u8f83\u597d\uff0c\u5df2\u7ecf\u4f53\u73b0\u51fa\u8f83\u7a33\u5b9a\u7684\u77e5\u8bc6\u7406\u89e3\u548c\u5b9e\u9a8c\u5206\u6790\u80fd\u529b";
         }
         if (total.compareTo(new BigDecimal("75")) >= 0) {
-            return "整体达到要求，核心内容基本掌握，但部分知识点的应用还不够稳定";
+            return "\u5df2\u7ecf\u8fbe\u5230\u57fa\u672c\u8981\u6c42\uff0c\u4e3b\u8981\u5b9e\u9a8c\u4efb\u52a1\u80fd\u591f\u5b8c\u6210\uff0c\u4f46\u90e8\u5206\u77e5\u8bc6\u70b9\u7684\u7406\u89e3\u548c\u8868\u8fbe\u8fd8\u4e0d\u591f\u7a33\u5b9a";
         }
-        return "还有进一步提升空间，建议重点回看关键知识点和实验分析过程";
+        return "\u8fd8\u6709\u7ee7\u7eed\u63d0\u5347\u7684\u7a7a\u95f4\uff0c\u5efa\u8bae\u56de\u5230\u5b9e\u9a8c\u6838\u5fc3\u4efb\u52a1\u548c\u5173\u952e\u77e5\u8bc6\u70b9\u4e0a\u518d\u505a\u4e00\u6b21\u590d\u76d8";
     }
-
     private String buildKnowledgeSummary(BigDecimal total,
                                          List<DimensionInsight> strengths,
                                          List<DimensionInsight> weaknesses) {
         if (total == null) {
-            return "当前尚未形成完整评分，建议先查看分项结果。";
+            return "\u5f53\u524d\u8fd8\u6ca1\u6709\u5f62\u6210\u5b8c\u6574\u8bc4\u5206\uff0c\u5efa\u8bae\u5148\u7ed3\u5408\u5206\u9879\u7ed3\u679c\u67e5\u770b\u77e5\u8bc6\u638c\u63e1\u60c5\u51b5\u3002";
         }
         StringBuilder builder = new StringBuilder();
         if (!strengths.isEmpty()) {
-            builder.append("在")
+            builder.append("\u5728")
                     .append(joinDimensionNames(strengths))
-                    .append("方面表现较稳，说明对相关知识点已有一定理解。");
+                    .append("\u65b9\u9762\u638c\u63e1\u8f83\u597d\uff0c\u8bf4\u660e\u4f60\u5bf9\u76f8\u5173\u77e5\u8bc6\u70b9\u5df2\u7ecf\u4e0d\u4ec5\u4f1a\u505a\uff0c\u800c\u4e14\u80fd\u591f\u8f83\u7a33\u5b9a\u5730\u5b8c\u6210\u5b9e\u9a8c\u6b65\u9aa4\u3002");
         }
         if (!weaknesses.isEmpty()) {
             if (builder.length() > 0) {
-                builder.append(" ");
+                builder.append(' ');
             }
-            builder.append("后续应重点补强")
+            builder.append("\u540e\u7eed\u9700\u8981\u91cd\u70b9\u8865\u5f3a")
                     .append(joinDimensionNames(weaknesses))
-                    .append("，尤其要把“会做”进一步提升到“会解释、会分析、会总结”。");
+                    .append("\uff0c\u5c24\u5176\u8981\u628a\u201c\u80fd\u5b8c\u6210\u201d\u8fdb\u4e00\u6b65\u63d0\u5347\u5230\u201c\u80fd\u89e3\u91ca\u539f\u7406\u3001\u80fd\u5206\u6790\u7ed3\u679c\u3001\u80fd\u8bf4\u660e\u7ed3\u8bba\u201d\u3002");
         }
         return builder.length() == 0
-                ? "本次实验结果说明你对基础内容已有一定掌握，后续可继续提升分析深度和迁移应用能力。"
+                ? "\u672c\u6b21\u5b9e\u9a8c\u7ed3\u679c\u8bf4\u660e\u4f60\u5bf9\u57fa\u7840\u5185\u5bb9\u5df2\u6709\u4e00\u5b9a\u638c\u63e1\uff0c\u540e\u7eed\u53ef\u4ee5\u7ee7\u7eed\u63d0\u5347\u5206\u6790\u6df1\u5ea6\u548c\u77e5\u8bc6\u8fc1\u79fb\u80fd\u529b\u3002"
                 : builder.toString();
     }
     private String buildInsightSummary(List<DimensionInsight> insights, String fallback, boolean focusWeakness) {
@@ -842,71 +884,120 @@ public class GradingSubmissionService {
             String detail = insight.comment();
             if (detail.isBlank() || (focusWeakness && insight.formatOnly())) {
                 detail = focusWeakness
-                        ? "需要进一步结合实验现象解释思路与依据"
-                        : "完成情况较为稳定";
+                        ? "\u8fd8\u9700\u8981\u8fdb\u4e00\u6b65\u628a\u5b9e\u9a8c\u73b0\u8c61\u3001\u7ed3\u679c\u539f\u56e0\u548c\u7ed3\u8bba\u4f9d\u636e\u8bb2\u6e05\u695a"
+                        : "\u5b8c\u6210\u60c5\u51b5\u8f83\u7a33\u5b9a\uff0c\u8bf4\u660e\u76f8\u5173\u77e5\u8bc6\u638c\u63e1\u6bd4\u8f83\u624e\u5b9e";
             }
-            parts.add(insight.dimensionName() + "方面" + detail);
+            parts.add(insight.dimensionName() + "\u65b9\u9762" + detail);
         }
-        return String.join("；", parts) + "。";
+        return String.join("\uff1b", parts) + "\u3002";
     }
-
     private String buildImprovementAdvice(List<DimensionInsight> weaknesses, List<DimensionInsight> strengths) {
         List<String> advice = new ArrayList<>();
         if (weaknesses != null && !weaknesses.isEmpty()) {
-            advice.add("先围绕" + joinDimensionNames(weaknesses) + "复盘实验过程，明确每一步为什么这样做、结果说明了什么。");
+            advice.add("\u5efa\u8bae\u5148\u56f4\u7ed5" + joinDimensionNames(weaknesses) + "\u590d\u76d8\u5b9e\u9a8c\u8fc7\u7a0b\uff0c\u660e\u786e\u6bcf\u4e00\u6b65\u4e3a\u4ec0\u4e48\u8fd9\u6837\u505a\u3001\u7ed3\u679c\u8bf4\u660e\u4e86\u4ec0\u4e48\u3001\u7ed3\u8bba\u662f\u5426\u548c\u5b9e\u9a8c\u76ee\u6807\u5bf9\u5e94\u3002");
         }
-        advice.add("撰写实验报告时优先说明原理理解、关键步骤、结果分析和问题定位，不必把精力过多放在实验环境、版本号或排版等格式性细节上。");
+        advice.add("\u5199\u5b9e\u9a8c\u62a5\u544a\u65f6\u4f18\u5148\u8bf4\u660e\u5b9e\u9a8c\u4efb\u52a1\u662f\u5426\u5b8c\u6210\u3001\u5173\u952e\u539f\u7406\u662f\u5426\u7406\u89e3\u3001\u7ed3\u679c\u5206\u6790\u662f\u5426\u5230\u4f4d\u3001\u7ed3\u8bba\u662f\u5426\u80fd\u56de\u5e94\u5b9e\u9a8c\u8981\u6c42\uff0c\u4e0d\u5fc5\u628a\u7cbe\u529b\u8fc7\u591a\u653e\u5728\u73af\u5883\u7248\u672c\u6216\u683c\u5f0f\u7ec6\u8282\u4e0a\u3002");
         if (strengths != null && !strengths.isEmpty()) {
-            advice.add("把你在" + joinDimensionNames(strengths) + "中的已有优势继续保留下来，并尝试迁移到薄弱环节。");
+            advice.add("\u628a\u4f60\u5728" + joinDimensionNames(strengths) + "\u4e2d\u7684\u5df2\u6709\u4f18\u52bf\u7ee7\u7eed\u4fdd\u6301\u4e0b\u6765\uff0c\u5e76\u5c1d\u8bd5\u8fc1\u79fb\u5230\u76ee\u524d\u76f8\u5bf9\u8584\u5f31\u7684\u73af\u8282\u3002");
         }
         return String.join("", advice);
     }
-
+    private String buildTaskCompletionSummary(BigDecimal total,
+                                              List<DimensionInsight> weaknesses,
+                                              ExperimentContext experimentContext) {
+        String focus = summarizeExperimentFocus(experimentContext.toReviewLine(), 90);
+        StringBuilder builder = new StringBuilder();
+        if (total == null) {
+            builder.append("\u5f53\u524d\u8fd8\u6ca1\u6709\u5b8c\u6574\u8bc4\u5206\u7ed3\u679c\uff0c\u5efa\u8bae\u5148\u67e5\u770b\u662f\u5426\u5df2\u7ecf\u8986\u76d6\u672c\u6b21\u5b9e\u9a8c\u7684\u6838\u5fc3\u4efb\u52a1\u3002");
+        } else if (total.compareTo(new BigDecimal("85")) >= 0) {
+            builder.append("\u4ece\u5f53\u524d\u62a5\u544a\u5185\u5bb9\u770b\uff0c\u4f60\u5df2\u7ecf\u6bd4\u8f83\u5b8c\u6574\u5730\u5b8c\u6210\u4e86\u672c\u6b21\u5b9e\u9a8c\u7684\u4e3b\u8981\u4efb\u52a1\uff0c\u5173\u952e\u6b65\u9aa4\u3001\u7ed3\u679c\u5c55\u793a\u548c\u57fa\u672c\u5206\u6790\u90fd\u6bd4\u8f83\u5230\u4f4d\u3002");
+        } else if (total.compareTo(new BigDecimal("75")) >= 0) {
+            builder.append("\u4f60\u5df2\u7ecf\u5b8c\u6210\u4e86\u672c\u6b21\u5b9e\u9a8c\u7684\u4e3b\u8981\u4efb\u52a1\uff0c\u4f46\u90e8\u5206\u5173\u952e\u6b65\u9aa4\u8bf4\u660e\u3001\u7ed3\u679c\u5206\u6790\u6216\u7ed3\u8bba\u56de\u5e94\u8fd8\u53ef\u4ee5\u518d\u5145\u5b9e\u4e00\u4e9b\u3002");
+        } else {
+            builder.append("\u76ee\u524d\u53ea\u5b8c\u6210\u4e86\u672c\u6b21\u5b9e\u9a8c\u4e2d\u7684\u90e8\u5206\u4efb\u52a1\uff0c\u5173\u952e\u7ed3\u679c\u5c55\u793a\u3001\u539f\u56e0\u5206\u6790\u6216\u7ed3\u8bba\u95ed\u73af\u8fd8\u4e0d\u591f\u5b8c\u6574\u3002");
+        }
+        if (!focus.isBlank()) {
+            builder.append(" \u672c\u6b21\u5b9e\u9a8c\u91cd\u70b9\u5305\u62ec").append(focus).append("\u3002");
+        }
+        if (weaknesses != null && !weaknesses.isEmpty()) {
+            builder.append(" \u5f53\u524d\u6700\u9700\u8981\u8865\u5f3a\u7684\u73af\u8282\u662f").append(joinDimensionNames(weaknesses)).append("\u3002");
+        }
+        return builder.toString().trim();
+    }
+    private String buildEncouragement(BigDecimal total, List<DimensionInsight> strengths) {
+        if (total == null) {
+            return "\u5148\u628a\u5b9e\u9a8c\u4efb\u52a1\u5b8c\u6574\u505a\u51fa\u6765\uff0c\u518d\u56de\u5934\u68c0\u67e5\u77e5\u8bc6\u70b9\u548c\u7ed3\u8bba\u8868\u8fbe\uff0c\u4f1a\u66f4\u5bb9\u6613\u770b\u5230\u81ea\u5df1\u7684\u8fdb\u6b65\u3002";
+        }
+        if (total.compareTo(new BigDecimal("90")) >= 0) {
+            return "\u4f60\u5df2\u7ecf\u5177\u5907\u6bd4\u8f83\u624e\u5b9e\u7684\u5b9e\u9a8c\u57fa\u7840\uff0c\u7ee7\u7eed\u4fdd\u6301\u8fd9\u79cd\u5b8c\u6210\u8d28\u91cf\uff0c\u5e76\u5c1d\u8bd5\u628a\u5206\u6790\u5199\u5f97\u66f4\u6df1\u5165\uff0c\u4f1a\u66f4\u6709\u8bf4\u670d\u529b\u3002";
+        }
+        if (total.compareTo(new BigDecimal("80")) >= 0) {
+            return "\u6574\u4f53\u57fa\u7840\u5df2\u7ecf\u4e0d\u9519\uff0c\u53ea\u8981\u7ee7\u7eed\u628a\u4f18\u52bf\u90e8\u5206\u4fdd\u6301\u4f4f\uff0c\u518d\u628a\u5206\u6790\u548c\u603b\u7ed3\u5199\u5f97\u66f4\u900f\u5f7b\uff0c\u6210\u7ee9\u8fd8\u4f1a\u7ee7\u7eed\u63d0\u5347\u3002";
+        }
+        if (total.compareTo(new BigDecimal("75")) >= 0) {
+            return "\u4f60\u5df2\u7ecf\u5177\u5907\u5b8c\u6210\u5b9e\u9a8c\u4efb\u52a1\u7684\u57fa\u7840\uff0c\u540e\u7eed\u53ea\u8981\u628a\u8584\u5f31\u77e5\u8bc6\u70b9\u518d\u8865\u4e00\u8865\uff0c\u628a\u7ed3\u679c\u5206\u6790\u5199\u624e\u5b9e\uff0c\u63d0\u5347\u4f1a\u5f88\u660e\u663e\u3002";
+        }
+        if (strengths != null && !strengths.isEmpty()) {
+            return "\u867d\u7136\u5f53\u524d\u8fd8\u6709\u63d0\u5347\u7a7a\u95f4\uff0c\u4f46\u4f60\u5728" + joinDimensionNames(strengths) + "\u4e0a\u5df2\u7ecf\u6709\u4e00\u5b9a\u57fa\u7840\uff0c\u7ee7\u7eed\u8865\u9f50\u5173\u952e\u4efb\u52a1\uff0c\u540e\u9762\u4f1a\u8fdb\u6b65\u5f97\u66f4\u5feb\u3002";
+        }
+        return "\u5148\u4e0d\u8981\u7740\u6025\uff0c\u628a\u5b9e\u9a8c\u76ee\u6807\u3001\u5173\u952e\u6b65\u9aa4\u548c\u7ed3\u679c\u89e3\u91ca\u4e00\u9879\u4e00\u9879\u8865\u5b8c\u6574\uff0c\u5b66\u4e60\u6548\u679c\u4f1a\u9010\u6b65\u7a33\u5b9a\u4e0b\u6765\u3002";
+    }
+    private String summarizeExperimentFocus(String focus, int maxLength) {
+        if (focus == null || focus.isBlank()) {
+            return "";
+        }
+        String normalized = focus.replace('\r', ' ')
+                .replace('\n', ' ')
+                .replaceAll("\\s+", " ")
+                .trim();
+        if (normalized.length() <= maxLength) {
+            return normalized;
+        }
+        return normalized.substring(0, maxLength) + "...";
+    }
     private String joinDimensionNames(List<DimensionInsight> insights) {
         return insights.stream()
                 .map(DimensionInsight::dimensionName)
                 .distinct()
                 .limit(3)
-                .reduce((left, right) -> left + "、" + right)
-                .orElse("相关维度");
+                .reduce((left, right) -> left + "\u3001" + right)
+                .orElse("\u76f8\u5173\u7ef4\u5ea6");
     }
-
     private String formatScoreLine(ScoreItemEntity scoreItem, Map<Long, String> dimensionNames) {
         if (scoreItem == null) {
             return null;
         }
-        String name = dimensionNames.getOrDefault(scoreItem.getDimensionId(), "维度" + scoreItem.getDimensionId());
-        String scoreText = (scoreItem.getScore() == null ? "待评" : scoreItem.getScore().stripTrailingZeros().toPlainString())
+        String name = dimensionNames.getOrDefault(scoreItem.getDimensionId(), "\u7ef4\u5ea6" + scoreItem.getDimensionId());
+        String scoreText = (scoreItem.getScore() == null ? "\u5f85\u8bc4" : scoreItem.getScore().stripTrailingZeros().toPlainString())
                 + "/" + (scoreItem.getMaxScore() == null ? "-" : scoreItem.getMaxScore().stripTrailingZeros().toPlainString());
         String comment = normalizeComment(scoreItem.getComment());
         if (comment.isBlank()) {
-            return name + "：" + scoreText;
+            return name + "\uff1a" + scoreText;
         }
-        return name + "：" + scoreText + "。点评：" + comment;
+        return name + "\uff1a" + scoreText + "\u3002\u70b9\u8bc4\uff1a" + comment;
     }
-
     private List<String> buildAnnotationHighlights(List<ScoreItemEntity> scores, Map<Long, String> dimensionNames) {
         List<DimensionInsight> ranked = buildRankedInsights(scores, dimensionNames);
         List<String> highlights = new ArrayList<>();
         ranked.stream()
                 .sorted(Comparator.comparing(DimensionInsight::ratio).reversed())
                 .limit(2)
-                .forEach(insight -> highlights.add("优点：" + insight.dimensionName() + "表现较稳，" + conciseInsightComment(insight, false)));
+                .forEach(insight -> highlights.add("\u4f18\u70b9\uff1a" + insight.dimensionName() + "\u638c\u63e1\u8f83\u7a33\uff0c" + conciseInsightComment(insight, false)));
         ranked.stream()
                 .sorted(Comparator.comparing(DimensionInsight::ratio))
                 .filter(insight -> !insight.formatOnly())
                 .limit(2)
-                .forEach(insight -> highlights.add("薄弱点：" + insight.dimensionName() + "需要加强，" + conciseInsightComment(insight, true)));
+                .forEach(insight -> highlights.add("\u5efa\u8bae\uff1a" + insight.dimensionName() + "\u8fd8\u9700\u52a0\u5f3a\uff0c" + conciseInsightComment(insight, true)));
         return highlights.stream().distinct().limit(4).toList();
     }
-
     private String conciseInsightComment(DimensionInsight insight, boolean weak) {
         if (insight.comment().isBlank()) {
-            return weak ? "建议补充原理说明、结果分析和结论依据。" : "说明你对该部分知识掌握较好。";
+            return weak
+                    ? "\u5efa\u8bae\u8865\u5145\u539f\u7406\u8bf4\u660e\u3001\u7ed3\u679c\u5206\u6790\u548c\u7ed3\u8bba\u4f9d\u636e\u3002"
+                    : "\u8bf4\u660e\u4f60\u5bf9\u8fd9\u4e00\u90e8\u5206\u77e5\u8bc6\u638c\u63e1\u8f83\u597d\u3002";
         }
-        return insight.comment().endsWith("。") ? insight.comment() : insight.comment() + "。";
+        return insight.comment().endsWith("\u3002") ? insight.comment() : insight.comment() + "\u3002";
     }
-
     private record AnnotatedReportArtifact(String fileType, String contentType, String objectKey) {}
 
     private record DimensionInsight(String dimensionName,
@@ -916,11 +1007,11 @@ public class GradingSubmissionService {
                                     BigDecimal maxScore,
                                     boolean formatOnly) {}
 
-    private record ExperimentContext(String objective, String requirements, String contents) {
+        private record ExperimentContext(String objective, String requirements, String contents) {
         private String toReviewLine() {
             List<String> parts = new ArrayList<>();
             if (objective != null && !objective.isBlank()) {
-                parts.add("实验目的为" + objective);
+                parts.add("实验目的包括" + objective);
             }
             if (requirements != null && !requirements.isBlank()) {
                 parts.add("上机要求包括" + requirements);
@@ -946,3 +1037,5 @@ public class GradingSubmissionService {
         }
     }
 }
+
+

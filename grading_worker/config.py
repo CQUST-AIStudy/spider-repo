@@ -65,8 +65,8 @@ OCR_STRATEGY = os.getenv(
 ).strip().lower()
 
 # Celery
-CELERY_CONCURRENCY = int(os.getenv("CELERY_CONCURRENCY", "1" if os.name == "nt" else "6"))
-CELERY_POOL = os.getenv("CELERY_POOL", "solo" if os.name == "nt" else "prefork")
+CELERY_CONCURRENCY = int(os.getenv("CELERY_CONCURRENCY", "3" if os.name == "nt" else "6"))
+CELERY_POOL = os.getenv("CELERY_POOL", "threads" if os.name == "nt" else "prefork")
 
 # Fallback scoring concurrency inside each submission.
 # Primary path uses one batch AI call per submission, so keep fallback nested concurrency conservative.

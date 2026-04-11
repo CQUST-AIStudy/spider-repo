@@ -369,6 +369,21 @@ public class GradingExportController {
             @PathVariable Long id,
             @AuthenticationPrincipal UserPrincipal principal
     ) {
+        return doBatchGenerateAnnotatedReports(id, principal);
+    }
+
+    @GetMapping("/tasks/{id}/generate-annotated-reports")
+    public ResponseEntity<?> batchGenerateAnnotatedReportsCompat(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserPrincipal principal
+    ) {
+        return doBatchGenerateAnnotatedReports(id, principal);
+    }
+
+    private ResponseEntity<?> doBatchGenerateAnnotatedReports(
+            Long id,
+            UserPrincipal principal
+    ) {
         Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
         requireOwnedTask(id, teacherId);
 
@@ -390,8 +405,7 @@ public class GradingExportController {
                 }
 
                 boolean alreadyHasAnnotated = hasAnnotatedReport(submission.getId());
-                ensureFinalReview(submission, teacherId);
-                gradingSubmissionService.publishToStudentReport(submission.getId(), teacherId);
+                gradingSubmissionService.ensureReviewAndAnnotatedReport(submission.getId(), teacherId);
                 if (alreadyHasAnnotated) {
                     refreshed++;
                 } else {
@@ -420,8 +434,7 @@ public class GradingExportController {
             }
             try {
                 if (!hasAnnotatedReport(submission.getId())) {
-                    ensureFinalReview(submission, teacherId);
-                    gradingSubmissionService.publishToStudentReport(submission.getId(), teacherId);
+                    gradingSubmissionService.ensureReviewAndAnnotatedReport(submission.getId(), teacherId);
                 }
             } catch (Exception e) {
                 String name = submission.getStudentName() != null ? submission.getStudentName() : "id=" + submission.getId();
@@ -440,13 +453,6 @@ public class GradingExportController {
                 AnnotatedStudentReportService.FILE_TYPE_ANNOTATED_PDF
         ).isPresent();
     }
-
-    private void ensureFinalReview(GradingSubmissionEntity submission, Long teacherId) {
-        if (submission.getFinalReviewComment() == null || submission.getFinalReviewComment().isBlank()) {
-            gradingSubmissionService.generateFinalReview(submission.getId(), teacherId);
-        }
-    }
-
     private String normalizeDownloadName(String originalFilename, String baseName, String requiredExtension) {
         if (originalFilename == null || originalFilename.isBlank()) {
             return baseName + requiredExtension;
