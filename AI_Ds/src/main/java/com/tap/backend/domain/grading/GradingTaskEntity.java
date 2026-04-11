@@ -24,6 +24,9 @@ public class GradingTaskEntity {
     @Column(name = "class_id")
     private Long classId;
 
+    @Column(name = "teacher_signature", length = 64)
+    private String teacherSignature;
+
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "rubric_id", nullable = false)
     private GradingRubricEntity rubric;
@@ -74,6 +77,8 @@ public class GradingTaskEntity {
     public void setExperimentId(Long experimentId) { this.experimentId = experimentId; }
     public Long getClassId() { return classId; }
     public void setClassId(Long classId) { this.classId = classId; }
+    public String getTeacherSignature() { return teacherSignature; }
+    public void setTeacherSignature(String teacherSignature) { this.teacherSignature = teacherSignature; }
     public GradingRubricEntity getRubric() { return rubric; }
     public void setRubric(GradingRubricEntity rubric) { this.rubric = rubric; }
     public Long getRubricId() { return rubricId; }

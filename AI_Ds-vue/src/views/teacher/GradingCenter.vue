@@ -36,6 +36,11 @@
                 <el-input v-model="createForm.classId" placeholder="可选" clearable />
               </el-form-item>
             </el-col>
+            <el-col :span="8">
+              <el-form-item label="教师署名">
+                <el-input v-model="createForm.teacherSignature" maxlength="32" show-word-limit placeholder="例如：张老师" clearable />
+              </el-form-item>
+            </el-col>
           </el-row>
           <el-row :gutter="16">
             <el-col :span="16">
@@ -143,7 +148,7 @@ const tasks = ref([])
 const loading = ref(false)
 const submitting = ref(false)
 const fileList = ref([])
-const createForm = ref({ rubricId: null, experimentId: '', classId: '', scoreRange: [75, 99] })
+const createForm = ref({ rubricId: null, experimentId: '', classId: '', teacherSignature: '', scoreRange: [75, 99] })
 let refreshTimer = null
 
 function statusType(s) {
@@ -170,6 +175,7 @@ async function submitTask() {
     fd.append('rubricId', createForm.value.rubricId)
     if (createForm.value.experimentId) fd.append('experimentId', createForm.value.experimentId)
     if (createForm.value.classId) fd.append('classId', createForm.value.classId)
+    if (createForm.value.teacherSignature) fd.append('teacherSignature', createForm.value.teacherSignature)
     if (createForm.value.scoreRange) {
       fd.append('scoreRangeMin', createForm.value.scoreRange[0])
       fd.append('scoreRangeMax', createForm.value.scoreRange[1])
@@ -177,6 +183,7 @@ async function submitTask() {
     await createGradingTask(fd)
     ElMessage.success('批改任务已创建，AI 正在处理中...')
     fileList.value = []
+    createForm.value.teacherSignature = ''
     loadTasks()
   } catch (e) { ElMessage.error('创建失败: ' + e.message) }
   submitting.value = false

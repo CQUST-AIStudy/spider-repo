@@ -59,6 +59,7 @@ public class GradingTaskController {
             @RequestParam("rubricId") Long rubricId,
             @RequestParam(value = "experimentId", required = false) Long experimentId,
             @RequestParam(value = "classId", required = false) Long classId,
+            @RequestParam(value = "teacherSignature", required = false) String teacherSignature,
             @RequestParam(value = "scoreRangeMin", required = false) java.math.BigDecimal scoreRangeMin,
             @RequestParam(value = "scoreRangeMax", required = false) java.math.BigDecimal scoreRangeMax
     ) {
@@ -68,6 +69,7 @@ public class GradingTaskController {
                     teacherId,
                     experimentId,
                     classId,
+                    teacherSignature,
                     rubricId,
                     scoreRangeMin,
                     scoreRangeMax,
@@ -140,6 +142,21 @@ public class GradingTaskController {
         }
     }
 
+    @PostMapping("/{id}/signature")
+    public ResponseEntity<?> updateTeacherSignature(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestBody TeacherSignatureRequest request
+    ) {
+        Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
+        try {
+            String signature = taskService.updateTeacherSignature(id, teacherId, request.teacherSignature());
+            return ResponseEntity.ok(ApiResponse.of(Map.of("teacherSignature", signature)));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+        }
+    }
+
     @PostMapping("/{id}/requeue-processing")
     public ResponseEntity<?> requeueProcessing(
             @PathVariable Long id,
@@ -189,6 +206,7 @@ public class GradingTaskController {
     }
 
     public record ExcelExportRequest(List<Long> submissionIds, boolean includeComments) {}
+    public record TeacherSignatureRequest(String teacherSignature) {}
 
     private Map<String, Object> toListDto(GradingTaskEntity task) {
         Map<String, Object> dto = new LinkedHashMap<>();
@@ -199,6 +217,7 @@ public class GradingTaskController {
         dto.put("failedCount", task.getFailedCount());
         dto.put("rubricId", task.getRubricId());
         dto.put("experimentId", task.getExperimentId());
+        dto.put("teacherSignature", task.getTeacherSignature());
         dto.put("createdAt", task.getCreatedAt().toString());
         return dto;
     }

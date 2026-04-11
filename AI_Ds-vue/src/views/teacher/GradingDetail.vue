@@ -19,6 +19,13 @@
         <span class="ov-value danger">{{ task.failedCount || 0 }}</span>
         <span class="ov-label">失败</span>
       </div>
+      <div class="signature-box">
+        <span class="ov-label">教师署名</span>
+        <div class="signature-actions">
+          <el-input v-model="signatureDraft" maxlength="32" show-word-limit placeholder="例如：张老师" clearable />
+          <el-button :loading="signatureSaving" @click="saveSignature">保存署名</el-button>
+        </div>
+      </div>
       <div class="spacer" />
       <el-button type="danger" plain :loading="annotating" :disabled="submissions.length === 0" @click="doBatchAnnotate">
         生成红笔批改报告
@@ -136,6 +143,7 @@ import {
   exportGradingExcel,
   exportGradingTask,
   getGradingTaskDetail,
+  updateGradingTaskSignature,
 } from '@/api/tap'
 
 const route = useRoute()
@@ -154,6 +162,8 @@ const exportIncludeComments = ref(true)
 const exporting = ref(false)
 const annotating = ref(false)
 const exportingAnnotated = ref(false)
+const signatureDraft = ref('')
+const signatureSaving = ref(false)
 
 const filteredSubs = computed(() => {
   if (!statusFilter.value) return submissions.value
@@ -234,9 +244,41 @@ async function doExport() {
   }
 }
 
+function normalizedSignature(value) {
+  return String(value || '').trim()
+}
+
+async function saveSignature() {
+  if (!task.value) return
+  signatureSaving.value = true
+  try {
+    const res = await updateGradingTaskSignature(taskId, normalizedSignature(signatureDraft.value))
+    const data = res?.data || res
+    const nextSignature = data?.teacherSignature || normalizedSignature(signatureDraft.value)
+    signatureDraft.value = nextSignature
+    task.value = { ...task.value, teacherSignature: nextSignature }
+    ElMessage.success('教师署名已保存')
+    return nextSignature
+  } catch (error) {
+    ElMessage.error(`保存教师署名失败: ${error.message}`)
+    throw error
+  } finally {
+    signatureSaving.value = false
+  }
+}
+
+async function ensureSignatureSaved() {
+  if (!task.value) return null
+  const draft = normalizedSignature(signatureDraft.value)
+  const current = normalizedSignature(task.value.teacherSignature)
+  if (draft === current) return current
+  return saveSignature()
+}
+
 async function doBatchAnnotate() {
   annotating.value = true
   try {
+    await ensureSignatureSaved()
     const res = await batchGenerateAnnotatedReports(taskId)
     const data = res?.data || res
     ElMessage.success(`批改报告处理完成：共${data.total || 0}份，新生成${data.generated || 0}份，刷新${data.refreshed || 0}份，跳过${data.skipped || 0}份`)
@@ -254,6 +296,7 @@ async function doBatchAnnotate() {
 async function doBatchExportAnnotated() {
   exportingAnnotated.value = true
   try {
+    await ensureSignatureSaved()
     const res = await exportGradingTask(taskId)
     const blob = new Blob([res], { type: 'application/zip' })
     const url = URL.createObjectURL(blob)
@@ -304,6 +347,7 @@ async function loadDetail() {
     const res = await getGradingTaskDetail(taskId)
     const data = res?.data || res
     task.value = data
+    signatureDraft.value = data?.teacherSignature || ''
     submissions.value = data.submissions || []
   } catch (error) {
     ElMessage.error(error.message)
@@ -336,6 +380,19 @@ onMounted(loadDetail)
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.signature-box {
+  min-width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.signature-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .ov-value {

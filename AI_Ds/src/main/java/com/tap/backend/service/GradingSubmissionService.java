@@ -322,7 +322,8 @@ public class GradingSubmissionService {
                 submission.getStudentName(),
                 submission.getTotalScore(),
                 teacherComment,
-                dimensionComments
+                dimensionComments,
+                resolveTeacherSignature(submission.getTask())
         );
 
         String objectKey = "grading/" + submission.getId() + "/annotated" + rendered.extension();
@@ -414,10 +415,6 @@ public class GradingSubmissionService {
         if (scores == null || scores.isEmpty()) {
             return generateSimpleReview(submission, List.of(), dimensionNames, experimentContext);
         }
-        BigDecimal total = submission.getTotalScore();
-        String name = submission.getStudentName() != null
-                ? submission.getStudentName()
-                : "\u8be5\u540c\u5b66";
         List<DimensionInsight> rankedInsights = buildRankedInsights(scores, dimensionNames);
         List<DimensionInsight> strengths = rankedInsights.stream()
                 .sorted(Comparator.comparing(DimensionInsight::ratio).reversed())
@@ -425,61 +422,27 @@ public class GradingSubmissionService {
                 .toList();
         List<DimensionInsight> weaknesses = rankedInsights.stream()
                 .sorted(Comparator.comparing(DimensionInsight::ratio))
+                .filter(insight -> !insight.formatOnly())
                 .filter(insight -> insight.ratio() < 0.9d)
                 .limit(2)
                 .toList();
-        StringBuilder builder = new StringBuilder();
-        builder.append("\u603b\u4f53\u8bc4\u4ef7\uff1a")
-                .append(name)
-                .append("\u672c\u6b21\u5b9e\u9a8c")
-                .append(overallPerformanceText(total))
-                .append("\u3002\u6279\u6539\u91cd\u70b9\u5173\u6ce8\u5b9e\u9a8c\u4efb\u52a1\u5b8c\u6210\u5ea6\u3001\u77e5\u8bc6\u638c\u63e1\u60c5\u51b5\u3001\u7ed3\u679c\u5206\u6790\u4e0e\u7ed3\u8bba\u8868\u8fbe\uff0c\u800c\u4e0d\u662f\u683c\u5f0f\u6027\u7ec6\u8282\u3002");
-        builder.append("\n\u5b9e\u9a8c\u4efb\u52a1\u5b8c\u6210\u60c5\u51b5\uff1a")
-                .append(buildTaskCompletionSummary(total, weaknesses, experimentContext));
-        builder.append("\n\u77e5\u8bc6\u638c\u63e1\u60c5\u51b5\uff1a")
-                .append(buildKnowledgeSummary(total, strengths, weaknesses));
-        builder.append("\n\u672c\u6b21\u5b66\u4e60\u8868\u73b0\uff1a")
-                .append(buildInsightSummary(
-                        strengths,
-                        "\u80fd\u591f\u6309\u7167\u5b9e\u9a8c\u8981\u6c42\u5b8c\u6210\u4e3b\u8981\u6b65\u9aa4\uff0c\u5e76\u5bf9\u5173\u952e\u77e5\u8bc6\u70b9\u7ed9\u51fa\u57fa\u672c\u8bf4\u660e\u3002",
-                        false
-                ));
-        builder.append("\n\u5f53\u524d\u9700\u8981\u52a0\u5f3a\uff1a")
-                .append(buildInsightSummary(
-                        weaknesses,
-                        "\u5f53\u524d\u6ca1\u6709\u660e\u663e\u7684\u77e5\u8bc6\u77ed\u677f\uff0c\u540e\u7eed\u53ef\u4ee5\u7ee7\u7eed\u63d0\u9ad8\u5206\u6790\u6df1\u5ea6\u548c\u603b\u7ed3\u8868\u8fbe\u7684\u51c6\u786e\u5ea6\u3002",
-                        true
-                ));
-        builder.append("\n\u6559\u5b66\u5efa\u8bae\uff1a")
-                .append(buildImprovementAdvice(weaknesses, strengths));
-        builder.append("\n\u9f13\u52b1\uff1a")
-                .append(buildEncouragement(total, strengths));
-        return builder.toString().trim();
+        return composeConciseTeacherReview(submission, experimentContext, strengths, weaknesses);
     }
     private String generateSimpleReview(GradingSubmissionEntity submission,
                                         List<ScoreItemEntity> scores,
                                         Map<Long, String> dimensionNames,
                                         ExperimentContext experimentContext) {
-        BigDecimal total = submission.getTotalScore();
-        String name = submission.getStudentName() != null
-                ? submission.getStudentName()
-                : "\u8be5\u540c\u5b66";
-        List<DimensionInsight> weaknesses = buildRankedInsights(scores, dimensionNames).stream()
+        List<DimensionInsight> rankedInsights = buildRankedInsights(scores, dimensionNames);
+        List<DimensionInsight> strengths = rankedInsights.stream()
+                .sorted(Comparator.comparing(DimensionInsight::ratio).reversed())
+                .limit(2)
+                .toList();
+        List<DimensionInsight> weaknesses = rankedInsights.stream()
                 .sorted(Comparator.comparing(DimensionInsight::ratio))
                 .filter(insight -> !insight.formatOnly())
                 .limit(2)
                 .toList();
-        return "\u603b\u4f53\u8bc4\u4ef7\uff1a" + name + "\u672c\u6b21\u5b9e\u9a8c" + overallPerformanceText(total)
-                + "\u3002\u5b9e\u9a8c\u4efb\u52a1\u5b8c\u6210\u60c5\u51b5\uff1a"
-                + buildTaskCompletionSummary(total, weaknesses, experimentContext)
-                + "\u3002\u5f53\u524d\u5efa\u8bae\u91cd\u70b9\u52a0\u5f3a"
-                + buildInsightSummary(
-                        weaknesses,
-                        "\u5b9e\u9a8c\u539f\u7406\u7406\u89e3\u3001\u7ed3\u679c\u89e3\u91ca\u548c\u7ed3\u8bba\u63d0\u70bc",
-                        true
-                )
-                + "\u3002"
-                + buildEncouragement(total, List.of());
+        return composeConciseTeacherReview(submission, experimentContext, strengths, weaknesses);
     }
     private Map<String, Object> scoreDto(ScoreItemEntity scoreItem) {
         Map<String, Object> data = new LinkedHashMap<>();
@@ -652,42 +615,100 @@ public class GradingSubmissionService {
                                        List<ScoreItemEntity> scoreItems,
                                        Map<Long, String> dimensionNames,
                                        ExperimentContext experimentContext) {
-        List<DimensionInsight> rankedInsights = buildRankedInsights(scoreItems, dimensionNames);
-        List<DimensionInsight> strengths = rankedInsights.stream()
-                .sorted(Comparator.comparing(DimensionInsight::ratio).reversed())
-                .limit(2)
-                .toList();
-        List<DimensionInsight> weaknesses = rankedInsights.stream()
-                .sorted(Comparator.comparing(DimensionInsight::ratio))
-                .filter(insight -> insight.ratio() < 0.9d)
-                .limit(2)
-                .toList();
         String reviewBody = gradingSubmission.getFinalReviewComment();
         if (reviewBody == null || reviewBody.isBlank()) {
             reviewBody = generateStructuredReview(gradingSubmission, scoreItems, dimensionNames, experimentContext);
         }
-        StringBuilder builder = new StringBuilder(reviewBody.trim());
-        if (!builder.toString().contains("\u5b9e\u9a8c\u4efb\u52a1\u5b8c\u6210\u60c5\u51b5")) {
-            builder.append("\n\n\u5b9e\u9a8c\u4efb\u52a1\u5b8c\u6210\u60c5\u51b5\uff1a")
-                    .append(buildTaskCompletionSummary(gradingSubmission.getTotalScore(), weaknesses, experimentContext));
+        return compressTeacherReview(reviewBody);
+    }
+
+    private String composeConciseTeacherReview(GradingSubmissionEntity submission,
+                                               ExperimentContext experimentContext,
+                                               List<DimensionInsight> strengths,
+                                               List<DimensionInsight> weaknesses) {
+        BigDecimal total = submission.getTotalScore();
+        String studentName = submission.getStudentName() == null || submission.getStudentName().isBlank()
+                ? "该同学"
+                : submission.getStudentName();
+        String focus = summarizeExperimentFocus(experimentContext.toReviewLine(), 110);
+        String strongNames = joinDimensionNames(strengths);
+        String weakNames = joinDimensionNames(weaknesses);
+        String knowledgeIssue = weaknesses.isEmpty()
+                ? "对实验相关核心知识点已有基本掌握，但还可以继续把结论依据和知识迁移写得更扎实。"
+                : "当前更需要加强的是" + weakNames + "，尤其要把相关原理、关键步骤为什么这样做、结果为什么能说明问题讲清楚。";
+        String reportIssue = weaknesses.isEmpty()
+                ? "报告撰写整体较完整，但仍建议进一步压缩与实验目标无关的铺陈，把目的、步骤、结果和结论之间的对应关系写得更紧凑。"
+                : "报告撰写的主要问题不是格式，而是对实验任务与结果之间的对应关系概括不够集中，关键现象、原因分析和结论支撑还不够突出。";
+        String strengthsLine = strengths.isEmpty()
+                ? "优点是能够按要求完成主要实验流程，说明你具备基本的动手实现能力。"
+                : "优点是你在" + strongNames + "方面表现相对稳定，说明对应知识点已经具备一定掌握基础，也能较好完成主要实验流程。";
+        String extension = buildExtensionAdvice(experimentContext, weaknesses);
+
+        String review = studentName + "本次实验" + overallPerformanceText(total) + "。"
+                + (focus.isBlank() ? "" : "结合本次实验的目的与上机要求，重点应围绕" + focus + "来判断任务是否真正完成。")
+                + "从当前报告看，" + buildTaskCompletionSummary(total, weaknesses, experimentContext)
+                + knowledgeIssue
+                + reportIssue
+                + strengthsLine
+                + "后续建议优先围绕薄弱环节做一次针对性复盘，重新梳理实验目标、关键步骤、现象解释和结论依据，避免只停留在“做出来了”，而没有说明“为什么成立、为什么有效”。"
+                + extension
+                + buildEncouragement(total, strengths);
+        return compressTeacherReview(review);
+    }
+
+    private String compressTeacherReview(String reviewBody) {
+        String normalized = safeText(reviewBody)
+                .replace('\r', ' ')
+                .replace('\n', ' ')
+                .replaceAll("\\s+", " ")
+                .replaceAll("分项得分参考[:：].*", "")
+                .replaceAll("实验成绩[:：][^。；]*[。；]?", "")
+                .trim();
+        if (normalized.isBlank()) {
+            normalized = "本次实验已完成批改。建议继续围绕实验任务完成度、原理理解、结果分析与结论表达进行复盘，把主要知识点真正学懂、讲清并落实到报告中。";
         }
-        List<String> scoreLines = scoreItems.stream()
-                .sorted(Comparator.comparing(ScoreItemEntity::getDimensionId))
-                .map(scoreItem -> formatScoreLine(scoreItem, dimensionNames))
-                .filter(Objects::nonNull)
-                .toList();
-        if (!scoreLines.isEmpty() && !builder.toString().contains("\u5206\u9879\u5f97\u5206\u53c2\u8003")) {
-            builder.append("\n\n\u5206\u9879\u5f97\u5206\u53c2\u8003\uff1a\n");
-            for (String line : scoreLines) {
-                builder.append("- ").append(line).append('\n');
+        if (normalized.length() < 300) {
+            normalized = normalized + "后续学习时可以把课堂示例与本次实验结果对照起来，重点检查自己是否真正理解了实验目的、方法选择和现象解释之间的关系，再用更凝练的语言总结收获与不足。";
+        }
+        if (normalized.length() > 500) {
+            normalized = normalized.substring(0, 500);
+        }
+        if (!"。！？".contains(String.valueOf(normalized.charAt(normalized.length() - 1)))) {
+            normalized = normalized + "。";
+        }
+        return normalized;
+    }
+
+    private String buildExtensionAdvice(ExperimentContext experimentContext, List<DimensionInsight> weaknesses) {
+        String focus = summarizeExperimentFocus(experimentContext.toTeacherCommentLine(), 80);
+        if (!focus.isBlank()) {
+            return "课外延伸建议可以继续查阅与“" + focus + "”相关的教材示例、课堂代码或案例说明，把实验结论放回原理框架中再理解一遍。";
+        }
+        if (weaknesses != null && !weaknesses.isEmpty()) {
+            return "课外延伸建议优先围绕" + joinDimensionNames(weaknesses) + "查阅教材对应章节、实验指导书示例或相关案例，先把概念和实验现象之间的联系打通。";
+        }
+        return "课外延伸建议继续结合教材、实验指导书和课堂案例，尝试把本次实验方法迁移到相近问题中，提升知识应用能力。";
+    }
+
+    private String resolveTeacherSignature(GradingTaskEntity task) {
+        if (task == null) {
+            return "任课教师";
+        }
+        if (task.getTeacherSignature() != null && !task.getTeacherSignature().isBlank()) {
+            return task.getTeacherSignature().trim();
+        }
+        UserEntity teacher = task.getTeacher();
+        if (teacher != null) {
+            if (teacher.getDisplayName() != null && !teacher.getDisplayName().isBlank()) {
+                return teacher.getDisplayName().trim();
+            }
+            if (teacher.getUsername() != null && !teacher.getUsername().isBlank()) {
+                return teacher.getUsername().trim();
             }
         }
-        if (!builder.toString().contains("\u9f13\u52b1\uff1a")) {
-            builder.append("\n\u9f13\u52b1\uff1a")
-                    .append(buildEncouragement(gradingSubmission.getTotalScore(), strengths));
-        }
-        return builder.toString().trim();
+        return "任课教师";
     }
+
     private ExperimentContext extractExperimentContext(Long submissionId) {
         List<EvidenceBlockEntity> evidenceBlocks = evidenceRepo.findAllBySubmissionId(submissionId);
         List<String> lines = new ArrayList<>();

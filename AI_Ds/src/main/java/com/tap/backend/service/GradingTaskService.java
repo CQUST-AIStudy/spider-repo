@@ -74,7 +74,7 @@ public class GradingTaskService {
 
     @Transactional
     public Map<String, Object> createTask(Long teacherId, Long experimentId, Long classId,
-                                           Long rubricId, java.math.BigDecimal scoreRangeMin,
+                                           String teacherSignature, Long rubricId, java.math.BigDecimal scoreRangeMin,
                                            java.math.BigDecimal scoreRangeMax,
                                            MultipartFile[] files) {
         if (files == null || files.length == 0) {
@@ -113,6 +113,7 @@ public class GradingTaskService {
         task.setTeacher(teacher);
         task.setExperimentId(experimentId);
         task.setClassId(classId);
+        task.setTeacherSignature(resolveTeacherSignature(teacher, teacherSignature));
         task.setRubric(rubric);
         task.setScoreRangeMin(resolvedScoreRange.min());
         task.setScoreRangeMax(resolvedScoreRange.max());
@@ -171,6 +172,7 @@ public class GradingTaskService {
         result.put("rubricId", rubricId);
         result.put("scoreRangeMin", task.getScoreRangeMin());
         result.put("scoreRangeMax", task.getScoreRangeMax());
+        result.put("teacherSignature", task.getTeacherSignature());
         result.put("createdAt", task.getCreatedAt().toString());
         if (!rejectedFiles.isEmpty()) {
             result.put("rejectedFiles", rejectedFiles);
@@ -195,6 +197,15 @@ public class GradingTaskService {
     public List<GradingSubmissionEntity> getTaskSubmissions(Long taskId, Long teacherId) {
         requireOwnedTask(taskId, teacherId);
         return submissionRepo.findAllByTaskId(taskId);
+    }
+
+    @Transactional
+    public String updateTeacherSignature(Long taskId, Long teacherId, String teacherSignature) {
+        GradingTaskEntity task = requireOwnedTask(taskId, teacherId);
+        String resolved = resolveTeacherSignature(task.getTeacher(), teacherSignature);
+        task.setTeacherSignature(resolved);
+        taskRepo.save(task);
+        return resolved;
     }
 
     @Transactional
@@ -493,6 +504,30 @@ public class GradingTaskService {
             return new ScoreRange(DEFAULT_SCORE_RANGE_MIN, DEFAULT_SCORE_RANGE_MAX);
         }
         return new ScoreRange(scoreRangeMin, scoreRangeMax);
+    }
+
+    private String resolveTeacherSignature(UserEntity teacher, String requestedSignature) {
+        String normalized = normalizeTeacherSignature(requestedSignature);
+        if (normalized != null) {
+            return normalized;
+        }
+        normalized = normalizeTeacherSignature(teacher != null ? teacher.getDisplayName() : null);
+        if (normalized != null) {
+            return normalized;
+        }
+        normalized = normalizeTeacherSignature(teacher != null ? teacher.getUsername() : null);
+        return normalized != null ? normalized : "任课教师";
+    }
+
+    private String normalizeTeacherSignature(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.trim().replaceAll("\\s+", " ");
+        if (normalized.isBlank()) {
+            return null;
+        }
+        return normalized.length() > 64 ? normalized.substring(0, 64) : normalized;
     }
 
     private GradingTaskEntity requireOwnedTask(Long taskId, Long teacherId) {

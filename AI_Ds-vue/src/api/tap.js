@@ -304,6 +304,10 @@ export function deleteGradingTask(id) {
   return tapClient.delete(`/api/grading/tasks/${id}`)
 }
 
+export function updateGradingTaskSignature(id, teacherSignature) {
+  return tapClient.post(`/api/grading/tasks/${id}/signature`, { teacherSignature })
+}
+
 // ========== Grading - Submissions ==========
 export function getSubmissionDetail(id) {
   return tapClient.get(`/api/grading/submissions/${id}`)
