@@ -8,22 +8,32 @@ import java.time.Instant;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Component
 public class AgentScheduler {
+  private static final Logger log = LoggerFactory.getLogger(AgentScheduler.class);
   private final AgentJobRepository agentJobRepository;
   private final AgentJobRunner agentJobRunner;
   private final AgentProperties props;
   private final ExecutorService jobExecutor;
   private final Semaphore jobSlots;
+  private final TransactionTemplate transactionTemplate;
 
-  public AgentScheduler(AgentJobRepository agentJobRepository, AgentJobRunner agentJobRunner, AgentProperties props) {
+  public AgentScheduler(AgentJobRepository agentJobRepository,
+      AgentJobRunner agentJobRunner,
+      AgentProperties props,
+      PlatformTransactionManager transactionManager) {
     this.agentJobRepository = agentJobRepository;
     this.agentJobRunner = agentJobRunner;
     this.props = props;
+    this.transactionTemplate = new TransactionTemplate(transactionManager);
     this.jobExecutor = Executors.newCachedThreadPool(r -> {
       Thread t = new Thread(r);
       t.setName("tap-agent-job-" + t.getId());
@@ -44,7 +54,7 @@ public class AgentScheduler {
     if (!jobSlots.tryAcquire()) return;
     jobExecutor.execute(() -> {
       try {
-        Long claimed = claimNextPendingJobId();
+        Long claimed = transactionTemplate.execute(status -> claimNextPendingJobId());
         if (claimed != null) {
           agentJobRunner.runJob(claimed);
         }
@@ -54,12 +64,12 @@ public class AgentScheduler {
     });
   }
 
-  @Transactional
   protected Long claimNextPendingJobId() {
     AgentJobEntity job;
     try {
       job = agentJobRepository.findFirstByStatusOrderByCreatedAtAsc(AgentJobStatus.PENDING);
     } catch (Exception e) {
+      log.warn("Failed to claim pending agent job", e);
       return null;
     }
     if (job == null) return null;
