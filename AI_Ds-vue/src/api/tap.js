@@ -230,6 +230,18 @@ export function chatSend(message, history = []) {
   return tapClient.post('/api/tap-chat', { message, history })
 }
 
+export function chatStreamSend(message, history = []) {
+  const token = getTapToken()
+  return fetch(`${TAP_BASE}/api/tap-chat/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ message, history }),
+  })
+}
+
 // ========== Agent ==========
 export function submitAgentJob(uploadFolderId) {
   return tapClient.post('/api/agent/jobs', { uploadFolderId: Number(uploadFolderId) })
@@ -371,6 +383,10 @@ export function getCourseSpaceDocuments(courseSpaceId) {
   return tapClient.get(`/api/course-spaces/${courseSpaceId}/documents`)
 }
 
+export function getCourseSpaceDocumentStatusSummary(courseSpaceId) {
+  return tapClient.get(`/api/course-spaces/${courseSpaceId}/documents/status-summary`)
+}
+
 export function uploadCourseSpaceDocument(courseSpaceId, file, docType = 'textbook') {
   const fd = new FormData()
   fd.append('file', file)
@@ -379,6 +395,18 @@ export function uploadCourseSpaceDocument(courseSpaceId, file, docType = 'textbo
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 120000,
   })
+}
+
+export function reprocessAllCourseSpaceDocuments(courseSpaceId) {
+  return tapClient.post(`/api/course-spaces/${courseSpaceId}/documents/reprocess`)
+}
+
+export function reprocessCourseSpaceDocument(courseSpaceId, courseSpaceDocumentId) {
+  return tapClient.post(`/api/course-spaces/${courseSpaceId}/documents/${courseSpaceDocumentId}/reprocess`)
+}
+
+export function rebuildCourseSpaceBm25(courseSpaceId) {
+  return tapClient.post(`/api/course-spaces/${courseSpaceId}/rebuild-bm25`)
 }
 
 
@@ -483,8 +511,8 @@ export function updatePtaSyncConfig(classId, data) {
   return tapClient.put(`/api/classes/${classId}/pta-sync`, data)
 }
 
-export function triggerPtaSync(classId) {
-  return tapClient.post(`/api/classes/${classId}/pta-sync/trigger`)
+export function triggerPtaSync(classId, data = {}) {
+  return tapClient.post(`/api/classes/${classId}/pta-sync/trigger`, data)
 }
 
 export function importPtaStudents(classId) {
@@ -530,6 +558,18 @@ export function getPtaCookieStatus() {
 
 export function submitPtaCookie(cookieJson) {
   return tapClient.post('/api/pta-cookie/update', { cookies: cookieJson })
+}
+
+export function getTeacherPtaCredentials() {
+  return tapClient.get('/api/teachers/me/pta-credentials')
+}
+
+export function updateTeacherPtaCredentials(data) {
+  return tapClient.put('/api/teachers/me/pta-credentials', data)
+}
+
+export function clearTeacherPtaCredentials() {
+  return tapClient.delete('/api/teachers/me/pta-credentials')
 }
 
 

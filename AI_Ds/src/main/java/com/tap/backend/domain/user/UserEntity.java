@@ -32,6 +32,12 @@ public class UserEntity {
   @Column(name = "password_hash", length = 255)
   private String passwordHash;
 
+  @Column(name = "pta_username", length = 128)
+  private String ptaUsername;
+
+  @Column(name = "pta_password_ciphertext", length = 1024)
+  private String ptaPasswordCiphertext;
+
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
@@ -94,5 +100,21 @@ public class UserEntity {
 
   public Instant getUpdatedAt() {
     return updatedAt;
+  }
+
+  public String getPtaUsername() {
+    return ptaUsername;
+  }
+
+  public void setPtaUsername(String ptaUsername) {
+    this.ptaUsername = ptaUsername;
+  }
+
+  public String getPtaPasswordCiphertext() {
+    return ptaPasswordCiphertext;
+  }
+
+  public void setPtaPasswordCiphertext(String ptaPasswordCiphertext) {
+    this.ptaPasswordCiphertext = ptaPasswordCiphertext;
   }
 }

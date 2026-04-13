@@ -21,7 +21,7 @@
     >
       <template #default>
         <div class="cookie-alert__content">
-          <span>系统自动登录失败，PTA 同步已暂停。请手动更新 Cookie 后再继续同步。</span>
+          <span>系统自动登录失败。可以手动更新 Cookie，也可以在“个人资料”绑定 PTA 账号，或在发起同步时临时输入账号密码。</span>
           <el-button type="warning" size="small" @click="openCookieDialog">更新 Cookie</el-button>
         </div>
       </template>
@@ -120,7 +120,7 @@
                 plain
                 :loading="syncingMap[cls.id]"
                 :disabled="cls.syncStatus === 'RUNNING'"
-                @click="triggerSyncForClass(cls)"
+                @click="openSyncDialog(cls)"
               >
                 {{ cls.syncStatus === 'RUNNING' ? '同步中...' : '立即同步' }}
               </el-button>
@@ -225,6 +225,41 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="syncDialogVisible" title="PTA 同步账号" width="480px" destroy-on-close>
+      <el-alert
+        type="info"
+        :closable="false"
+        class="cookie-helper"
+        title="可为本次同步临时输入 PTA 账号密码；若留空，则优先使用个人资料中已绑定的 PTA 账号。"
+      />
+      <div v-if="hasBoundPtaCredentials" class="sync-dialog__bound">
+        已绑定 PTA 账号：{{ boundPtaUsername }}
+      </div>
+      <div v-else class="sync-dialog__bound sync-dialog__bound--warning">
+        当前未绑定 PTA 账号，留空时将继续回退到现有 Cookie 方式。
+      </div>
+      <el-form :model="syncForm" label-width="90px">
+        <el-form-item label="PTA 账号">
+          <el-input v-model="syncForm.ptaUsername" placeholder="本次同步使用的 PTA 账号（可选）" clearable />
+        </el-form-item>
+        <el-form-item label="PTA 密码">
+          <el-input
+            v-model="syncForm.ptaPassword"
+            type="password"
+            show-password
+            placeholder="本次同步使用的 PTA 密码（可选）"
+            clearable
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="syncDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="syncDialogClass ? syncingMap[syncDialogClass.id] : false" @click="triggerSyncForClass">
+          开始同步
+        </el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="cookieDialogVisible" title="手动更新 PTA Cookie" width="600px" destroy-on-close>
       <el-steps :active="1" simple class="cookie-steps">
         <el-step title="获取 Cookie" />
@@ -291,6 +326,7 @@ import {
   deleteTeachingClass,
   getClassStudents,
   getPtaCookieStatus,
+  getTeacherPtaCredentials,
   getTeachingClasses,
   importPtaStudents,
   removeClassStudent,
@@ -344,6 +380,11 @@ const cookieDialogVisible = ref(false)
 const cookieInput = ref('')
 const cookieSubmitting = ref(false)
 const cookieSubmitResult = ref(null)
+const syncDialogVisible = ref(false)
+const syncDialogClass = ref(null)
+const syncForm = reactive({ ptaUsername: '', ptaPassword: '' })
+const boundPtaUsername = ref('')
+const hasBoundPtaCredentials = ref(false)
 
 const extract = (res) => res?.data ?? res
 
@@ -543,11 +584,22 @@ const syncStatusText = (status) => {
   return textMap[status] || '未同步'
 }
 
-const triggerSyncForClass = async (cls) => {
+const triggerSyncForClass = async () => {
+  const cls = syncDialogClass.value
+  if (!cls) return
+  const username = syncForm.ptaUsername.trim()
+  const password = syncForm.ptaPassword
+  if ((username && !password) || (!username && password)) {
+    ElMessage.warning('请输入完整的 PTA 账号和密码，或保持两项都为空。')
+    return
+  }
   syncingMap[cls.id] = true
   try {
-    await triggerPtaSync(cls.id)
+    await triggerPtaSync(cls.id, username ? { ptaUsername: username, ptaPassword: password } : {})
     cls.syncStatus = 'RUNNING'
+    syncDialogVisible.value = false
+    syncForm.ptaUsername = ''
+    syncForm.ptaPassword = ''
     ElMessage.success('同步任务已提交')
   } catch (error) {
     ElMessage.error(error.message || '同步失败')
@@ -656,6 +708,25 @@ const checkCookieStatus = async () => {
   }
 }
 
+const loadBoundCredentials = async () => {
+  try {
+    const res = await getTeacherPtaCredentials()
+    const data = extract(res) || {}
+    boundPtaUsername.value = data?.ptaUsername || ''
+    hasBoundPtaCredentials.value = !!data?.bound
+  } catch {
+    boundPtaUsername.value = ''
+    hasBoundPtaCredentials.value = false
+  }
+}
+
+const openSyncDialog = (cls) => {
+  syncDialogClass.value = cls
+  syncForm.ptaUsername = ''
+  syncForm.ptaPassword = ''
+  syncDialogVisible.value = true
+}
+
 const openCookieDialog = () => {
   cookieInput.value = ''
   cookieSubmitResult.value = null
@@ -689,6 +760,7 @@ const submitCookieForm = async () => {
 onMounted(() => {
   loadClasses()
   checkCookieStatus()
+  loadBoundCredentials()
 })
 </script>
 
@@ -934,6 +1006,20 @@ onMounted(() => {
 
 .cookie-result {
   margin-top: 14px;
+}
+
+.sync-dialog__bound {
+  margin: 12px 0 16px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #e6f4ea;
+  color: #1e8e3e;
+  font-size: 13px;
+}
+
+.sync-dialog__bound--warning {
+  background: #fef7e0;
+  color: #b26a00;
 }
 
 @media (max-width: 900px) {

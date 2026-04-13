@@ -41,13 +41,22 @@ public class PtaSyncController {
         return ApiResponse.of(syncService.updateSyncConfig(classId, teacherId, req.ptaKeyword(), req.syncEnabled()));
     }
 
+    record TriggerRequest(String ptaUsername, String ptaPassword, String mode, Boolean force) {}
+
     @PostMapping("/trigger")
     public ApiResponse<Map<String, Object>> trigger(
             @AuthenticationPrincipal UserPrincipal principal,
-            @PathVariable Long classId
+            @PathVariable Long classId,
+            @RequestBody(required = false) TriggerRequest req
     ) {
         Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
-        return ApiResponse.of(syncService.triggerSync(classId, teacherId));
+        return ApiResponse.of(syncService.triggerSync(
+                classId,
+                teacherId,
+                req == null ? null : req.ptaUsername(),
+                req == null ? null : req.ptaPassword(),
+                req == null ? null : req.mode(),
+                req == null ? null : req.force()));
     }
 
     @GetMapping("/status")

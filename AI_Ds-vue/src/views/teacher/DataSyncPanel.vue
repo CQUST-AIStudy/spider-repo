@@ -3,7 +3,7 @@
     <page-header title="PTA 数据同步" description="管理 PTA 平台数据爬取、同步状态和 Cookie 维护" />
 
     <el-alert v-if="cookieStatus === 'EXPIRED'" title="PTA Cookie 已过期"
-      description="自动爬取已暂停，请在下方提交新 Cookie 恢复同步。管理员已收到告警通知。"
+      description="可以在下方更新 Cookie，也可以直接输入教师自己的 PTA 账号密码，或先去个人资料中绑定 PTA 账号后再同步。"
       type="error" show-icon :closable="false" style="margin-bottom:16px" />
     <el-alert v-if="cookieStatus === 'UNKNOWN'" title="Cookie 状态未知"
       description="爬虫服务可能未启动，或尚未检测到 Cookie。"
@@ -54,6 +54,28 @@
             <el-switch v-model="forceMode" active-text="强制更新" inactive-text="正常模式" />
             <span class="force-hint" v-if="forceMode">跳过冷却限制，请谨慎使用以保护 PTA 平台</span>
           </div>
+          <div class="credential-panel">
+            <div class="credential-panel__header">
+              <span class="action-title">PTA 账号凭据</span>
+              <span class="action-desc">留空则优先使用已绑定 PTA 账号，否则回退到当前 Cookie 方式。</span>
+            </div>
+            <div v-if="hasBoundPtaCredentials" class="credential-tip">
+              已绑定 PTA 账号：{{ boundPtaUsername }}
+            </div>
+            <div v-else class="credential-tip credential-tip--warning">
+              当前未绑定 PTA 账号，本页可临时输入；也可以去个人资料中长期绑定。
+            </div>
+            <div class="credential-grid">
+              <el-input v-model="ptaUsername" placeholder="本次同步使用的 PTA 账号（可选）" clearable />
+              <el-input
+                v-model="ptaPassword"
+                type="password"
+                show-password
+                placeholder="本次同步使用的 PTA 密码（可选）"
+                clearable
+              />
+            </div>
+          </div>
           <div class="sync-actions">
             <div class="sync-action-item">
               <div class="action-info">
@@ -61,7 +83,7 @@
                 <div class="action-desc">检测新题目集，爬取内容+提交+导出（仅新增）</div>
               </div>
               <el-button type="primary" :loading="syncLoading === 'incremental'"
-                :disabled="!selectedClassId || !!syncLoading || cookieStatus === 'EXPIRED'" @click="triggerSync('incremental')">
+                :disabled="!selectedClassId || !!syncLoading" @click="triggerSync('incremental')">
                 开始同步
               </el-button>
             </div>
@@ -71,7 +93,7 @@
                 <div class="action-desc">拉取已有题目集的最新提交（轻量，冷却 4h）</div>
               </div>
               <el-button type="success" :loading="syncLoading === 'submissions'"
-                :disabled="!selectedClassId || !!syncLoading || cookieStatus === 'EXPIRED'" @click="triggerSync('submissions')">
+                :disabled="!selectedClassId || !!syncLoading" @click="triggerSync('submissions')">
                 拉取提交
               </el-button>
             </div>
@@ -81,7 +103,7 @@
                 <div class="action-desc">重新导出成绩单/答题卡/代码（较重，冷却 24h）</div>
               </div>
               <el-button type="warning" :loading="syncLoading === 'refresh'"
-                :disabled="!selectedClassId || !!syncLoading || cookieStatus === 'EXPIRED'" @click="triggerSync('refresh')">
+                :disabled="!selectedClassId || !!syncLoading" @click="triggerSync('refresh')">
                 刷新导出
               </el-button>
             </div>
@@ -91,7 +113,7 @@
                 <div class="action-desc">增量 + 提交 + 导出，耗时较长</div>
               </div>
               <el-button type="danger" :loading="syncLoading === 'full'"
-                :disabled="!selectedClassId || !!syncLoading || cookieStatus === 'EXPIRED'" @click="triggerSync('full')">
+                :disabled="!selectedClassId || !!syncLoading" @click="triggerSync('full')">
                 全量同步
               </el-button>
             </div>
@@ -148,7 +170,7 @@
         <el-card class="g-card">
           <template #header><span>Cookie 管理</span></template>
           <div class="cookie-help">
-            <p>当自动爬取因 Cookie 过期而失败时，需要手动更新 Cookie。</p>
+            <p>当自动爬取因 Cookie 过期而失败时，可以手动更新 Cookie；如果教师有自己的 PTA 账号，也可以直接使用账号密码同步。</p>
             <el-collapse>
               <el-collapse-item title="如何获取 Cookie？">
                 <ol class="cookie-steps">
@@ -213,7 +235,12 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { CircleCheck, CircleClose, Clock } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '../../components/PageHeader.vue'
-import { getPtaCookieStatus, submitPtaCookie } from '../../api/tap'
+import {
+  getPtaCookieStatus,
+  getTeacherPtaCredentials,
+  submitPtaCookie,
+  triggerPtaSync
+} from '../../api/tap'
 import { useUserStore } from '../../store'
 import axios from 'axios'
 
@@ -281,6 +308,10 @@ const cookieSubmitting = ref(false)
 const cookieResult = ref(null)
 const forceMode = ref(false)
 const cooldownInfo = ref(null)
+const ptaUsername = ref('')
+const ptaPassword = ref('')
+const boundPtaUsername = ref('')
+const hasBoundPtaCredentials = ref(false)
 let pollTimer = null
 
 const cookieTagType = computed(() => {
@@ -332,6 +363,18 @@ async function loadCookieStatus() {
   await probeSpiderHealth()
 }
 
+async function loadBoundCredentials() {
+  try {
+    const res = await getTeacherPtaCredentials()
+    const data = res?.data || res || {}
+    boundPtaUsername.value = data?.ptaUsername || ''
+    hasBoundPtaCredentials.value = !!data?.bound
+  } catch {
+    boundPtaUsername.value = ''
+    hasBoundPtaCredentials.value = false
+  }
+}
+
 async function loadCooldown() {
   const keyword = currentKeyword.value
   if (!selectedClassId.value) {
@@ -376,24 +419,34 @@ async function triggerSync(mode) {
 
   syncLoading.value = mode
   try {
-    const payload = { keyword: String(keyword).trim(), mode, force: forceMode.value, class_id: selectedClassId.value }
+    const username = ptaUsername.value.trim()
+    const password = ptaPassword.value
+    if ((username && !password) || (!username && password)) {
+      ElMessage.warning('若要临时使用 PTA 账号同步，请同时填写账号和密码')
+      return
+    }
 
-    const r = await axios.post(spiderApi('/crawl'), payload, { timeout: 10000 })
+    const res = await triggerPtaSync(selectedClassId.value, {
+      mode,
+      force: forceMode.value,
+      ...(username ? { ptaUsername: username, ptaPassword: password } : {})
+    })
+    const r = res?.data || res
 
     // 冷却拦截
-    if (r.data?.blocked) {
-      ElMessage.warning(r.data.message)
+    if (r?.blocked) {
+      ElMessage.warning(r.message)
       syncLoading.value = ''
       return
     }
 
-    const taskId = r.data?.task_id
+    const taskId = r?.taskId || r?.task_id
     if (taskId) {
       currentTask.value = { task_id: taskId, status: 'QUEUED', new_sets_count: 0,
         refreshed_count: 0, submissions_count: 0, error: null, skipped_cooldown: [], force: forceMode.value }
       pollTaskStatus(taskId)
     }
-    ElMessage.success(r.data?.message || '任务已提交')
+    ElMessage.success(r?.message || '任务已提交')
   } catch (e) {
     ElMessage.error('提交失败: ' + (e.response?.data?.detail || e.message))
   } finally {
@@ -437,7 +490,13 @@ async function submitCookieHandler() {
   }
 }
 
-onMounted(() => { loadCookieStatus(); loadTaskHistory(); loadCooldown(); probeSpiderHealth() })
+onMounted(() => {
+  loadCookieStatus()
+  loadTaskHistory()
+  loadCooldown()
+  loadBoundCredentials()
+  probeSpiderHealth()
+})
 onBeforeUnmount(() => { if (pollTimer) clearInterval(pollTimer) })
 </script>
 
@@ -459,6 +518,37 @@ onBeforeUnmount(() => { if (pollTimer) clearInterval(pollTimer) })
 
 .force-row { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
 .force-hint { font-size: 12px; color: #d93025; }
+
+.credential-panel {
+  margin-bottom: 14px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: #f8f9fa;
+  border: 1px solid #e8eaed;
+}
+
+.credential-panel__header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.credential-tip {
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: #1e8e3e;
+}
+
+.credential-tip--warning {
+  color: #e37400;
+}
+
+.credential-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
 
 .sync-actions { display: flex; flex-direction: column; gap: 12px; }
 .sync-action-item {
@@ -494,4 +584,10 @@ onBeforeUnmount(() => { if (pollTimer) clearInterval(pollTimer) })
 .freq-type { font-weight: 600; color: #202124; min-width: 70px; }
 .freq-desc { color: #5f6368; }
 .freq-note { font-size: 12px; color: #e37400; margin-top: 8px; }
+
+@media (max-width: 900px) {
+  .credential-grid {
+    grid-template-columns: 1fr;
+  }
+}
 </style>

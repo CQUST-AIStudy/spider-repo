@@ -28,6 +28,7 @@ public class PtaSyncService {
 
     private final TeachingClassRepository classRepo;
     private final TeachingClassService teachingClassService;
+    private final TeacherPtaCredentialService teacherPtaCredentialService;
     private final RestTemplate restTemplate;
 
     @Value("${pta.spider-url:http://127.0.0.1:8100}")
@@ -36,11 +37,13 @@ public class PtaSyncService {
     public PtaSyncService(
             TeachingClassRepository classRepo,
             TeachingClassService teachingClassService,
+            TeacherPtaCredentialService teacherPtaCredentialService,
             @Value("${pta.connect-timeout-ms:5000}") int connectTimeoutMs,
             @Value("${pta.read-timeout-ms:20000}") int readTimeoutMs
     ) {
         this.classRepo = classRepo;
         this.teachingClassService = teachingClassService;
+        this.teacherPtaCredentialService = teacherPtaCredentialService;
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(Math.max(1000, connectTimeoutMs));
         requestFactory.setReadTimeout(Math.max(1000, readTimeoutMs));
@@ -65,15 +68,22 @@ public class PtaSyncService {
     }
 
     @Transactional
-    public Map<String, Object> triggerSync(Long classId, Long teacherId) {
-        return doTriggerSync(classId, teacherId, true);
+    public Map<String, Object> triggerSync(
+            Long classId,
+            Long teacherId,
+            String ptaUsername,
+            String ptaPassword,
+            String mode,
+            Boolean force
+    ) {
+        return doTriggerSync(classId, teacherId, true, ptaUsername, ptaPassword, mode, force);
     }
 
     @Transactional
     public Map<String, Object> triggerSyncScheduled(Long classId) {
         TeachingClassEntity teachingClass = classRepo.findById(classId)
                 .orElseThrow(() -> new NoSuchElementException("class not found"));
-        return doTriggerSync(teachingClass, false);
+        return doTriggerSync(teachingClass, false, null, null, null, false);
     }
 
     public Map<String, Object> getSyncStatus(Long classId, Long teacherId) {
@@ -89,8 +99,18 @@ public class PtaSyncService {
     @Transactional
     public void updateSyncResult(Long classId, String status) {
         classRepo.findById(classId).ifPresent(teachingClass -> {
-            teachingClass.setSyncStatus(status);
-            if ("SUCCESS".equals(status) || "FAILED".equals(status)) {
+            String effectiveStatus = status;
+            if ("SUCCESS".equals(status)) {
+                try {
+                    teachingClassService.importStudentsFromPta(classId, teachingClass.getTeacherId());
+                } catch (Exception ex) {
+                    log.error("PTA sync finished but importing class students failed for class {}: {}", classId, ex.getMessage());
+                    effectiveStatus = "FAILED";
+                }
+            }
+
+            teachingClass.setSyncStatus(effectiveStatus);
+            if ("SUCCESS".equals(effectiveStatus) || "FAILED".equals(effectiveStatus)) {
                 teachingClass.setLastSyncAt(Instant.now());
             }
             classRepo.save(teachingClass);
@@ -105,14 +125,32 @@ public class PtaSyncService {
                 .toList();
     }
 
-    private Map<String, Object> doTriggerSync(Long classId, Long teacherId, boolean checkCooldown) {
-        return doTriggerSync(requireOwnedClass(classId, teacherId), checkCooldown);
+    private Map<String, Object> doTriggerSync(
+            Long classId,
+            Long teacherId,
+            boolean checkCooldown,
+            String ptaUsername,
+            String ptaPassword,
+            String mode,
+            Boolean force
+    ) {
+        return doTriggerSync(requireOwnedClass(classId, teacherId), checkCooldown, ptaUsername, ptaPassword, mode, force);
     }
 
-    private Map<String, Object> doTriggerSync(TeachingClassEntity teachingClass, boolean checkCooldown) {
+    private Map<String, Object> doTriggerSync(
+            TeachingClassEntity teachingClass,
+            boolean checkCooldown,
+            String ptaUsername,
+            String ptaPassword,
+            String mode,
+            Boolean force
+    ) {
         if (teachingClass.getPtaKeyword() == null || teachingClass.getPtaKeyword().isBlank()) {
             throw new IllegalStateException("pta keyword is required before sync");
         }
+
+        TeacherPtaCredentialService.ResolvedPtaCredential credential =
+                resolveCredential(teachingClass.getTeacherId(), ptaUsername, ptaPassword);
 
         if (checkCooldown && teachingClass.getLastSyncAt() != null) {
             Duration since = Duration.between(teachingClass.getLastSyncAt(), Instant.now());
@@ -122,10 +160,18 @@ public class PtaSyncService {
                 String message = remainingHours > 0
                         ? "sync cooldown active, retry in " + remainingHours + "h " + remainingMinutes + "m"
                         : "sync cooldown active, retry in " + remainingMinutes + "m";
-                throw new IllegalStateException(message);
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("syncStatus", teachingClass.getSyncStatus());
+                result.put("blocked", true);
+                result.put("message", message);
+                result.put("cooldown", true);
+                result.put("remainingHours", remainingHours);
+                result.put("remainingMinutes", remainingMinutes);
+                return result;
             }
         }
 
+        String previousStatus = teachingClass.getSyncStatus();
         teachingClass.setSyncStatus("RUNNING");
         classRepo.save(teachingClass);
 
@@ -133,6 +179,16 @@ public class PtaSyncService {
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("keyword", teachingClass.getPtaKeyword());
             body.put("class_id", teachingClass.getId().intValue());
+            if (mode != null && !mode.isBlank()) {
+                body.put("mode", mode.trim());
+            }
+            if (Boolean.TRUE.equals(force)) {
+                body.put("force", true);
+            }
+            if (credential != null) {
+                body.put("username", credential.username());
+                body.put("password", credential.password());
+            }
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
@@ -141,11 +197,29 @@ public class PtaSyncService {
             ResponseEntity<Map> response = restTemplate.postForEntity(spiderUrl + "/crawl", entity, Map.class);
 
             Map<String, Object> result = new LinkedHashMap<>();
-            result.put("syncStatus", "RUNNING");
-            if (response.getBody() != null) {
-                result.put("taskId", response.getBody().get("task_id"));
-                result.put("message", response.getBody().get("message"));
+            Map<?, ?> responseBody = response.getBody();
+            boolean blocked = responseBody != null && Boolean.TRUE.equals(responseBody.get("blocked"));
+            boolean accepted = responseBody != null && responseBody.get("task_id") != null;
+            if (blocked) {
+                teachingClass.setSyncStatus(previousStatus == null || previousStatus.isBlank() ? "IDLE" : previousStatus);
+                classRepo.save(teachingClass);
+                result.put("syncStatus", teachingClass.getSyncStatus());
+                result.put("blocked", true);
+                result.put("message", responseBody.get("message"));
+                return result;
             }
+
+            if (!accepted) {
+                teachingClass.setSyncStatus(previousStatus == null || previousStatus.isBlank() ? "IDLE" : previousStatus);
+                classRepo.save(teachingClass);
+                result.put("syncStatus", teachingClass.getSyncStatus());
+                result.put("message", responseBody == null ? "pta spider returned empty response" : responseBody.get("message"));
+                return result;
+            }
+
+            result.put("syncStatus", "RUNNING");
+            result.put("taskId", responseBody.get("task_id"));
+            result.put("message", responseBody.get("message"));
             return result;
         } catch (Exception e) {
             log.error("Failed to trigger PTA sync: {}", e.getMessage());
@@ -178,5 +252,24 @@ public class PtaSyncService {
             return ptaKeyword.trim();
         }
         return teachingClass.getName() == null ? null : teachingClass.getName().trim();
+    }
+
+    private TeacherPtaCredentialService.ResolvedPtaCredential resolveCredential(
+            Long teacherId,
+            String overrideUsername,
+            String overridePassword
+    ) {
+        String username = overrideUsername == null ? "" : overrideUsername.trim();
+        String password = overridePassword == null ? "" : overridePassword;
+        boolean hasUsername = !username.isBlank();
+        boolean hasPassword = !password.isBlank();
+
+        if (hasUsername != hasPassword) {
+            throw new IllegalArgumentException("ptaUsername and ptaPassword must be provided together");
+        }
+        if (hasUsername) {
+            return new TeacherPtaCredentialService.ResolvedPtaCredential(username, password);
+        }
+        return teacherPtaCredentialService.resolveCredentials(teacherId);
     }
 }

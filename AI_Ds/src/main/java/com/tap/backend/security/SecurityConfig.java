@@ -28,6 +28,7 @@ public class SecurityConfig {
       "/api/uploads/**",
       "/api/papers/**",
       "/api/tap-chat",
+      "/api/tap-chat/**",
       "/api/agent/**",
       "/api/admin/**",
       "/api/hello",
@@ -38,6 +39,7 @@ public class SecurityConfig {
       "/api/grading/**",
       "/api/rag/**",
       "/api/pta-cookie/**",
+      "/api/teachers/**",
       "/api/analytics/**"
   };
 
@@ -73,7 +75,7 @@ public class SecurityConfig {
         .requestMatchers("/api/documents/**").authenticated()
         .requestMatchers("/api/uploads/**").authenticated()
         .requestMatchers("/api/papers/**").authenticated()
-        .requestMatchers("/api/tap-chat").authenticated()
+        .requestMatchers("/api/tap-chat", "/api/tap-chat/**").authenticated()
         .requestMatchers("/api/agent/**").authenticated()
         .requestMatchers("/api/course-spaces/**").hasAnyRole(UserRole.TEACHER.name(), UserRole.ADMIN.name())
         .requestMatchers("/api/annotations/**").hasAnyRole(UserRole.TEACHER.name(), UserRole.ADMIN.name())
@@ -81,6 +83,7 @@ public class SecurityConfig {
         .requestMatchers(HttpMethod.PUT, "/api/classes/*/pta-sync/callback").permitAll()
         .requestMatchers(HttpMethod.PUT, "/api/pta-cookie/status").permitAll()
         .requestMatchers("/api/pta-cookie/**").authenticated()
+        .requestMatchers("/api/teachers/**").authenticated()
         .requestMatchers("/api/grading/**").authenticated()
         .requestMatchers("/api/rag/**").hasAnyRole(UserRole.TEACHER.name(), UserRole.ADMIN.name())
         .requestMatchers("/api/classes/**").authenticated()
@@ -121,6 +124,7 @@ public class SecurityConfig {
     config.setAllowedOriginPatterns(List.of(
         "http://localhost:*",
         "http://127.0.0.1:*",
+        "http://172.21.11.128:8080",
         "http://47.108.176.134:8090"
     ));
     config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));

@@ -25,7 +25,7 @@ from spider import PTAClient, CrawlHistory
 from sync_to_db import sync_all
 
 app = FastAPI(title="PTA Spider API", version="2.0.0")
-JAVA_BACKEND_URL = os.getenv("JAVA_BACKEND_URL", "http://localhost:8081")
+JAVA_BACKEND_URL = os.getenv("JAVA_BACKEND_URL", "http://127.0.0.1:8081")
 COOLDOWN_SUBMISSIONS = int(os.getenv("COOLDOWN_SUBMISSIONS", str(4 * 3600)))
 COOLDOWN_EXPORTS = int(os.getenv("COOLDOWN_EXPORTS", str(24 * 3600)))
 _cors_origins_raw = os.getenv("SPIDER_CORS_ALLOW_ORIGINS", "*").strip()
@@ -111,14 +111,18 @@ class CrawlRequest(BaseModel):
     class_id: int | None = None
     mode: CrawlMode = CrawlMode.INCREMENTAL
     force: bool = False
+    username: str | None = None
+    password: str | None = None
 
 class TaskInfo:
-    def __init__(self, tid, keyword, class_id, mode, force=False):
+    def __init__(self, tid, keyword, class_id, mode, force=False, username=None, password=None):
         self.task_id = tid
         self.keyword = keyword
         self.class_id = class_id
         self.mode = mode
         self.force = force
+        self.username = username
+        self.password = password
         self.status = TaskStatus.QUEUED
         self.created_at = datetime.now().isoformat()
         self.started_at = None
@@ -164,8 +168,12 @@ def _notify_java(class_id, status):
         return
     try:
         with httpx.Client(timeout=10) as c:
-            c.put(f"{JAVA_BACKEND_URL}/api/classes/{class_id}/pta-sync/callback",
-                  json={"status": status})
+            resp = c.put(
+                f"{JAVA_BACKEND_URL}/api/classes/{class_id}/pta-sync/callback",
+                json={"status": status},
+            )
+            resp.raise_for_status()
+            print(f"callback ok: class_id={class_id}, status={status}, code={resp.status_code}")
     except Exception as e:
         print(f"  callback failed: {e}")
 
@@ -181,7 +189,7 @@ def _run_crawl(task):
     try:
         task.status = TaskStatus.RUNNING
         task.started_at = datetime.now().isoformat()
-        client = PTAClient()
+        client = PTAClient(task.username, task.password)
         if not client.ensure_login():
             raise RuntimeError("PTA login failed, cookie may be expired")
         kw = task.keyword
@@ -270,6 +278,88 @@ async def _worker():
         q.task_done()
         _cleanup_old_tasks()
 
+
+def _run_crawl(task):
+    try:
+        task.status = TaskStatus.RUNNING
+        task.started_at = datetime.now().isoformat()
+        client = PTAClient(task.username, task.password)
+        if not client.ensure_login():
+            raise RuntimeError("PTA login failed, cookie may be expired")
+
+        kw = task.keyword
+        mode = task.mode
+        all_sets = None
+
+        if mode in (CrawlMode.INCREMENTAL, CrawlMode.FULL):
+            all_sets = client.search_problem_sets(kw)
+            if all_sets:
+                new_sets = client.history.get_new_sets(all_sets)
+                task.new_sets_count = len(new_sets)
+                for ps in new_sets:
+                    try:
+                        client._crawl_one_problem_set(ps["id"], ps.get("name", ""))
+                        client.history.mark_crawled(ps["id"], ps.get("name", ""))
+                    except Exception as e:
+                        print(f"crawl {ps.get('name', '')} failed: {e}")
+
+        if mode in (CrawlMode.SUBMISSIONS, CrawlMode.FULL):
+            ok, rem, _ = _cooldown.check(kw, "submissions", COOLDOWN_SUBMISSIONS)
+            if ok or task.force:
+                if all_sets is None:
+                    all_sets = client.search_problem_sets(kw)
+                crawled = client.history.get_all_crawled()
+                total_subs = 0
+                for ps in (all_sets or []):
+                    if ps["id"] in crawled:
+                        try:
+                            subs = client.get_all_submissions(ps["id"])
+                            if subs:
+                                base_dir = client._problem_set_dir(ps.get("name", ""))
+                                with open(base_dir / "提交记录.csv", "w", encoding="utf-8", newline="") as f:
+                                    w = csv.writer(f)
+                                    w.writerow(["用户ID", "题目ID", "状态", "分数", "编译器", "用时", "内存", "提交时间"])
+                                    for s in subs:
+                                        w.writerow([
+                                            s.get("userId", ""), s.get("problemSetProblemId", ""),
+                                            s.get("status", ""), s.get("score", ""), s.get("compiler", ""),
+                                            s.get("time", ""), s.get("memory", ""), s.get("submitAt", "")
+                                        ])
+                                total_subs += len(subs)
+                            time.sleep(1)
+                        except Exception as e:
+                            print(f"pull submissions failed {ps.get('name', '')}: {e}")
+                task.submissions_count = total_subs
+                _cooldown.mark(kw, "submissions")
+            else:
+                h, m = divmod(rem // 60, 60)
+                task.skipped_cooldown.append(f"submissions(cooldown {h}h{m}m)")
+
+        if mode in (CrawlMode.REFRESH, CrawlMode.FULL):
+            ok, rem, _ = _cooldown.check(kw, "exports", COOLDOWN_EXPORTS)
+            if ok or task.force:
+                task.refreshed_count = client.refresh_exports(kw)
+                _cooldown.mark(kw, "exports")
+            else:
+                h, m = divmod(rem // 60, 60)
+                task.skipped_cooldown.append(f"exports(cooldown {h}h{m}m)")
+
+        print("syncing to database...")
+        report = sync_all(strict=True)
+        if not report.get("ok"):
+            raise RuntimeError(report.get("error") or "database sync failed")
+
+        task.status = TaskStatus.SUCCESS
+        task.finished_at = datetime.now().isoformat()
+        _notify_java(task.class_id, "SUCCESS")
+    except Exception as e:
+        task.status = TaskStatus.FAILED
+        task.error = str(e)
+        task.finished_at = datetime.now().isoformat()
+        _notify_java(task.class_id, "FAILED")
+        print(f"task {task.task_id} failed: {e}")
+
+
 @app.on_event("startup")
 async def startup():
     global _worker_started
@@ -287,6 +377,8 @@ async def crawl(req: CrawlRequest):
     keyword = req.keyword.strip()
     if not keyword:
         raise HTTPException(400, "keyword required")
+    if bool(req.username and req.username.strip()) != bool(req.password):
+        raise HTTPException(400, "username and password must be provided together")
     existing = _keyword_in_queue(keyword, req.mode)
     if existing:
         return {"task_id": existing.task_id, "status": existing.status.value, "message": "same task already queued"}
@@ -307,7 +399,9 @@ async def crawl(req: CrawlRequest):
     if q.qsize() >= MAX_QUEUE_SIZE:
         raise HTTPException(429, "queue full")
     tid = uuid.uuid4().hex[:12]
-    task = TaskInfo(tid, keyword, req.class_id, req.mode, req.force)
+    username = req.username.strip() if req.username else None
+    password = req.password if req.password else None
+    task = TaskInfo(tid, keyword, req.class_id, req.mode, req.force, username, password)
     _task_store[tid] = task
     await q.put(tid)
     mode_cn = {"incremental": "incremental", "submissions": "submissions", "refresh": "refresh", "full": "full"}
