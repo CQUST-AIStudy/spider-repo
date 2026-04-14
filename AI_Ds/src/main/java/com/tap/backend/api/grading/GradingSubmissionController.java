@@ -3,6 +3,7 @@ package com.tap.backend.api.grading;
 import com.tap.backend.security.TeacherPrincipalResolver;
 import com.tap.backend.security.UserPrincipal;
 import com.tap.backend.service.GradingSubmissionService;
+import com.tap.backend.service.GradingTaskService;
 import com.tap.common.api.ApiResponse;
 import java.math.BigDecimal;
 import java.util.Map;
@@ -21,13 +22,16 @@ import org.springframework.web.bind.annotation.RestController;
 public class GradingSubmissionController {
 
     private final GradingSubmissionService submissionService;
+    private final GradingTaskService taskService;
     private final TeacherPrincipalResolver teacherPrincipalResolver;
 
     public GradingSubmissionController(
             GradingSubmissionService submissionService,
+            GradingTaskService taskService,
             TeacherPrincipalResolver teacherPrincipalResolver
     ) {
         this.submissionService = submissionService;
+        this.taskService = taskService;
         this.teacherPrincipalResolver = teacherPrincipalResolver;
     }
 
@@ -102,8 +106,22 @@ public class GradingSubmissionController {
     ) {
         Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
         try {
-            return ResponseEntity.ok(ApiResponse.of(submissionService.ensureReviewAndAnnotatedReport(id, teacherId)));
+            return ResponseEntity.ok(ApiResponse.of(submissionService.refreshReviewAndAnnotatedReport(id, teacherId)));
         } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/{id}/retry")
+    public ResponseEntity<?> retryFailedSubmission(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserPrincipal principal
+    ) {
+        Long teacherId = teacherPrincipalResolver.requireTeacherId(principal);
+        try {
+            taskService.retryFailedSubmission(id, teacherId);
+            return ResponseEntity.ok(ApiResponse.of(Map.of("message", "Submission retry initiated")));
+        } catch (IllegalArgumentException | IllegalStateException e) {
             return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
         }
     }

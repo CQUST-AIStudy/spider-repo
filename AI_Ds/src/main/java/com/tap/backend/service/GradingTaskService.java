@@ -41,6 +41,7 @@ public class GradingTaskService {
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
     private final GradingSubmissionService gradingSubmissionService;
+    private final GradingUnifiedLinkService gradingUnifiedLinkService;
     private final GradingTraceRepository traceRepo;
     private final OfficeDocumentConversionService officeDocumentConversionService;
 
@@ -58,6 +59,7 @@ public class GradingTaskService {
                               StringRedisTemplate redisTemplate,
                               ObjectMapper objectMapper,
                               GradingSubmissionService gradingSubmissionService,
+                              GradingUnifiedLinkService gradingUnifiedLinkService,
                               GradingTraceRepository traceRepo,
                               OfficeDocumentConversionService officeDocumentConversionService) {
         this.taskRepo = taskRepo;
@@ -68,6 +70,7 @@ public class GradingTaskService {
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
         this.gradingSubmissionService = gradingSubmissionService;
+        this.gradingUnifiedLinkService = gradingUnifiedLinkService;
         this.traceRepo = traceRepo;
         this.officeDocumentConversionService = officeDocumentConversionService;
     }
@@ -112,6 +115,7 @@ public class GradingTaskService {
         GradingTaskEntity task = new GradingTaskEntity();
         task.setTeacher(teacher);
         task.setExperimentId(experimentId);
+        task.setAssignmentOfferingId(gradingUnifiedLinkService.resolveAssignmentOfferingId(experimentId, classId, teacherId));
         task.setClassId(classId);
         task.setTeacherSignature(resolveTeacherSignature(teacher, teacherSignature));
         task.setRubric(rubric);
@@ -120,6 +124,10 @@ public class GradingTaskService {
         task.setStatus(GradingTaskStatus.PENDING);
         task.setTotalCount(validPdfs.size());
         task = taskRepo.save(task);
+        if (experimentId != null && task.getAssignmentOfferingId() == null) {
+            log.warn("No assignment_offering_id resolved for grading task. experimentId={}, classId={}, teacherId={}",
+                    experimentId, classId, teacherId);
+        }
 
         // Store documents and create submissions
         for (MultipartFile pdf : validPdfs) {
@@ -141,6 +149,7 @@ public class GradingTaskService {
                 sub.setPdfObjectKey(objectKey);
                 sub.setOriginalFilename(originalFilename);
                 sub.setStudentName(extractStudentName(originalFilename));
+                applyUnifiedSubmissionIdentity(task, sub);
                 sub.setStatus(SubmissionStatus.PENDING);
                 submissionRepo.save(sub);
             } catch (Exception e) {
@@ -239,6 +248,36 @@ public class GradingTaskService {
             sub.setErrorMessage(null);
             submissionRepo.save(sub);
         }
+
+        refreshTaskCounters(task);
+        task.setStatus(GradingTaskStatus.PROCESSING);
+        taskRepo.save(task);
+
+        final Long taskIdFinal = task.getId();
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                publishTaskToQueue(taskIdFinal);
+            }
+        });
+    }
+
+    @Transactional
+    public void retryFailedSubmission(Long submissionId, Long teacherId) {
+        GradingSubmissionEntity submission = submissionRepo.findById(submissionId)
+                .orElseThrow(() -> new IllegalArgumentException("Submission not found"));
+        GradingTaskEntity task = submission.getTask();
+        if (task == null || !Objects.equals(task.getTeacherId(), teacherId)) {
+            throw new IllegalArgumentException("No permission to access this submission");
+        }
+        if (submission.getStatus() != SubmissionStatus.FAILED) {
+            throw new IllegalStateException("Only failed submissions can be retried");
+        }
+
+        submission.setStatus(SubmissionStatus.PENDING);
+        submission.setErrorMessage(null);
+        submission.setTotalScore(null);
+        submissionRepo.save(submission);
 
         refreshTaskCounters(task);
         task.setStatus(GradingTaskStatus.PROCESSING);
@@ -448,6 +487,31 @@ public class GradingTaskService {
     private String extractStudentName(String filename) {
         if (filename == null) return null;
         return filename.replaceAll("\\.[^.]+$", "");
+    }
+
+    private void applyUnifiedSubmissionIdentity(GradingTaskEntity task, GradingSubmissionEntity submission) {
+        GradingUnifiedLinkService.SubmissionIdentity identity =
+                gradingUnifiedLinkService.resolveSubmissionIdentity(task, submission);
+        if (identity == null) {
+            String className = gradingUnifiedLinkService.resolveClassName(
+                    task == null ? null : task.getAssignmentOfferingId(),
+                    task == null ? null : task.getClassId()
+            );
+            if (className != null && (submission.getClassName() == null || submission.getClassName().isBlank())) {
+                submission.setClassName(className);
+            }
+            return;
+        }
+        submission.setStudentId(identity.studentProfileId());
+        if (identity.studentNo() != null) {
+            submission.setStudentNo(identity.studentNo());
+        }
+        if (identity.studentName() != null) {
+            submission.setStudentName(identity.studentName());
+        }
+        if (identity.className() != null) {
+            submission.setClassName(identity.className());
+        }
     }
 
     private String resolveExtension(String filename) {
