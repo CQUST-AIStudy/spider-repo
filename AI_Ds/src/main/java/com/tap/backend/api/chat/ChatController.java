@@ -12,27 +12,45 @@ import com.tap.common.api.Maps;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
+import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import javax.xml.parsers.DocumentBuilderFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 @RestController
 @RequestMapping("/api/tap-chat")
 public class ChatController {
     private static final Logger log = LoggerFactory.getLogger(ChatController.class);
+    private static final String PAPERS_MARKER_PREFIX = "\n\n<!--PAPERS:";
+    private static final String PAPERS_MARKER_SUFFIX = "-->";
+    private static final int MAX_HISTORY = 10;
+    private static final int MAX_PAPERS = 5;
+    private static final Duration ARXIV_REQUEST_TIMEOUT = Duration.ofSeconds(6);
+    private static final Duration AI_CHAT_REQUEST_TIMEOUT = Duration.ofSeconds(90);
+    private static final Duration AI_STREAM_REQUEST_TIMEOUT = Duration.ofMinutes(5);
+
     private final String aiBaseUrl;
     private final String aiApiKey;
     private final String provider;
@@ -41,23 +59,31 @@ public class ChatController {
     private final QuotaService quotaService;
     private final PrincipalResolver principalResolver;
     private final HttpClient http = HttpClient.newBuilder()
-            .connectTimeout(java.time.Duration.ofSeconds(15))
+            .connectTimeout(Duration.ofSeconds(15))
             .build();
 
-    public ChatController(AiProperties props, ObjectMapper objectMapper, QuotaService quotaService,
-                           PrincipalResolver principalResolver) {
+    public ChatController(AiProperties props,
+                          ObjectMapper objectMapper,
+                          QuotaService quotaService,
+                          PrincipalResolver principalResolver) {
         this.objectMapper = objectMapper;
         this.quotaService = quotaService;
         this.principalResolver = principalResolver;
         this.provider = props.provider() == null ? "mock" : props.provider().trim().toLowerCase();
-        AiProperties.OpenAi oa = props.openai();
-        String apiKey = oa == null ? null : oa.apiKey();
-        if (apiKey == null || apiKey.isBlank()) apiKey = System.getenv("OPENAI_API_KEY");
+
+        AiProperties.OpenAi openAi = props.openai();
+        String apiKey = openAi == null ? null : openAi.apiKey();
+        if (apiKey == null || apiKey.isBlank()) {
+            apiKey = System.getenv("OPENAI_API_KEY");
+        }
         this.aiApiKey = apiKey == null ? "" : apiKey.trim();
-        String baseUrl = oa == null ? null : oa.baseUrl();
-        if (baseUrl == null || baseUrl.isBlank()) baseUrl = "https://api.openai.com/v1";
+
+        String baseUrl = openAi == null ? null : openAi.baseUrl();
+        if (baseUrl == null || baseUrl.isBlank()) {
+            baseUrl = "https://api.openai.com/v1";
+        }
         this.aiBaseUrl = baseUrl;
-        this.model = oa == null || oa.model() == null ? "deepseek-chat" : oa.model();
+        this.model = openAi == null || openAi.model() == null ? "deepseek-chat" : openAi.model();
     }
 
     public record ChatRequest(
@@ -67,6 +93,8 @@ public class ChatController {
 
     public record MessageItem(String role, String content) {}
 
+    private record ChatContext(List<ObjectNode> messages, List<Map<String, String>> papers) {}
+
     @PostMapping
     public ApiResponse<Map<String, Object>> chat(
             @AuthenticationPrincipal UserPrincipal principal,
@@ -75,102 +103,160 @@ public class ChatController {
         var resolved = principalResolver.resolve(principal);
         quotaService.consumeAiRequests(resolved.userId(), 1);
 
-        // Search arXiv if the message looks like a paper search
-        String arxivContext = "";
-        List<Map<String, String>> papers = List.of();
-        if (looksLikeSearch(req.message())) {
-            papers = searchArxiv(req.message());
-            if (!papers.isEmpty()) {
-                StringBuilder sb = new StringBuilder("\n\n[arXiv 搜索结果]\n");
-                for (int i = 0; i < papers.size(); i++) {
-                    var p = papers.get(i);
-                    sb.append(String.format("%d. **%s**\n   作者: %s\n   链接: %s\n   摘要: %s\n\n",
-                            i + 1, p.get("title"), p.get("authors"), p.get("link"),
-                            truncate(p.get("summary"), 200)));
-                }
-                arxivContext = sb.toString();
-            }
-        }
-
-        String systemPrompt = buildSystemPrompt(arxivContext);
-        List<ObjectNode> messages = new ArrayList<>();
-        messages.add(msg("system", systemPrompt));
-        if (req.history() != null) {
-            for (var h : req.history()) {
-                if (h.role() != null && h.content() != null) {
-                    messages.add(msg(h.role(), h.content()));
-                }
-            }
-        }
-        messages.add(msg("user", req.message()));
-
-        String reply = callAi(messages);
+        ChatContext context = buildChatContext(req);
+        String reply = callAi(context.messages());
         return ApiResponse.of(Maps.of(
                 "reply", reply,
-                "papers", papers,
+                "papers", context.papers(),
                 "model", model
         ));
     }
 
+    @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public ResponseEntity<StreamingResponseBody> chatStream(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @Valid @RequestBody ChatRequest req
+    ) {
+        var resolved = principalResolver.resolve(principal);
+        quotaService.consumeAiRequests(resolved.userId(), 1);
+
+        ChatContext context = buildChatContext(req);
+        StreamingResponseBody body = outputStream -> {
+            streamAi(context.messages(), outputStream);
+            writePapersMarker(outputStream, context.papers());
+        };
+
+        return ResponseEntity.ok()
+                .contentType(MediaType.TEXT_EVENT_STREAM)
+                .header("Cache-Control", "no-cache")
+                .header("X-Accel-Buffering", "no")
+                .body(body);
+    }
+
+    private ChatContext buildChatContext(ChatRequest req) {
+        List<Map<String, String>> papers = looksLikeSearch(req.message()) ? searchArxiv(req.message()) : List.of();
+        String systemPrompt = buildSystemPrompt(buildArxivContext(papers));
+
+        List<ObjectNode> messages = new ArrayList<>();
+        messages.add(msg("system", systemPrompt));
+        if (req.history() != null) {
+            int start = Math.max(0, req.history().size() - MAX_HISTORY);
+            for (int i = start; i < req.history().size(); i++) {
+                MessageItem item = req.history().get(i);
+                if (item == null || item.role() == null || item.content() == null) {
+                    continue;
+                }
+                messages.add(msg(item.role(), item.content()));
+            }
+        }
+        messages.add(msg("user", req.message()));
+        return new ChatContext(messages, papers);
+    }
+
     private String buildSystemPrompt(String arxivContext) {
-        return "你是「教师教辅平台」的 AI 助手，专门帮助大学教师进行学术研究。你的能力包括：\n"
-                + "1. 论文检索：当用户想找论文时，基于 arXiv 搜索结果回答，给出论文标题、作者、链接\n"
-                + "2. 论文解读：解释论文的核心方法、贡献和局限性\n"
-                + "3. 学术问答：回答学术相关问题\n"
-                + "4. 写作辅助：帮助润色学术文本\n\n"
-                + "回答规则：\n"
-                + "- 使用 Markdown 格式\n"
-                + "- 论文链接使用 [标题](url) 格式，用户可以点击跳转\n"
-                + "- 回答要专业但易懂\n"
-                + "- 如果有搜索结果，优先基于搜索结果回答\n"
+        return """
+                你是“教师教学辅助平台”的 AI 助手，服务对象是高校教师。
+                你的职责包括：
+                1. 教学问答：帮助教师设计课堂讲解、实验安排、讨论题和作业反馈。
+                2. 学术检索：如果问题涉及论文、综述或最新研究，优先参考 arXiv 检索结果。
+                3. 写作辅助：润色教学文案、课程说明、评语和研究计划。
+
+                回答要求：
+                - 使用 Markdown
+                - 内容专业、准确、可直接用于教学场景
+                - 如果提供了论文检索结果，优先基于检索结果回答
+                """
                 + arxivContext;
     }
 
+    private String buildArxivContext(List<Map<String, String>> papers) {
+        if (papers == null || papers.isEmpty()) {
+            return "";
+        }
+
+        StringBuilder sb = new StringBuilder("\n\n[arXiv 搜索结果]\n");
+        for (int i = 0; i < papers.size(); i++) {
+            Map<String, String> paper = papers.get(i);
+            sb.append(i + 1)
+                    .append(". **").append(paper.getOrDefault("title", "")).append("**\n")
+                    .append("   作者: ").append(paper.getOrDefault("authors", "")).append("\n")
+                    .append("   链接: ").append(paper.getOrDefault("link", "")).append("\n")
+                    .append("   摘要: ").append(truncate(paper.getOrDefault("summary", ""), 200)).append("\n\n");
+        }
+        return sb.toString();
+    }
+
     private boolean looksLikeSearch(String msg) {
-        String m = msg.toLowerCase();
-        return m.contains("论文") || m.contains("paper") || m.contains("搜索") || m.contains("search")
-                || m.contains("找") || m.contains("检索") || m.contains("arxiv") || m.contains("推荐")
-                || m.contains("有哪些") || m.contains("最新") || m.contains("相关研究")
-                || m.contains("文献") || m.contains("综述") || m.contains("survey");
+        if (msg == null || msg.isBlank()) {
+            return false;
+        }
+        String normalized = msg.toLowerCase();
+        return normalized.contains("论文")
+                || normalized.contains("paper")
+                || normalized.contains("arxiv")
+                || normalized.contains("arivx")
+                || normalized.contains("search")
+                || normalized.contains("搜索")
+                || normalized.contains("检索")
+                || normalized.contains("综述")
+                || normalized.contains("survey")
+                || normalized.contains("sota")
+                || normalized.contains("state of the art")
+                || normalized.contains("最新")
+                || normalized.contains("相关研究");
     }
 
     private List<Map<String, String>> searchArxiv(String query) {
         try {
-            // Extract search keywords using simple heuristic
-            String keywords = query.replaceAll("[，。？！,\\.\\?!]", " ").trim();
+            String keywords = query.replaceAll("[，。！？,.?!]", " ").trim();
+            if (keywords.isBlank()) {
+                return List.of();
+            }
             String encoded = URLEncoder.encode(keywords, StandardCharsets.UTF_8);
             String url = "https://export.arxiv.org/api/query?search_query=all:" + encoded
-                    + "&start=0&max_results=5&sortBy=relevance&sortOrder=descending";
+                    + "&start=0&max_results=" + MAX_PAPERS
+                    + "&sortBy=relevance&sortOrder=descending";
 
-            HttpRequest req = HttpRequest.newBuilder().uri(URI.create(url))
-                    .header("User-Agent", "TAP/1.0").GET().build();
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("User-Agent", "TAP/1.0")
+                    .timeout(ARXIV_REQUEST_TIMEOUT)
+                    .GET()
+                    .build();
             HttpResponse<byte[]> resp = http.send(req, HttpResponse.BodyHandlers.ofByteArray());
-            if (resp.statusCode() != 200) return List.of();
+            if (resp.statusCode() != 200) {
+                return List.of();
+            }
 
-            var dbf = javax.xml.parsers.DocumentBuilderFactory.newInstance();
-            var doc = dbf.newDocumentBuilder().parse(new java.io.ByteArrayInputStream(resp.body()));
+            var dbf = DocumentBuilderFactory.newInstance();
+            var doc = dbf.newDocumentBuilder().parse(new ByteArrayInputStream(resp.body()));
             var entries = doc.getElementsByTagName("entry");
 
             List<Map<String, String>> results = new ArrayList<>();
-            for (int i = 0; i < entries.getLength() && i < 5; i++) {
+            for (int i = 0; i < entries.getLength() && i < MAX_PAPERS; i++) {
                 var entry = (org.w3c.dom.Element) entries.item(i);
                 String title = xmlText(entry, "title").replaceAll("\\s+", " ").trim();
+                if (title.isBlank()) {
+                    continue;
+                }
+
                 String summary = xmlText(entry, "summary").replaceAll("\\s+", " ").trim();
                 String id = xmlText(entry, "id").trim();
-                // Extract authors
                 var authorNodes = entry.getElementsByTagName("author");
                 List<String> authors = new ArrayList<>();
-                for (int j = 0; j < authorNodes.getLength() && j < 5; j++) {
+                for (int j = 0; j < authorNodes.getLength() && j < MAX_PAPERS; j++) {
                     authors.add(xmlText((org.w3c.dom.Element) authorNodes.item(j), "name"));
                 }
-                if (authorNodes.getLength() > 5) authors.add("et al.");
-                String authorsStr = String.join(", ", authors);
-                // Convert id to abstract page link
-                String link = id.replace("http://", "https://");
-                if (!title.isBlank()) {
-                    results.add(Map.of("title", title, "authors", authorsStr,
-                            "link", link, "summary", summary));
+                if (authorNodes.getLength() > MAX_PAPERS) {
+                    authors.add("et al.");
                 }
+
+                results.add(Map.of(
+                        "title", title,
+                        "authors", String.join(", ", authors),
+                        "link", id.replace("http://", "https://"),
+                        "summary", summary
+                ));
             }
             return results;
         } catch (Exception e) {
@@ -186,22 +272,19 @@ public class ChatController {
         }
 
         try {
-            ObjectNode body = objectMapper.createObjectNode();
-            body.put("model", model);
-            body.set("messages", objectMapper.valueToTree(messages));
-            body.put("temperature", 0.5);
-
-            String jsonBody = objectMapper.writeValueAsString(body);
+            String jsonBody = objectMapper.writeValueAsString(buildRequestBody(messages, false));
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(URI.create(aiBaseUrl + "/chat/completions"))
                     .header("Authorization", "Bearer " + aiApiKey)
                     .header("Content-Type", "application/json")
+                    .timeout(AI_CHAT_REQUEST_TIMEOUT)
                     .POST(HttpRequest.BodyPublishers.ofString(jsonBody, StandardCharsets.UTF_8))
                     .build();
 
             HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (resp.statusCode() != 200) {
-                log.error("AI chat HTTP {}: {}", resp.statusCode(), resp.body().substring(0, Math.min(500, resp.body().length())));
+                log.error("AI chat HTTP {}: {}", resp.statusCode(),
+                        resp.body().substring(0, Math.min(500, resp.body().length())));
                 return "抱歉，AI 服务返回错误码 " + resp.statusCode();
             }
 
@@ -211,6 +294,102 @@ public class ChatController {
             log.error("AI chat failed: {}", e.getMessage(), e);
             return "抱歉，AI 服务暂时不可用，请稍后重试。错误：" + e.getMessage();
         }
+    }
+
+    private void streamAi(List<ObjectNode> messages, OutputStream outputStream) {
+        String userPrompt = extractLastUserPrompt(messages);
+        if ("mock".equals(provider) || aiApiKey.isBlank()) {
+            streamText(outputStream, buildMockReply(userPrompt));
+            return;
+        }
+
+        try {
+            String jsonBody = objectMapper.writeValueAsString(buildRequestBody(messages, true));
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(aiBaseUrl + "/chat/completions"))
+                    .header("Authorization", "Bearer " + aiApiKey)
+                    .header("Content-Type", "application/json")
+                    .timeout(AI_STREAM_REQUEST_TIMEOUT)
+                    .POST(HttpRequest.BodyPublishers.ofString(jsonBody, StandardCharsets.UTF_8))
+                    .build();
+
+            HttpResponse<InputStream> resp = http.send(req, HttpResponse.BodyHandlers.ofInputStream());
+            if (resp.statusCode() != 200) {
+                String errBody;
+                try (InputStream errStream = resp.body()) {
+                    errBody = new String(errStream.readAllBytes(), StandardCharsets.UTF_8);
+                }
+                log.error("AI stream HTTP {}: {}", resp.statusCode(),
+                        errBody.substring(0, Math.min(500, errBody.length())));
+                streamText(outputStream, "抱歉，AI 服务返回错误码 " + resp.statusCode());
+                return;
+            }
+
+            try (InputStream body = resp.body();
+                 BufferedReader reader = new BufferedReader(new InputStreamReader(body, StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (!line.startsWith("data:")) {
+                        continue;
+                    }
+                    String data = line.substring(5).trim();
+                    if (data.isEmpty()) {
+                        continue;
+                    }
+                    if ("[DONE]".equals(data)) {
+                        break;
+                    }
+
+                    try {
+                        JsonNode root = objectMapper.readTree(data);
+                        String delta = extractDeltaContent(root);
+                        if (!delta.isEmpty()) {
+                            outputStream.write(delta.getBytes(StandardCharsets.UTF_8));
+                            outputStream.flush();
+                        }
+                    } catch (Exception ignored) {
+                        // Skip malformed chunks and keep the stream alive.
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("AI stream failed: {}", e.getMessage(), e);
+            streamText(outputStream, "抱歉，AI 服务暂时不可用，请稍后重试。");
+        }
+    }
+
+    private ObjectNode buildRequestBody(List<ObjectNode> messages, boolean stream) {
+        ObjectNode body = objectMapper.createObjectNode();
+        body.put("model", model);
+        body.set("messages", objectMapper.valueToTree(messages));
+        body.put("temperature", 0.5);
+        if (stream) {
+            body.put("stream", true);
+        }
+        return body;
+    }
+
+    private String extractDeltaContent(JsonNode root) {
+        JsonNode choice = root.path("choices").path(0);
+        JsonNode delta = choice.path("delta");
+        if (delta.isTextual()) {
+            return delta.asText("");
+        }
+
+        JsonNode content = delta.path("content");
+        if (content.isTextual()) {
+            return content.asText("");
+        }
+        if (content.isArray()) {
+            StringBuilder sb = new StringBuilder();
+            for (JsonNode item : content) {
+                if ("text".equals(item.path("type").asText())) {
+                    sb.append(item.path("text").asText(""));
+                }
+            }
+            return sb.toString();
+        }
+        return "";
     }
 
     private String extractLastUserPrompt(List<ObjectNode> messages) {
@@ -226,79 +405,61 @@ public class ChatController {
     private String buildMockReply(String prompt) {
         String normalized = prompt == null ? "" : prompt.toLowerCase();
 
-        if (normalized.contains("ppt") || normalized.contains("---page---") || normalized.contains("幻灯片")) {
-            return String.join("\n",
-                    "数据结构课程导学与核心要点",
-                    "---PAGE---",
-                    "课程目标",
-                    "- 明确本次教学主题、先修知识和达成目标",
-                    "- 说明课堂讲授、例题演示与实验训练之间的关系",
-                    "- 强调复杂度分析和代码实现的双重要求",
-                    "---PAGE---",
-                    "知识点拆解",
-                    "- 从概念定义、核心结构、典型操作三个层次展开",
-                    "- 配合时间复杂度与空间复杂度对比",
-                    "- 用一到两个典型输入输出帮助学生建立直觉",
-                    "---PAGE---",
-                    "课堂示例",
-                    "- 先用流程图说明算法步骤",
-                    "- 再展示关键伪代码和边界条件",
-                    "- 最后安排 1 道即时练习检查理解情况",
-                    "---PAGE---",
-                    "实验与作业建议",
-                    "- 将基础题、进阶题、开放题分层布置",
-                    "- 对常见错误给出专项提示",
-                    "- 课后复盘关注代码规范、复杂度与测试覆盖",
-                    "---PAGE---",
-                    "总结",
-                    "- 回顾核心概念与易错点",
-                    "- 给出课后练习方向",
-                    "- 引导学生将本节内容迁移到后续实验场景");
+        if (normalized.contains("ppt") || normalized.contains("课件")) {
+            return """
+                    ## 课件建议
+                    1. 开场先明确教学目标、先修知识和课堂产出。
+                    2. 中段用 1 个核心例题拆解概念、流程和边界条件。
+                    3. 结尾安排 1 个课堂练习和 1 个课后延伸任务。
+
+                    ## 页面结构
+                    - 第 1 页：主题、目标、适用班级
+                    - 第 2 页：核心概念与术语
+                    - 第 3 页：示例分析
+                    - 第 4 页：常见错误
+                    - 第 5 页：练习与总结
+                    """;
         }
 
-        if (normalized.contains("教学建议") || normalized.contains("课程分析") || normalized.contains("课程数据")) {
-            return String.join("\n",
-                    "## 课程整体判断",
-                    "- 当前课程可以继续保持实验驱动的教学方式，但需要更明确地区分基础训练与综合训练。",
-                    "- 若提交率正常而均分波动较大，通常说明学生在知识迁移和代码调试环节存在断层。",
-                    "",
-                    "## 需要重点关注的问题",
-                    "1. 基础概念理解与实验实现之间可能脱节。",
-                    "2. 学生对复杂度分析、边界条件和异常输入处理不够稳定。",
-                    "3. 作业反馈若停留在分数层面，改进闭环会偏弱。",
-                    "",
-                    "## 教学调整建议",
-                    "- 每次实验前加入 5 分钟的先修知识核对。",
-                    "- 每次实验后沉淀一份“高频错误清单”供下一轮教学复用。",
-                    "- 对低完成度任务拆成更小的阶段目标，降低学生进入门槛。",
-                    "",
-                    "## 下一步动作",
-                    "- 先查看当前教学班中提交率最低的实验。",
-                    "- 为该实验补一页步骤讲解和一页常见错误说明。",
-                    "- 下次课前用 1 道小测验证补救是否生效。");
+        if (looksLikeSearch(normalized)) {
+            return """
+                    ## 检索说明
+                    已按你的问题补充论文检索结果。你可以继续指定：
+                    - 研究主题
+                    - 时间范围
+                    - 希望得到的输出形式，例如综述、课堂应用或实验设计
+                    """;
         }
 
-        if (normalized.contains("论文") || normalized.contains("paper") || normalized.contains("arxiv") || normalized.contains("搜索")) {
-            return String.join("\n",
-                    "## 检索建议",
-                    "- 当前环境未配置真实外部 AI 密钥，已切换为本地演示回复。",
-                    "- 你可以继续输入更具体的主题、年份、方法名或应用方向，我会按教学场景整理检索策略。",
-                    "",
-                    "## 推荐的限定方式",
-                    "1. 指定研究主题，例如“程序设计教学中的大模型反馈”。",
-                    "2. 指定时间范围，例如“2024 年以后”。",
-                    "3. 指定输出类型，例如“综述、课堂应用案例、实验系统设计”。");
-        }
+        return """
+                ## 教学助手回复
+                我可以继续帮你处理这些任务：
+                - 设计课堂讲解提纲
+                - 生成实验或作业说明
+                - 润色教学反馈
+                - 整理论文检索结果
 
-        return String.join("\n",
-                "## 教学助手回复",
-                "- 当前环境未配置真实外部 AI 密钥，已自动切换为本地演示模式。",
-                "- 你可以继续提问课程设计、实验讲解、评分说明、作业反馈等问题。",
-                "",
-                "### 建议的下一步",
-                "1. 说明你当前的教学目标。",
-                "2. 给出面向的年级或班级。",
-                "3. 指定希望得到的输出形式，例如讲稿、评语、PPT 大纲或教学建议。");
+                如果你希望回答更贴近场景，请补充课程名称、学生层次和期望输出形式。
+                """;
+    }
+
+    private void streamText(OutputStream outputStream, String text) {
+        try {
+            outputStream.write(text.getBytes(StandardCharsets.UTF_8));
+            outputStream.flush();
+        } catch (Exception ignored) {
+            // Client may already be disconnected.
+        }
+    }
+
+    private void writePapersMarker(OutputStream outputStream, List<Map<String, String>> papers) {
+        try {
+            String marker = PAPERS_MARKER_PREFIX + objectMapper.writeValueAsString(papers) + PAPERS_MARKER_SUFFIX;
+            outputStream.write(marker.getBytes(StandardCharsets.UTF_8));
+            outputStream.flush();
+        } catch (Exception e) {
+            log.warn("write papers marker failed: {}", e.getMessage());
+        }
     }
 
     private ObjectNode msg(String role, String content) {
@@ -307,11 +468,16 @@ public class ChatController {
 
     private String xmlText(org.w3c.dom.Element el, String tag) {
         var nl = el.getElementsByTagName(tag);
-        return nl.getLength() == 0 ? "" : nl.item(0).getTextContent() == null ? "" : nl.item(0).getTextContent();
+        if (nl.getLength() == 0 || nl.item(0).getTextContent() == null) {
+            return "";
+        }
+        return nl.item(0).getTextContent();
     }
 
     private static String truncate(String s, int max) {
-        if (s == null) return "";
+        if (s == null) {
+            return "";
+        }
         return s.length() <= max ? s : s.substring(0, max) + "...";
     }
 }
