@@ -321,10 +321,11 @@ public class ChatController {
                 }
                 log.error("AI stream HTTP {}: {}", resp.statusCode(),
                         errBody.substring(0, Math.min(500, errBody.length())));
-                streamText(outputStream, "抱歉，AI 服务返回错误码 " + resp.statusCode());
+                streamText(outputStream, "AI service error: " + resp.statusCode());
                 return;
             }
 
+            boolean emittedAnyContent = false;
             try (InputStream body = resp.body();
                  BufferedReader reader = new BufferedReader(new InputStreamReader(body, StandardCharsets.UTF_8))) {
                 String line;
@@ -346,15 +347,25 @@ public class ChatController {
                         if (!delta.isEmpty()) {
                             outputStream.write(delta.getBytes(StandardCharsets.UTF_8));
                             outputStream.flush();
+                            emittedAnyContent = true;
                         }
                     } catch (Exception ignored) {
                         // Skip malformed chunks and keep the stream alive.
                     }
                 }
             }
+
+            // If stream chunks are parseable but carry no display text,
+            // fall back to one non-stream request to avoid blank replies.
+            if (!emittedAnyContent) {
+                String fallbackReply = callAi(messages);
+                if (fallbackReply != null && !fallbackReply.isBlank()) {
+                    streamText(outputStream, fallbackReply);
+                }
+            }
         } catch (Exception e) {
             log.error("AI stream failed: {}", e.getMessage(), e);
-            streamText(outputStream, "抱歉，AI 服务暂时不可用，请稍后重试。");
+            streamText(outputStream, "AI service is temporarily unavailable. Please try again later.");
         }
     }
 
@@ -371,25 +382,68 @@ public class ChatController {
 
     private String extractDeltaContent(JsonNode root) {
         JsonNode choice = root.path("choices").path(0);
-        JsonNode delta = choice.path("delta");
-        if (delta.isTextual()) {
-            return delta.asText("");
+        String text = extractTextFromNode(choice.path("delta"), false);
+        if (!text.isEmpty()) {
+            return text;
         }
 
-        JsonNode content = delta.path("content");
-        if (content.isTextual()) {
-            return content.asText("");
+        text = extractTextFromNode(choice.path("message"), false);
+        if (!text.isEmpty()) {
+            return text;
         }
-        if (content.isArray()) {
+
+        text = extractTextFromNode(choice, false);
+        if (!text.isEmpty()) {
+            return text;
+        }
+
+        text = extractTextFromNode(choice.path("delta"), true);
+        if (!text.isEmpty()) {
+            return text;
+        }
+        return extractTextFromNode(choice.path("message"), true);
+    }
+
+    private String extractTextFromNode(JsonNode node, boolean includeReasoning) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return "";
+        }
+        if (node.isTextual()) {
+            return node.asText("");
+        }
+        if (node.isArray()) {
             StringBuilder sb = new StringBuilder();
-            for (JsonNode item : content) {
-                if ("text".equals(item.path("type").asText())) {
-                    sb.append(item.path("text").asText(""));
+            for (JsonNode item : node) {
+                String part = extractTextFromNode(item, includeReasoning);
+                if (!part.isEmpty()) {
+                    sb.append(part);
                 }
             }
             return sb.toString();
         }
-        return "";
+        if (!node.isObject()) {
+            return "";
+        }
+
+        StringBuilder sb = new StringBuilder();
+        appendTextField(sb, node, "content", includeReasoning);
+        appendTextField(sb, node, "text", includeReasoning);
+        appendTextField(sb, node, "delta", includeReasoning);
+        appendTextField(sb, node, "output_text", includeReasoning);
+        if (includeReasoning) {
+            appendTextField(sb, node, "reasoning_content", true);
+        }
+        return sb.toString();
+    }
+
+    private void appendTextField(StringBuilder sb, JsonNode node, String field, boolean includeReasoning) {
+        if (!node.has(field)) {
+            return;
+        }
+        String part = extractTextFromNode(node.get(field), includeReasoning);
+        if (!part.isEmpty()) {
+            sb.append(part);
+        }
     }
 
     private String extractLastUserPrompt(List<ObjectNode> messages) {
