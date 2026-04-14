@@ -6,7 +6,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public record AiProperties(
     String provider,
     OpenAi openai,
-    Dashscope dashscope
+    Dashscope dashscope,
+    Arxiv arxiv
 ) {
   public record OpenAi(
       String baseUrl,
@@ -18,5 +19,14 @@ public record AiProperties(
       String baseUrl,
       String apiKey,
       String model
+  ) {}
+
+  public record Arxiv(
+      Boolean enabled,
+      String searchBaseUrl,
+      String apiKey,
+      String apiKeyHeader,
+      Integer maxResults,
+      Integer timeoutSeconds
   ) {}
 }

@@ -25,8 +25,11 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import javax.xml.parsers.DocumentBuilderFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,15 +50,63 @@ public class ChatController {
     private static final String PAPERS_MARKER_SUFFIX = "-->";
     private static final int MAX_HISTORY = 10;
     private static final int MAX_PAPERS = 5;
+    private static final int MAX_REWRITE_QUERIES = 3;
+    private static final int MAX_REWRITE_HISTORY = 4;
+    private static final int MAX_QUERY_LENGTH = 120;
     private static final Duration ARXIV_REQUEST_TIMEOUT = Duration.ofSeconds(6);
     private static final Duration AI_CHAT_REQUEST_TIMEOUT = Duration.ofSeconds(90);
     private static final Duration AI_STREAM_REQUEST_TIMEOUT = Duration.ofMinutes(5);
+    private static final String ANSWER_SYSTEM_PROMPT = """
+            You are the teaching copilot for university instructors.
+            Your main jobs are:
+            1. teaching Q&A, lesson planning, experiment design, and feedback drafting;
+            2. literature-aware support when paper search results are provided;
+            3. concise academic writing assistance.
+
+            Response rules:
+            - Use Markdown.
+            - Reply in the same language as the user's latest message unless the user asks otherwise.
+            - If arXiv search results are provided, use them as the primary evidence.
+            - Only cite paper titles and URLs that are present in the provided search results.
+            - If no paper results are provided, do not invent citations or links.
+            - Keep the answer directly usable for teaching or research planning.
+            """;
+    private static final String ARXIV_REWRITE_SYSTEM_PROMPT = """
+            You rewrite user requests into high-quality arXiv search queries.
+            Return strict JSON only. No markdown. No explanation outside JSON.
+
+            Output schema:
+            {
+              "shouldSearch": true,
+              "queries": ["query 1", "query 2"],
+              "reason": "short reason"
+            }
+
+            Rules:
+            - Generate 1 to 3 concise English search queries for arXiv.
+            - Preserve the core technical topic, task, method, domain, and time constraint.
+            - Remove filler such as teaching phrasing, polite wording, and answer-format requests.
+            - Prefer technical nouns, model names, tasks, benchmark terms, and domain keywords.
+            - If the request does not truly need paper retrieval, return shouldSearch=false and queries=[].
+            - Do not include quotation marks inside queries unless required by a literal phrase.
+            """;
+    private static final Set<String> RANKING_STOPWORDS = Set.of(
+            "paper", "papers", "arxiv", "search", "latest", "recent", "about", "with",
+            "from", "into", "that", "this", "have", "has", "using", "used", "use",
+            "give", "find", "look", "related", "research", "study", "studies"
+    );
 
     private final String aiBaseUrl;
     private final String aiApiKey;
     private final String provider;
     private final ObjectMapper objectMapper;
     private final String model;
+    private final boolean arxivEnabled;
+    private final String arxivSearchBaseUrl;
+    private final String arxivApiKey;
+    private final String arxivApiKeyHeader;
+    private final int arxivMaxResults;
+    private final Duration arxivRequestTimeout;
     private final QuotaService quotaService;
     private final PrincipalResolver principalResolver;
     private final HttpClient http = HttpClient.newBuilder()
@@ -84,6 +135,25 @@ public class ChatController {
         }
         this.aiBaseUrl = baseUrl;
         this.model = openAi == null || openAi.model() == null ? "deepseek-chat" : openAi.model();
+
+        // Temporary shared paper-search configuration for all teacher users.
+        // Upgrade path: replace this static config with admin-managed settings.
+        AiProperties.Arxiv arxiv = props.arxiv();
+        this.arxivEnabled = arxiv == null || arxiv.enabled() == null ? true : arxiv.enabled();
+        this.arxivSearchBaseUrl = normalizeArxivBaseUrl(
+                arxiv == null || arxiv.searchBaseUrl() == null || arxiv.searchBaseUrl().isBlank()
+                        ? "https://export.arxiv.org/api/query"
+                        : arxiv.searchBaseUrl());
+        this.arxivApiKey = arxiv == null || arxiv.apiKey() == null ? "" : arxiv.apiKey().trim();
+        this.arxivApiKeyHeader =
+                arxiv == null || arxiv.apiKeyHeader() == null ? "" : arxiv.apiKeyHeader().trim();
+        this.arxivMaxResults = arxiv == null || arxiv.maxResults() == null || arxiv.maxResults() <= 0
+                ? MAX_PAPERS
+                : Math.min(arxiv.maxResults(), 10);
+        this.arxivRequestTimeout =
+                Duration.ofSeconds(arxiv == null || arxiv.timeoutSeconds() == null || arxiv.timeoutSeconds() <= 0
+                        ? ARXIV_REQUEST_TIMEOUT.toSeconds()
+                        : arxiv.timeoutSeconds());
     }
 
     public record ChatRequest(
@@ -94,6 +164,7 @@ public class ChatController {
     public record MessageItem(String role, String content) {}
 
     private record ChatContext(List<ObjectNode> messages, List<Map<String, String>> papers) {}
+    private record SearchPlan(boolean useArxiv, List<String> queries, String reason) {}
 
     @PostMapping
     public ApiResponse<Map<String, Object>> chat(
@@ -103,7 +174,7 @@ public class ChatController {
         var resolved = principalResolver.resolve(principal);
         quotaService.consumeAiRequests(resolved.userId(), 1);
 
-        ChatContext context = buildChatContext(req);
+        ChatContext context = buildChatContext(req, resolved.userId());
         String reply = callAi(context.messages());
         return ApiResponse.of(Maps.of(
                 "reply", reply,
@@ -120,7 +191,7 @@ public class ChatController {
         var resolved = principalResolver.resolve(principal);
         quotaService.consumeAiRequests(resolved.userId(), 1);
 
-        ChatContext context = buildChatContext(req);
+        ChatContext context = buildChatContext(req, resolved.userId());
         StreamingResponseBody body = outputStream -> {
             streamAi(context.messages(), outputStream);
             writePapersMarker(outputStream, context.papers());
@@ -133,8 +204,11 @@ public class ChatController {
                 .body(body);
     }
 
-    private ChatContext buildChatContext(ChatRequest req) {
-        List<Map<String, String>> papers = looksLikeSearch(req.message()) ? searchArxiv(req.message()) : List.of();
+    private ChatContext buildChatContext(ChatRequest req, long userId) {
+        SearchPlan searchPlan = buildSearchPlan(req.message(), req.history(), userId);
+        List<Map<String, String>> papers = searchPlan.useArxiv()
+                ? searchArxiv(searchPlan.queries(), req.message())
+                : List.of();
         String systemPrompt = buildSystemPrompt(buildArxivContext(papers));
 
         List<ObjectNode> messages = new ArrayList<>();
@@ -154,19 +228,7 @@ public class ChatController {
     }
 
     private String buildSystemPrompt(String arxivContext) {
-        return """
-                你是“教师教学辅助平台”的 AI 助手，服务对象是高校教师。
-                你的职责包括：
-                1. 教学问答：帮助教师设计课堂讲解、实验安排、讨论题和作业反馈。
-                2. 学术检索：如果问题涉及论文、综述或最新研究，优先参考 arXiv 检索结果。
-                3. 写作辅助：润色教学文案、课程说明、评语和研究计划。
-
-                回答要求：
-                - 使用 Markdown
-                - 内容专业、准确、可直接用于教学场景
-                - 如果提供了论文检索结果，优先基于检索结果回答
-                """
-                + arxivContext;
+        return ANSWER_SYSTEM_PROMPT + arxivContext;
     }
 
     private String buildArxivContext(List<Map<String, String>> papers) {
@@ -174,16 +236,162 @@ public class ChatController {
             return "";
         }
 
-        StringBuilder sb = new StringBuilder("\n\n[arXiv 搜索结果]\n");
+        StringBuilder sb = new StringBuilder("\n\n[arXiv 鎼滅储缁撴灉]\n");
         for (int i = 0; i < papers.size(); i++) {
             Map<String, String> paper = papers.get(i);
             sb.append(i + 1)
                     .append(". **").append(paper.getOrDefault("title", "")).append("**\n")
-                    .append("   作者: ").append(paper.getOrDefault("authors", "")).append("\n")
-                    .append("   链接: ").append(paper.getOrDefault("link", "")).append("\n")
-                    .append("   摘要: ").append(truncate(paper.getOrDefault("summary", ""), 200)).append("\n\n");
+                    .append("   浣滆€? ").append(paper.getOrDefault("authors", "")).append("\n")
+                    .append("   閾炬帴: ").append(paper.getOrDefault("link", "")).append("\n")
+                    .append("   鎽樿: ").append(truncate(paper.getOrDefault("summary", ""), 200)).append("\n\n");
         }
         return sb.toString();
+    }
+
+    private SearchPlan buildSearchPlan(String message, List<MessageItem> history, long userId) {
+        if (!looksLikeSearch(message)) {
+            return new SearchPlan(false, List.of(), "local-direct");
+        }
+
+        SearchPlan rewritten = rewriteSearchPlan(message, history, userId);
+        if (rewritten != null) {
+            return rewritten;
+        }
+        return heuristicSearchPlan(message);
+    }
+
+    private SearchPlan rewriteSearchPlan(String message, List<MessageItem> history, long userId) {
+        if ("mock".equals(provider) || aiApiKey.isBlank()) {
+            return heuristicSearchPlan(message);
+        }
+
+        try {
+            quotaService.consumeAiRequests(userId, 1);
+            List<ObjectNode> rewriteMessages = List.of(
+                    msg("system", ARXIV_REWRITE_SYSTEM_PROMPT),
+                    msg("user", buildRewriteUserPrompt(message, history))
+            );
+            String raw = callAi(rewriteMessages);
+            SearchPlan parsed = parseSearchPlan(raw);
+            if (parsed != null) {
+                return parsed;
+            }
+            log.warn("arXiv rewrite parse failed, fallback to heuristic. raw={}", truncate(raw, 400));
+        } catch (Exception e) {
+            log.warn("arXiv rewrite failed: {}", e.getMessage());
+        }
+        return null;
+    }
+
+    private String buildRewriteUserPrompt(String message, List<MessageItem> history) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Latest user request:\n").append(message == null ? "" : message.trim()).append("\n\n");
+        sb.append("Recent conversation:\n");
+        if (history == null || history.isEmpty()) {
+            sb.append("(none)\n");
+        } else {
+            int start = Math.max(0, history.size() - MAX_REWRITE_HISTORY);
+            for (int i = start; i < history.size(); i++) {
+                MessageItem item = history.get(i);
+                if (item == null || item.role() == null || item.content() == null) {
+                    continue;
+                }
+                sb.append("- ")
+                        .append(item.role())
+                        .append(": ")
+                        .append(truncate(item.content().replaceAll("\\s+", " ").trim(), 240))
+                        .append("\n");
+            }
+        }
+        sb.append("\nDecide whether this request really needs arXiv retrieval, then rewrite the search query if needed.");
+        return sb.toString();
+    }
+
+    private SearchPlan parseSearchPlan(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            String json = extractJsonObject(raw);
+            if (json == null || json.isBlank()) {
+                return null;
+            }
+            JsonNode root = objectMapper.readTree(json);
+            List<String> queries = new ArrayList<>();
+            JsonNode queriesNode = root.path("queries");
+            if (queriesNode.isArray()) {
+                for (JsonNode item : queriesNode) {
+                    String normalized = normalizeQuery(item.asText(""));
+                    if (!normalized.isBlank() && !queries.contains(normalized)) {
+                        queries.add(normalized);
+                    }
+                    if (queries.size() >= MAX_REWRITE_QUERIES) {
+                        break;
+                    }
+                }
+            }
+            String singleQuery = normalizeQuery(root.path("query").asText(""));
+            if (!singleQuery.isBlank() && !queries.contains(singleQuery) && queries.size() < MAX_REWRITE_QUERIES) {
+                queries.add(singleQuery);
+            }
+
+            boolean shouldSearch = root.path("shouldSearch").asBoolean(!queries.isEmpty());
+            String reason = root.path("reason").asText("");
+            if (!shouldSearch) {
+                return new SearchPlan(false, List.of(), reason);
+            }
+            if (queries.isEmpty()) {
+                return null;
+            }
+            return new SearchPlan(true, queries, reason);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private SearchPlan heuristicSearchPlan(String message) {
+        List<String> queries = new ArrayList<>();
+        String englishOnly = normalizeQuery(message == null ? "" : message
+                .replaceAll("(?i)arxiv|arivx|paper|papers|latest|recent|search", " "));
+        if (!englishOnly.isBlank()) {
+            queries.add(englishOnly);
+        }
+
+        String fallback = normalizeQuery(message == null ? "" : message);
+        if (!fallback.isBlank() && !queries.contains(fallback)) {
+            queries.add(fallback);
+        }
+
+        if (queries.isEmpty()) {
+            return new SearchPlan(false, List.of(), "heuristic-empty");
+        }
+        return new SearchPlan(true, queries.subList(0, Math.min(queries.size(), MAX_REWRITE_QUERIES)), "heuristic");
+    }
+
+    private List<Map<String, String>> searchArxiv(List<String> queries, String originalMessage) {
+        if (queries == null || queries.isEmpty()) {
+            return List.of();
+        }
+
+        List<Map<String, String>> merged = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        for (String query : queries) {
+            for (Map<String, String> paper : searchArxiv(query)) {
+                String key = (paper.getOrDefault("link", "") + "|" + paper.getOrDefault("title", "")).trim();
+                if (!key.isBlank() && seen.add(key)) {
+                    merged.add(paper);
+                }
+            }
+        }
+
+        merged.sort((left, right) -> Double.compare(
+                scorePaper(right, originalMessage, queries),
+                scorePaper(left, originalMessage, queries)
+        ));
+        if (merged.size() > arxivMaxResults) {
+            return new ArrayList<>(merged.subList(0, arxivMaxResults));
+        }
+        return merged;
     }
 
     private boolean looksLikeSearch(String msg) {
@@ -191,38 +399,50 @@ public class ChatController {
             return false;
         }
         String normalized = msg.toLowerCase();
-        return normalized.contains("论文")
+        return normalized.contains("璁烘枃")
                 || normalized.contains("paper")
+                || normalized.contains("literature")
+                || normalized.contains("reference")
+                || normalized.contains("references")
+                || normalized.contains("citation")
                 || normalized.contains("arxiv")
                 || normalized.contains("arivx")
                 || normalized.contains("search")
-                || normalized.contains("搜索")
-                || normalized.contains("检索")
-                || normalized.contains("综述")
+                || normalized.contains("鎼滅储")
+                || normalized.contains("妫€绱?)
+                || normalized.contains("缁艰堪")
+                || normalized.contains("related work")
+                || normalized.contains("benchmark")
                 || normalized.contains("survey")
                 || normalized.contains("sota")
                 || normalized.contains("state of the art")
-                || normalized.contains("最新")
-                || normalized.contains("相关研究");
+                || normalized.contains("鏈€鏂?)
+                || normalized.contains("鐩稿叧鐮旂┒");
     }
 
     private List<Map<String, String>> searchArxiv(String query) {
+        if (!arxivEnabled) {
+            return List.of();
+        }
         try {
-            String keywords = query.replaceAll("[，。！？,.?!]", " ").trim();
+            String keywords = query.replaceAll("[锛屻€傦紒锛?.?!]", " ").trim();
             if (keywords.isBlank()) {
                 return List.of();
             }
             String encoded = URLEncoder.encode(keywords, StandardCharsets.UTF_8);
-            String url = "https://export.arxiv.org/api/query?search_query=all:" + encoded
-                    + "&start=0&max_results=" + MAX_PAPERS
+            String url = arxivSearchBaseUrl + "?search_query=all:" + encoded
+                    + "&start=0&max_results=" + arxivMaxResults
                     + "&sortBy=relevance&sortOrder=descending";
 
-            HttpRequest req = HttpRequest.newBuilder()
+            HttpRequest.Builder builder = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .header("User-Agent", "TAP/1.0")
-                    .timeout(ARXIV_REQUEST_TIMEOUT)
-                    .GET()
-                    .build();
+                    .timeout(arxivRequestTimeout)
+                    .GET();
+            if (!arxivApiKey.isBlank() && !arxivApiKeyHeader.isBlank()) {
+                builder.header(arxivApiKeyHeader, arxivApiKey);
+            }
+            HttpRequest req = builder.build();
             HttpResponse<byte[]> resp = http.send(req, HttpResponse.BodyHandlers.ofByteArray());
             if (resp.statusCode() != 200) {
                 return List.of();
@@ -233,7 +453,7 @@ public class ChatController {
             var entries = doc.getElementsByTagName("entry");
 
             List<Map<String, String>> results = new ArrayList<>();
-            for (int i = 0; i < entries.getLength() && i < MAX_PAPERS; i++) {
+            for (int i = 0; i < entries.getLength() && i < arxivMaxResults; i++) {
                 var entry = (org.w3c.dom.Element) entries.item(i);
                 String title = xmlText(entry, "title").replaceAll("\\s+", " ").trim();
                 if (title.isBlank()) {
@@ -244,10 +464,10 @@ public class ChatController {
                 String id = xmlText(entry, "id").trim();
                 var authorNodes = entry.getElementsByTagName("author");
                 List<String> authors = new ArrayList<>();
-                for (int j = 0; j < authorNodes.getLength() && j < MAX_PAPERS; j++) {
+                for (int j = 0; j < authorNodes.getLength() && j < arxivMaxResults; j++) {
                     authors.add(xmlText((org.w3c.dom.Element) authorNodes.item(j), "name"));
                 }
-                if (authorNodes.getLength() > MAX_PAPERS) {
+                if (authorNodes.getLength() > arxivMaxResults) {
                     authors.add("et al.");
                 }
 
@@ -263,6 +483,108 @@ public class ChatController {
             log.warn("arXiv search failed: {}", e.getMessage());
             return List.of();
         }
+    }
+
+    private double scorePaper(Map<String, String> paper, String originalMessage, List<String> queries) {
+        String title = paper.getOrDefault("title", "").toLowerCase(Locale.ROOT);
+        String summary = paper.getOrDefault("summary", "").toLowerCase(Locale.ROOT);
+        double score = 0.0;
+
+        for (String query : queries) {
+            String normalizedQuery = normalizeRankingText(query);
+            if (!normalizedQuery.isBlank() && title.contains(normalizedQuery)) {
+                score += 8.0;
+            } else if (!normalizedQuery.isBlank() && summary.contains(normalizedQuery)) {
+                score += 4.0;
+            }
+        }
+
+        for (String term : collectRankingTerms(originalMessage, queries)) {
+            if (title.contains(term)) {
+                score += 3.0;
+            } else if (summary.contains(term)) {
+                score += 1.2;
+            }
+        }
+
+        if (title.contains("survey") || title.contains("review")) {
+            String normalizedMessage = normalizeRankingText(originalMessage);
+            if (normalizedMessage.contains("survey")
+                    || normalizedMessage.contains("review")
+                    || normalizedMessage.contains("sota")) {
+                score += 1.5;
+            }
+        }
+        return score;
+    }
+
+    private Set<String> collectRankingTerms(String originalMessage, List<String> queries) {
+        Set<String> terms = new LinkedHashSet<>();
+        addRankingTerms(terms, originalMessage);
+        if (queries != null) {
+            for (String query : queries) {
+                addRankingTerms(terms, query);
+            }
+        }
+        return terms;
+    }
+
+    private void addRankingTerms(Set<String> terms, String text) {
+        String normalized = normalizeRankingText(text);
+        if (normalized.isBlank()) {
+            return;
+        }
+        for (String token : normalized.split("\\s+")) {
+            if (token.length() < 3 || RANKING_STOPWORDS.contains(token)) {
+                continue;
+            }
+            terms.add(token);
+        }
+    }
+
+    private String normalizeRankingText(String text) {
+        if (text == null) {
+            return "";
+        }
+        return text.toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z0-9\\-\\s]", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+    }
+
+    private String normalizeQuery(String query) {
+        if (query == null) {
+            return "";
+        }
+        String normalized = query
+                .replaceAll("[\\r\\n\\t]+", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+        if (normalized.isEmpty()) {
+            return "";
+        }
+        return normalized.substring(0, Math.min(MAX_QUERY_LENGTH, normalized.length()));
+    }
+
+    private String extractJsonObject(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        int fencedStart = raw.indexOf("```");
+        if (fencedStart >= 0) {
+            int firstBraceInFence = raw.indexOf('{', fencedStart);
+            int fencedEnd = raw.indexOf("```", fencedStart + 3);
+            if (firstBraceInFence >= 0 && fencedEnd > firstBraceInFence) {
+                raw = raw.substring(firstBraceInFence, fencedEnd);
+            }
+        }
+
+        int firstBrace = raw.indexOf('{');
+        int lastBrace = raw.lastIndexOf('}');
+        if (firstBrace < 0 || lastBrace <= firstBrace) {
+            return null;
+        }
+        return raw.substring(firstBrace, lastBrace + 1);
     }
 
     private String callAi(List<ObjectNode> messages) {
@@ -285,14 +607,14 @@ public class ChatController {
             if (resp.statusCode() != 200) {
                 log.error("AI chat HTTP {}: {}", resp.statusCode(),
                         resp.body().substring(0, Math.min(500, resp.body().length())));
-                return "抱歉，AI 服务返回错误码 " + resp.statusCode();
+                return "鎶辨瓑锛孉I 鏈嶅姟杩斿洖閿欒鐮?" + resp.statusCode();
             }
 
             JsonNode root = objectMapper.readTree(resp.body());
             return root.path("choices").path(0).path("message").path("content").asText("");
         } catch (Exception e) {
             log.error("AI chat failed: {}", e.getMessage(), e);
-            return "抱歉，AI 服务暂时不可用，请稍后重试。错误：" + e.getMessage();
+            return "鎶辨瓑锛孉I 鏈嶅姟鏆傛椂涓嶅彲鐢紝璇风◢鍚庨噸璇曘€傞敊璇細" + e.getMessage();
         }
     }
 
@@ -459,42 +781,33 @@ public class ChatController {
     private String buildMockReply(String prompt) {
         String normalized = prompt == null ? "" : prompt.toLowerCase();
 
-        if (normalized.contains("ppt") || normalized.contains("课件")) {
+        if (normalized.contains("ppt") || normalized.contains("璇句欢")) {
             return """
-                    ## 课件建议
-                    1. 开场先明确教学目标、先修知识和课堂产出。
-                    2. 中段用 1 个核心例题拆解概念、流程和边界条件。
-                    3. 结尾安排 1 个课堂练习和 1 个课后延伸任务。
-
-                    ## 页面结构
-                    - 第 1 页：主题、目标、适用班级
-                    - 第 2 页：核心概念与术语
-                    - 第 3 页：示例分析
-                    - 第 4 页：常见错误
-                    - 第 5 页：练习与总结
+                    ## 璇句欢寤鸿
+                    1. 寮€鍦哄厛鏄庣‘鏁欏鐩爣銆佸厛淇煡璇嗗拰璇惧爞浜у嚭銆?                    2. 涓鐢?1 涓牳蹇冧緥棰樻媶瑙ｆ蹇点€佹祦绋嬪拰杈圭晫鏉′欢銆?                    3. 缁撳熬瀹夋帓 1 涓鍫傜粌涔犲拰 1 涓鍚庡欢浼镐换鍔°€?
+                    ## 椤甸潰缁撴瀯
+                    - 绗?1 椤碉細涓婚銆佺洰鏍囥€侀€傜敤鐝骇
+                    - 绗?2 椤碉細鏍稿績姒傚康涓庢湳璇?                    - 绗?3 椤碉細绀轰緥鍒嗘瀽
+                    - 绗?4 椤碉細甯歌閿欒
+                    - 绗?5 椤碉細缁冧範涓庢€荤粨
                     """;
         }
 
         if (looksLikeSearch(normalized)) {
             return """
-                    ## 检索说明
-                    已按你的问题补充论文检索结果。你可以继续指定：
-                    - 研究主题
-                    - 时间范围
-                    - 希望得到的输出形式，例如综述、课堂应用或实验设计
+                    ## 妫€绱㈣鏄?                    宸叉寜浣犵殑闂琛ュ厖璁烘枃妫€绱㈢粨鏋溿€備綘鍙互缁х画鎸囧畾锛?                    - 鐮旂┒涓婚
+                    - 鏃堕棿鑼冨洿
+                    - 甯屾湜寰楀埌鐨勮緭鍑哄舰寮忥紝渚嬪缁艰堪銆佽鍫傚簲鐢ㄦ垨瀹為獙璁捐
                     """;
         }
 
         return """
-                ## 教学助手回复
-                我可以继续帮你处理这些任务：
-                - 设计课堂讲解提纲
-                - 生成实验或作业说明
-                - 润色教学反馈
-                - 整理论文检索结果
-
-                如果你希望回答更贴近场景，请补充课程名称、学生层次和期望输出形式。
-                """;
+                ## 鏁欏鍔╂墜鍥炲
+                鎴戝彲浠ョ户缁府浣犲鐞嗚繖浜涗换鍔★細
+                - 璁捐璇惧爞璁茶В鎻愮翰
+                - 鐢熸垚瀹為獙鎴栦綔涓氳鏄?                - 娑﹁壊鏁欏鍙嶉
+                - 鏁寸悊璁烘枃妫€绱㈢粨鏋?
+                濡傛灉浣犲笇鏈涘洖绛旀洿璐磋繎鍦烘櫙锛岃琛ュ厖璇剧▼鍚嶇О銆佸鐢熷眰娆″拰鏈熸湜杈撳嚭褰㈠紡銆?                """;
     }
 
     private void streamText(OutputStream outputStream, String text) {
@@ -516,6 +829,14 @@ public class ChatController {
         }
     }
 
+    private String normalizeArxivBaseUrl(String baseUrl) {
+        String normalized = baseUrl == null ? "" : baseUrl.trim();
+        while (normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
+    }
+
     private ObjectNode msg(String role, String content) {
         return objectMapper.createObjectNode().put("role", role).put("content", content);
     }
@@ -535,3 +856,4 @@ public class ChatController {
         return s.length() <= max ? s : s.substring(0, max) + "...";
     }
 }
+
