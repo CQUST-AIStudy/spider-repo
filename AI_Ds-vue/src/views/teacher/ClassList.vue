@@ -238,13 +238,15 @@
       <div v-else class="sync-dialog__bound sync-dialog__bound--warning">
         当前未绑定 PTA 账号，留空时将继续回退到现有 Cookie 方式。
       </div>
-      <el-form :model="syncForm" label-width="90px">
+      <el-form :model="syncForm" label-width="90px" autocomplete="off">
         <el-form-item label="PTA 账号">
-          <el-input v-model="syncForm.ptaUsername" placeholder="本次同步使用的 PTA 账号（可选）" clearable />
+          <el-input v-model="syncForm.ptaUsername" autocomplete="off" name="pta-sync-username" placeholder="本次同步使用的 PTA 账号（可选）" clearable />
         </el-form-item>
         <el-form-item label="PTA 密码">
           <el-input
             v-model="syncForm.ptaPassword"
+            autocomplete="new-password"
+            name="pta-sync-password"
             type="password"
             show-password
             placeholder="本次同步使用的 PTA 密码（可选）"
@@ -332,6 +334,7 @@ import {
   removeClassStudent,
   submitPtaCookie,
   triggerPtaSync,
+  updateTeacherPtaCredentials,
   updateTeachingClass
 } from '../../api/tap'
 
@@ -595,6 +598,11 @@ const triggerSyncForClass = async () => {
   }
   syncingMap[cls.id] = true
   try {
+    if (username) {
+      await updateTeacherPtaCredentials({ ptaUsername: username, ptaPassword: password })
+      boundPtaUsername.value = username
+      hasBoundPtaCredentials.value = true
+    }
     await triggerPtaSync(cls.id, username ? { ptaUsername: username, ptaPassword: password } : {})
     cls.syncStatus = 'RUNNING'
     syncDialogVisible.value = false

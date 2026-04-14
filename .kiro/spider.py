@@ -13,6 +13,10 @@ import sys
 import time
 import random
 import pickle
+import glob
+import shutil
+import subprocess
+import tempfile
 import threading
 from pathlib import Path
 from datetime import datetime
@@ -54,7 +58,14 @@ BASE_URL = "https://pintia.cn"
 API_BASE = "https://pintia.cn/api"
 # Track crawled problem set IDs for incremental detection
 HISTORY_FILE = "crawl_history.json"
+SPIDER_DIR = Path(__file__).resolve().parent
+DEFAULT_BROWSER_HOME = (SPIDER_DIR / "browser").resolve()
 CRAWL_DIR = Path(os.getenv("PTA_CRAWL_DIR", str(Path(__file__).resolve().parent.parent / "爬取结果"))).resolve()
+
+
+def _browser_home():
+    configured = os.getenv("PTA_BROWSER_HOME")
+    return Path(configured).resolve() if configured else DEFAULT_BROWSER_HOME
 
 
 def _env_flag(name, default=False):
@@ -62,6 +73,132 @@ def _env_flag(name, default=False):
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _read_binary_version(command_path):
+    try:
+        output = subprocess.check_output(
+            [command_path, "--version"],
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=10,
+        ).strip()
+        return output
+    except Exception:
+        return ""
+
+
+def _read_windows_file_version(path):
+    if not path or not os.path.exists(path):
+        return ""
+    try:
+        safe_path = path.replace("'", "''")
+        command = f"[System.Diagnostics.FileVersionInfo]::GetVersionInfo('{safe_path}').ProductVersion"
+        output = subprocess.check_output(
+            ["powershell.exe", "-NoProfile", "-Command", command],
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=10,
+        ).strip()
+        return output
+    except Exception:
+        return ""
+
+
+def _parse_major_version(version_text):
+    match = re.search(r"(\d+)\.", version_text or "")
+    return int(match.group(1)) if match else None
+
+
+def _detect_chrome_binary():
+    browser_home = _browser_home()
+    candidates = [
+        os.getenv("PTA_CHROME_BINARY"),
+        str(browser_home / "chrome.exe"),
+        str(browser_home / "chrome" / "chrome.exe"),
+        str(browser_home / "Chrome" / "Application" / "chrome.exe"),
+        str(browser_home / "chrome-win64" / "chrome.exe"),
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    ]
+    for path in candidates:
+        if path and os.path.exists(path):
+            version_text = _read_windows_file_version(path)
+            return path, version_text, _parse_major_version(version_text)
+    return None, "", None
+
+
+def _iter_local_chromedrivers():
+    seen = set()
+    candidates = []
+    browser_home = _browser_home()
+
+    env_path = os.getenv("PTA_CHROMEDRIVER_PATH")
+    if env_path and os.path.exists(env_path):
+        candidates.append(("env", env_path))
+
+    candidates.extend([
+        ("browser_home", str(browser_home / "chromedriver.exe")),
+        ("browser_home", str(browser_home / "chromedriver-win64" / "chromedriver.exe")),
+        ("browser_home", str(browser_home / "driver" / "chromedriver.exe")),
+    ])
+
+    bundled = Path(__file__).resolve().parent.parent / "PTA爬虫项目" / "ven" / "Lib" / "chromedriver-win64" / "chromedriver.exe"
+    if bundled.exists():
+        candidates.append(("bundled", str(bundled)))
+
+    candidates.extend(
+        ("wdm", path)
+        for path in glob.glob(
+            os.path.join(
+                os.path.expanduser("~"),
+                ".wdm",
+                "drivers",
+                "chromedriver",
+                "**",
+                "chromedriver.exe",
+            ),
+            recursive=True,
+        )
+    )
+
+    for source, path in candidates:
+        norm = os.path.normcase(os.path.abspath(path))
+        if norm in seen or not os.path.exists(path):
+            continue
+        seen.add(norm)
+        version_text = _read_binary_version(path)
+        major = _parse_major_version(version_text)
+        yield {
+            "source": source,
+            "path": path,
+            "version_text": version_text,
+            "major": major,
+        }
+
+
+def _resolve_chromedriver(browser_major):
+    env_override = None
+    exact = []
+    fallback = []
+    for candidate in _iter_local_chromedrivers():
+        if candidate["source"] == "env":
+            env_override = candidate
+        if browser_major is not None and candidate["major"] == browser_major:
+            exact.append(candidate)
+        else:
+            fallback.append(candidate)
+
+    if env_override is not None:
+        return env_override
+
+    exact.sort(key=lambda item: item["version_text"], reverse=True)
+    fallback.sort(key=lambda item: item["version_text"], reverse=True)
+    if browser_major is not None:
+        return exact[0] if exact else None
+    return fallback[0] if fallback else None
 
 
 class TokenBucketRateLimiter:
@@ -309,12 +446,12 @@ class PTAClient:
             print("\n--- 自动同步数据到数据库 ---")
             # sync_to_db.py 和 spider.py 在同一目录
             import importlib
-            sync_module_path = os.path.join(os.path.dirname(__file__), "sync_to_db.py")
+            sync_module_path = os.path.join(os.path.dirname(__file__), "sync_to_unified_db.py")
             if os.path.exists(sync_module_path):
                 import sys as _sys
                 _sys.path.insert(0, os.path.dirname(__file__))
-                from sync_to_db import sync_all
-                sync_all()
+                from sync_to_unified_db import run_configured_sync
+                run_configured_sync(strict=False)
                 print("数据库同步完成")
             else:
                 print("sync_to_db.py 不存在，跳过自动入库")
@@ -1006,6 +1143,291 @@ def run_scheduled(interval_hours=24):
     while True:
         schedule.run_pending()
         time.sleep(60)
+
+
+def _pta_ensure_login_override(self):
+    manual_cookie_path = os.path.join(os.path.dirname(__file__), "manual_cookies.json")
+
+    def load_cookie_list(cookie_list):
+        for c in cookie_list:
+            name = c.get("name", c.get("Name", ""))
+            value = c.get("value", c.get("Value", ""))
+            domain = c.get("domain", c.get("Domain", ".pintia.cn"))
+            if name and value:
+                self.session.cookies.set(name, value, domain=domain)
+
+    def try_manual_cookie_file():
+        if not os.path.exists(manual_cookie_path):
+            return False
+        print(f"尝试从手动 cookie 文件恢复: {manual_cookie_path}")
+        with open(manual_cookie_path, "r", encoding="utf-8") as f:
+            manual_cookies = json.load(f)
+        load_cookie_list(manual_cookies)
+        if self._check_cookie_valid():
+            self._save_cookies(manual_cookies)
+            print("手动 cookie 有效，已保存")
+            self._notify_cookie_status("OK")
+            return True
+        print("手动 cookie 已过期")
+        return False
+
+    if self.force_selenium_login:
+        print("PTA_FORCE_SELENIUM_LOGIN=true，跳过缓存 Cookie，直接尝试 Selenium 登录...")
+    else:
+        cached = self._load_cookies()
+        if cached:
+            load_cookie_list(cached)
+            if self._check_cookie_valid():
+                self._notify_cookie_status("OK")
+                return True
+            print("缓存 Cookie 已过期，先尝试手动 cookie，再尝试 Selenium 登录...")
+
+        if try_manual_cookie_file():
+            return True
+
+    retry_delays = [30, 60, 120]
+    last_error = None
+    for attempt, delay in enumerate(retry_delays, 1):
+        try:
+            print(f"Selenium 登录尝试 {attempt}/{len(retry_delays)}...")
+            self._selenium_login()
+            if self._check_cookie_valid():
+                print("Selenium 登录成功")
+                self._notify_cookie_status("OK")
+                return True
+            print("Selenium 登录后 cookie 仍无效")
+        except Exception as e:
+            last_error = str(e)
+            print(f"Selenium 尝试 {attempt} 失败: {e}")
+        if attempt < len(retry_delays):
+            print(f"等待 {delay}s 后重试...")
+            time.sleep(delay)
+
+    if try_manual_cookie_file():
+        return True
+
+    error_msg = last_error or "所有登录方式均失败"
+    self._notify_cookie_status("EXPIRED", error_msg)
+    print("=" * 50)
+    print("自动登录全部失败，已通知系统。")
+    print("教师可在“班级管理 -> PTA同步设置”中手动更新 Cookie。")
+    print("=" * 50)
+    return False
+
+
+def _pta_sync_driver_cookies_to_session(self):
+    selenium_cookies = self.driver.get_cookies()
+    for cookie in selenium_cookies:
+        name = cookie.get("name")
+        value = cookie.get("value")
+        if not name or not value:
+            continue
+        self.session.cookies.set(
+            name,
+            value,
+            domain=cookie.get("domain", ".pintia.cn"),
+        )
+    return selenium_cookies
+
+
+def _pta_wait_for_authenticated_cookie(self, timeout_seconds=15):
+    deadline = time.time() + timeout_seconds
+    captcha_attempted = False
+    while time.time() < deadline:
+        if self.driver is None:
+            return False, []
+
+        selenium_cookies = _pta_sync_driver_cookies_to_session(self)
+        if self._check_cookie_valid():
+            return True, selenium_cookies
+
+        iframe_count = len(self.driver.find_elements(By.ID, "tcaptcha_iframe_dy"))
+        if iframe_count and not captcha_attempted:
+            print("Detected slider captcha, attempting automatic solve...")
+            self._handle_captcha()
+            captcha_attempted = True
+            time.sleep(5)
+            continue
+
+        time.sleep(2)
+
+    selenium_cookies = _pta_sync_driver_cookies_to_session(self)
+    return self._check_cookie_valid(), selenium_cookies
+
+
+def _pta_dump_login_debug(self, tag="pta_login_failed"):
+    if self.driver is None:
+        return
+    debug_dir = (Path(__file__).resolve().parent / "login_debug").resolve()
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    html_path = debug_dir / f"{tag}_{timestamp}.html"
+    png_path = debug_dir / f"{tag}_{timestamp}.png"
+    try:
+        html_path.write_text(self.driver.page_source, encoding="utf-8")
+    except Exception:
+        pass
+    try:
+        self.driver.save_screenshot(str(png_path))
+    except Exception:
+        pass
+
+
+def _pta_selenium_login_override(self):
+    chrome_options = Options()
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_options.add_argument("--disable-infobars")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--remote-debugging-port=0")
+    chrome_options.add_argument("--window-size=1440,900")
+    chrome_options.add_argument("--disable-software-rasterizer")
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--disable-background-networking")
+    chrome_options.add_argument("--no-first-run")
+    chrome_options.add_argument("--no-default-browser-check")
+    chrome_options.add_argument("--disable-popup-blocking")
+    chrome_options.add_argument("--disable-features=Translate,AutomationControlled")
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    chrome_options.add_experimental_option("useAutomationExtension", False)
+    if _env_flag("PTA_HEADLESS", False):
+        chrome_options.add_argument("--headless=new")
+
+    print(f"PTA browser home: {_browser_home()}")
+    browser_path, browser_version, browser_major = _detect_chrome_binary()
+    if browser_path:
+        chrome_options.binary_location = browser_path
+        print(f"Chrome binary: {browser_path}")
+        if browser_version:
+            print(f"Chrome version: {browser_version}")
+    else:
+        print("Chrome binary not found in standard paths; Selenium will use default discovery.")
+
+    profile_dir = (Path(__file__).resolve().parent / ".chrome-profile").resolve()
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    (profile_dir / "Default").mkdir(parents=True, exist_ok=True)
+    (profile_dir / "First Run").touch(exist_ok=True)
+    chrome_options.add_argument(f"--user-data-dir={profile_dir}")
+    chrome_options.add_argument("--profile-directory=Default")
+
+    selected_driver = _resolve_chromedriver(browser_major)
+    last_error = None
+    try:
+        if selected_driver and selected_driver["path"]:
+            print(f"Selected ChromeDriver: {selected_driver['version_text']} @ {selected_driver['path']}")
+            try:
+                self.driver = webdriver.Chrome(
+                    service=Service(selected_driver["path"]),
+                    options=chrome_options,
+                )
+            except Exception as e:
+                last_error = e
+                print(f"Local ChromeDriver startup failed: {e}")
+
+        if self.driver is None:
+            cache_dir = str((Path(__file__).resolve().parent / ".selenium").resolve())
+            os.environ.setdefault("SE_CACHE_PATH", cache_dir)
+            print(f"Trying Selenium Manager with cache: {cache_dir}")
+            try:
+                self.driver = webdriver.Chrome(options=chrome_options)
+            except Exception as e:
+                last_error = e
+                print(f"Selenium Manager startup failed: {e}")
+
+        if self.driver is None:
+            print("Trying webdriver-manager download fallback...")
+            self.driver = webdriver.Chrome(
+                service=Service(ChromeDriverManager().install()),
+                options=chrome_options,
+            )
+    except Exception as e:
+        detail = last_error or e
+        raise RuntimeError(
+            "failed to start Chrome for PTA auto-login; "
+            f"chrome={browser_version or 'unknown'}, "
+            f"driver={selected_driver['version_text'] if selected_driver else 'none'}, "
+            f"detail={detail}"
+        ) from e
+
+    self.driver.implicitly_wait(10)
+
+    try:
+        print("Selenium 鐧诲綍涓?..")
+        self.driver.get(f"{BASE_URL}/auth/login")
+        WebDriverWait(self.driver, 20).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "form, input, button[type='submit']"))
+        )
+        time.sleep(random.uniform(1, 2))
+
+        username_input = None
+        for selector in [
+            "input[autocomplete='username']",
+            "input[type='text']",
+            "input:not([type])",
+        ]:
+            elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+            username_input = next(
+                (el for el in elements if el.is_displayed() and el.is_enabled()),
+                None,
+            )
+            if username_input is not None:
+                break
+        if username_input is None:
+            raise NoSuchElementException("username input not found on PTA login page")
+
+        username_input.clear()
+        username_input.send_keys(self.username)
+        time.sleep(random.uniform(0.5, 1.5))
+
+        password_input = None
+        for selector in [
+            "input[autocomplete='current-password']",
+            "input[type='password']",
+        ]:
+            elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+            password_input = next(
+                (el for el in elements if el.is_displayed() and el.is_enabled()),
+                None,
+            )
+            if password_input is not None:
+                break
+        if password_input is None:
+            raise NoSuchElementException("password input not found on PTA login page")
+
+        password_input.clear()
+        password_input.send_keys(self.password)
+        time.sleep(random.uniform(0.5, 1.5))
+
+        submit_button = next(
+            (
+                el for el in self.driver.find_elements(By.CSS_SELECTOR, "button[type='submit'], button.pc-button")
+                if el.is_displayed() and el.is_enabled()
+            ),
+            None,
+        )
+        if submit_button is None:
+            raise NoSuchElementException("submit button not found on PTA login page")
+
+        submit_button.click()
+        time.sleep(random.uniform(2, 3))
+
+        wait_seconds = int(os.getenv("PTA_SELENIUM_AUTH_WAIT_SECONDS", "15"))
+        authenticated, selenium_cookies = _pta_wait_for_authenticated_cookie(self, timeout_seconds=wait_seconds)
+        self._save_cookies(selenium_cookies)
+        if not authenticated:
+            _pta_dump_login_debug(self)
+            raise RuntimeError("login submitted but authenticated cookie was not detected")
+        print("鐧诲綍瀹屾垚锛宑ookie 宸茶浆绉诲埌 requests")
+    finally:
+        if self.driver:
+            self.driver.quit()
+            self.driver = None
+        pass
+
+
+PTAClient._selenium_login = _pta_selenium_login_override
+PTAClient.ensure_login = _pta_ensure_login_override
 
 
 if __name__ == "__main__":
