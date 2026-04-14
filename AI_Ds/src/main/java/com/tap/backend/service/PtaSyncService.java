@@ -152,7 +152,8 @@ public class PtaSyncService {
         TeacherPtaCredentialService.ResolvedPtaCredential credential =
                 resolveCredential(teachingClass.getTeacherId(), ptaUsername, ptaPassword);
 
-        if (checkCooldown && teachingClass.getLastSyncAt() != null) {
+        boolean bypassCooldown = Boolean.TRUE.equals(force);
+        if (checkCooldown && !bypassCooldown && teachingClass.getLastSyncAt() != null) {
             Duration since = Duration.between(teachingClass.getLastSyncAt(), Instant.now());
             if (since.compareTo(COOLDOWN) < 0) {
                 long remainingHours = COOLDOWN.minus(since).toHours();
