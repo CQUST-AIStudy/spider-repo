@@ -196,6 +196,20 @@ export async function uploadZipFolder(folderName, file) {
   return payload
 }
 
+export async function submitZipOrganizeJob(file) {
+  const fd = new FormData()
+  fd.append('file', file)
+  const token = getTapToken()
+  const res = await fetch(`${TAP_BASE}/api/zip-organize/jobs`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: fd
+  })
+  const payload = await parseFetchPayload(res)
+  if (!res.ok) throw new Error(resolveFetchErrorMessage(res, payload, 'ZIP 智能整理提交失败'))
+  return payload
+}
+
 // ========== Translation ==========
 export function translateDocument(docId, targetLang = 'ZH', force = false) {
   return tapClient.get(`/api/documents/${docId}/translate`, {
@@ -263,6 +277,22 @@ export function downloadAgentJobZip(jobId) {
   return tapClient.get(`/api/agent/jobs/${jobId}/download`, { responseType: 'blob', timeout: 300000 })
 }
 
+export function listZipOrganizeJobs(limit = 20) {
+  return tapClient.get('/api/zip-organize/jobs', { params: { limit } })
+}
+
+export function queryZipOrganizeJob(jobId) {
+  return tapClient.get(`/api/zip-organize/jobs/${jobId}`)
+}
+
+export function retryZipOrganizeJob(jobId) {
+  return tapClient.post(`/api/zip-organize/jobs/${jobId}/retry`)
+}
+
+export function downloadZipOrganizeJobZip(jobId) {
+  return tapClient.get(`/api/zip-organize/jobs/${jobId}/download`, { responseType: 'blob', timeout: 300000 })
+}
+
 
 // ========== Grading - Rubrics ==========
 export function getRubrics(subject) {
@@ -327,6 +357,10 @@ export function getSubmissionDetail(id) {
 
 export function overrideSubmissionScore(id, data) {
   return tapClient.put(`/api/grading/submissions/${id}/scores`, data)
+}
+
+export function retryGradingSubmission(id) {
+  return tapClient.post(`/api/grading/submissions/${id}/retry`)
 }
 
 export function downloadSubmissionReport(id) {

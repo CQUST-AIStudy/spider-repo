@@ -89,10 +89,19 @@
               <span v-else class="muted-text">暂无</span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="180" fixed="right">
+          <el-table-column label="操作" width="240" fixed="right">
             <template #default="{ row }">
               <el-button v-if="row.hasDownloadableReport" link type="success" @click="downloadReport(row)">
                 下载报告
+              </el-button>
+              <el-button
+                v-if="row.status === 'FAILED'"
+                link
+                type="warning"
+                :loading="retryingSubmissionId === row.submissionId"
+                @click="retrySubmission(row)"
+              >
+                重试
               </el-button>
               <el-button link type="primary" @click="router.push(`/teacher/grading/submission/${row.submissionId}`)">
                 查看详情
@@ -143,6 +152,7 @@ import {
   exportGradingExcel,
   exportGradingTask,
   getGradingTaskDetail,
+  retryGradingSubmission,
   updateGradingTaskSignature,
 } from '@/api/tap'
 
@@ -164,6 +174,7 @@ const annotating = ref(false)
 const exportingAnnotated = ref(false)
 const signatureDraft = ref('')
 const signatureSaving = ref(false)
+const retryingSubmissionId = ref(null)
 
 const filteredSubs = computed(() => {
   if (!statusFilter.value) return submissions.value
@@ -325,6 +336,19 @@ async function downloadReport(row) {
     URL.revokeObjectURL(url)
   } catch (error) {
     ElMessage.error(`下载失败: ${error.message}`)
+  }
+}
+
+async function retrySubmission(row) {
+  retryingSubmissionId.value = row.submissionId
+  try {
+    await retryGradingSubmission(row.submissionId)
+    ElMessage.success('已提交重试任务')
+    await loadDetail()
+  } catch (error) {
+    ElMessage.error(`重试失败: ${error.message}`)
+  } finally {
+    retryingSubmissionId.value = null
   }
 }
 
