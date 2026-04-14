@@ -41,14 +41,8 @@ public class DocumentTranslationController {
       @RequestParam(name = "force", defaultValue = "false") boolean force
   ) {
     String m = mode == null ? "text" : mode.trim().toLowerCase();
-    if ("doc".equals(m)) {
-      return ApiResponse.of(Maps.of(
-          "documentId", docId,
-          "targetLang", targetLang,
-          "mode", "doc",
-          "enabled", false,
-          "message", "DeepL document translation mode is reserved but not enabled yet."
-      ));
+    if (!"text".equals(m) && !"doc".equals(m)) {
+      throw new IllegalArgumentException("unsupported translate mode: " + m);
     }
     var resolved = principalResolver.resolve(principal);
     var res = translateService.translateTextMode(resolved.userId(), docId, targetLang, force);

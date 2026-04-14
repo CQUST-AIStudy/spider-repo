@@ -70,4 +70,21 @@ public class DocumentListController {
     documentRepository.delete(doc);
     return ApiResponse.of(Maps.of("id", docId, "deleted", true));
   }
+
+  @DeleteMapping
+  @Transactional
+  public ApiResponse<Map<String, Object>> deleteAll(
+      @AuthenticationPrincipal UserPrincipal principal
+  ) {
+    var resolved = principalResolver.resolve(principal);
+    var docs = documentRepository.findAllByUser_Id(resolved.userId());
+    if (docs.isEmpty()) {
+      return ApiResponse.of(Maps.of("deletedCount", 0));
+    }
+
+    List<String> docIds = docs.stream().map(d -> String.valueOf(d.getId())).toList();
+    structuredSummaryRepository.deleteAllByScopeTypeAndScopeKeyIn("DOCUMENT", docIds);
+    documentRepository.deleteAllInBatch(docs);
+    return ApiResponse.of(Maps.of("deletedCount", docs.size()));
+  }
 }

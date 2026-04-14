@@ -155,6 +155,10 @@ export function deleteDocument(docId) {
   return tapClient.delete(`/api/documents/${docId}`)
 }
 
+export function deleteAllDocuments() {
+  return tapClient.delete('/api/documents')
+}
+
 export async function createFolder(folderName) {
   return tapClient.post('/api/uploads/folders', { folderName })
 }

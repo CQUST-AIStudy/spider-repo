@@ -9,6 +9,16 @@
       <div class="hero-actions">
         <el-button type="primary" :icon="UploadFilled" @click="showUpload = true">上传文档</el-button>
         <el-button :icon="Refresh" @click="loadDocs">刷新</el-button>
+        <el-button
+          type="danger"
+          plain
+          :icon="Delete"
+          :loading="clearingAll"
+          :disabled="docsLoading || docs.length === 0"
+          @click="handleDeleteAll"
+        >
+          清空全部
+        </el-button>
       </div>
     </div>
 
@@ -81,7 +91,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { UploadFilled, Refresh, Document, MagicStick, Delete } from '@element-plus/icons-vue'
-import { getDocuments, deleteDocument, createFolder, uploadFiles } from '../../api/tap'
+import { getDocuments, deleteDocument, deleteAllDocuments, createFolder, uploadFiles } from '../../api/tap'
 
 const router = useRouter()
 const showUpload = ref(false)
@@ -130,6 +140,28 @@ const handleDelete = async (id) => {
   try { await deleteDocument(id); ElMessage.success('删除成功'); loadDocs() }
   catch (e) { ElMessage.error('删除失败：' + e.message) }
   deleting.value = null
+}
+
+const clearingAll = ref(false)
+const handleDeleteAll = async () => {
+  try {
+    await ElMessageBox.confirm('确定清空文档中心全部文档？该操作不可恢复。', '提示', { type: 'warning' })
+  } catch {
+    return
+  }
+
+  clearingAll.value = true
+  try {
+    const res = await deleteAllDocuments()
+    const data = res?.data ?? res ?? {}
+    const deletedCount = Number(data.deletedCount ?? 0)
+    ElMessage.success(`已清空 ${deletedCount} 个文档`)
+    await loadDocs()
+  } catch (e) {
+    ElMessage.error('清空失败：' + (e.message || '未知错误'))
+  } finally {
+    clearingAll.value = false
+  }
 }
 
 // 工具

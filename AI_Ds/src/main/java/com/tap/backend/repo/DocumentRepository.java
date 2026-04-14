@@ -10,5 +10,6 @@ public interface DocumentRepository extends JpaRepository<DocumentEntity, Long> 
   Optional<DocumentEntity> findFirstBySha256OrderByIdAsc(String sha256);
   List<DocumentEntity> findAllByUploadFolder_Id(Long uploadFolderId);
   Optional<DocumentEntity> findByIdAndUser_Id(Long id, Long userId);
+  List<DocumentEntity> findAllByUser_Id(Long userId);
   List<DocumentEntity> findAllByUser_IdOrderByCreatedAtDesc(Long userId, Pageable pageable);
 }
