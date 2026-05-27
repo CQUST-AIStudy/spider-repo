@@ -1,6 +1,7 @@
 package com.tap.backend.api.analytics;
 
-import com.cqust.ai_server.security.StudentSessionResolver;
+import com.tap.backend.academic.security.StudentSessionResolver;
+import com.tap.backend.academic.entity.UserEntity;
 import com.tap.common.api.ApiResponse;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
@@ -32,72 +33,62 @@ public class StudentAnalyticsController {
             @PathVariable String studentId,
             HttpServletRequest request
     ) {
-        String authorizedStudentId = studentSessionResolver.requireAuthorizedStudentId(studentId, request);
+        Long studentProfileId = Long.valueOf(studentSessionResolver.requireAuthorizedStudentId(studentId, request));
+        UserEntity currentUser = studentSessionResolver.requireStudent(request);
+        String classContext = currentUser.getClassname();
 
         @SuppressWarnings("unchecked")
-        List<Object[]> experimentRows = em.createNativeQuery(
-                "SELECT DISTINCT s.experiment_id, e.name " +
-                        "FROM score s JOIN experiment e ON s.experiment_id = e.experiment_id " +
-                        "WHERE s.username = ?1 ORDER BY s.experiment_id"
-        ).setParameter(1, authorizedStudentId).getResultList();
+        List<Object[]> rows = em.createNativeQuery(
+                "SELECT ao.id, COALESCE(NULLIF(ao.title_override, ''), at.title) AS title, " +
+                        "COALESCE(sa.latest_total_score, sa.best_total_score, 0) AS my_score, " +
+                        "stats.class_avg, stats.total_students, stats.above_count, stats.equal_count " +
+                        "FROM class_member cm " +
+                        "JOIN teaching_class tc ON tc.id = cm.class_id " +
+                        "JOIN assignment_offering ao ON ao.class_id = cm.class_id " +
+                        "JOIN assignment_template at ON at.id = ao.template_id " +
+                        "LEFT JOIN student_assignment sa ON sa.offering_id = ao.id AND sa.student_id = cm.student_id " +
+                        "LEFT JOIN ( " +
+                        "  SELECT sa2.offering_id, AVG(COALESCE(sa2.latest_total_score, sa2.best_total_score, 0)) AS class_avg, " +
+                        "         COUNT(*) AS total_students, " +
+                        "         SUM(CASE WHEN COALESCE(sa2.latest_total_score, sa2.best_total_score, 0) > COALESCE(my.latest_total_score, my.best_total_score, 0) THEN 1 ELSE 0 END) AS above_count, " +
+                        "         SUM(CASE WHEN COALESCE(sa2.latest_total_score, sa2.best_total_score, 0) = COALESCE(my.latest_total_score, my.best_total_score, 0) THEN 1 ELSE 0 END) AS equal_count " +
+                        "  FROM student_assignment sa2 " +
+                        "  JOIN assignment_offering ao2 ON ao2.id = sa2.offering_id " +
+                        "  JOIN class_member cm2 ON cm2.class_id = ao2.class_id AND cm2.student_id = sa2.student_id AND cm2.member_status = 'ACTIVE' " +
+                        "  LEFT JOIN student_assignment my ON my.offering_id = sa2.offering_id AND my.student_id = ?1 " +
+                        "  GROUP BY sa2.offering_id, COALESCE(my.latest_total_score, my.best_total_score, 0) " +
+                        ") stats ON stats.offering_id = ao.id " +
+                        "WHERE cm.student_id = ?1 " +
+                        "AND cm.member_status = 'ACTIVE' " +
+                        "AND (?2 IS NULL OR ?2 = '' " +
+                        "OR tc.name = CONVERT(?2 USING utf8mb4) COLLATE utf8mb4_unicode_ci " +
+                        "OR tc.class_code = CONVERT(?2 USING utf8mb4) COLLATE utf8mb4_unicode_ci " +
+                        "OR tc.course_name = CONVERT(?2 USING utf8mb4) COLLATE utf8mb4_unicode_ci) " +
+                        "AND ao.status <> 'ARCHIVED' " +
+                        "ORDER BY cm.class_id, COALESCE(ao.seq_no, 999999), ao.id"
+        ).setParameter(1, studentProfileId)
+                .setParameter(2, classContext)
+                .getResultList();
 
         List<Map<String, Object>> experiments = new ArrayList<>();
         double myTotalScore = 0;
         double classTotalAvg = 0;
-        int experimentCount = 0;
 
-        for (Object[] experimentRow : experimentRows) {
-            int experimentId = ((Number) experimentRow[0]).intValue();
-            String experimentName = (String) experimentRow[1];
-
-            @SuppressWarnings("unchecked")
-            List<Object[]> myRows = em.createNativeQuery(
-                    "SELECT score FROM score WHERE experiment_id = ?1 AND username = ?2 AND score IS NOT NULL"
-            ).setParameter(1, experimentId).setParameter(2, authorizedStudentId).getResultList();
-            if (myRows.isEmpty() || myRows.get(0)[0] == null) {
-                continue;
-            }
-            double myScore = ((Number) myRows.get(0)[0]).doubleValue();
-
-            @SuppressWarnings("unchecked")
-            List<Object[]> classRows = em.createNativeQuery(
-                    "SELECT AVG(score), COUNT(*), " +
-                            "SUM(CASE WHEN score > ?2 THEN 1 ELSE 0 END), " +
-                            "SUM(CASE WHEN score = ?2 THEN 1 ELSE 0 END) " +
-                            "FROM score WHERE experiment_id = ?1 AND score IS NOT NULL"
-            ).setParameter(1, experimentId).setParameter(2, myScore).getResultList();
-
-            double classAvg = 0;
-            int totalStudents = 0;
-            double percentile = 50;
-            if (!classRows.isEmpty() && classRows.get(0)[0] != null) {
-                classAvg = ((Number) classRows.get(0)[0]).doubleValue();
-                totalStudents = ((Number) classRows.get(0)[1]).intValue();
-                int above = ((Number) classRows.get(0)[2]).intValue();
-                int equal = ((Number) classRows.get(0)[3]).intValue();
-                percentile = totalStudents > 0
-                        ? round2((1.0 - (above + equal * 0.5) / totalStudents) * 100)
-                        : 50;
-            }
-
-            @SuppressWarnings("unchecked")
-            List<Object[]> medianRows = em.createNativeQuery(
-                    "SELECT score FROM score WHERE experiment_id = ?1 AND score IS NOT NULL ORDER BY score"
-            ).setParameter(1, experimentId).getResultList();
-            double median = 0;
-            if (!medianRows.isEmpty()) {
-                int size = medianRows.size();
-                if (size % 2 == 0) {
-                    median = (((Number) medianRows.get(size / 2 - 1)[0]).doubleValue()
-                            + ((Number) medianRows.get(size / 2)[0]).doubleValue()) / 2.0;
-                } else {
-                    median = ((Number) medianRows.get(size / 2)[0]).doubleValue();
-                }
-            }
+        for (Object[] row : rows) {
+            long offeringId = ((Number) row[0]).longValue();
+            double myScore = toDouble(row[2]);
+            double classAvg = toDouble(row[3]);
+            int totalStudents = toInt(row[4]);
+            int above = toInt(row[5]);
+            int equal = toInt(row[6]);
+            double percentile = totalStudents > 0
+                    ? round2((1.0 - (above + equal * 0.5) / totalStudents) * 100)
+                    : 50;
+            double median = classMedian(offeringId);
 
             Map<String, Object> item = new LinkedHashMap<>();
-            item.put("experimentId", experimentId);
-            item.put("name", experimentName);
+            item.put("experimentId", offeringId);
+            item.put("name", row[1]);
             item.put("myScore", round2(myScore));
             item.put("classAvg", round2(classAvg));
             item.put("classMedian", round2(median));
@@ -108,9 +99,9 @@ public class StudentAnalyticsController {
 
             myTotalScore += myScore;
             classTotalAvg += classAvg;
-            experimentCount++;
         }
 
+        int experimentCount = experiments.size();
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("avgMyScore", experimentCount > 0 ? round2(myTotalScore / experimentCount) : 0);
         summary.put("avgClassScore", experimentCount > 0 ? round2(classTotalAvg / experimentCount) : 0);
@@ -128,74 +119,134 @@ public class StudentAnalyticsController {
             @PathVariable int experimentId,
             HttpServletRequest request
     ) {
-        String authorizedStudentId = studentSessionResolver.requireAuthorizedStudentId(studentId, request);
+        Long studentProfileId = Long.valueOf(studentSessionResolver.requireAuthorizedStudentId(studentId, request));
+        UserEntity currentUser = studentSessionResolver.requireStudent(request);
+        String classContext = currentUser.getClassname();
+        long offeringId = experimentId;
 
+        // The membership join is the access boundary: a student can only inspect offerings in active classes they belong to.
         @SuppressWarnings("unchecked")
-        List<Object[]> myRows = em.createNativeQuery(
-                "SELECT problem_label, problem_type, max_score, actual_score " +
-                        "FROM problem_score_detail WHERE experiment_id = ?1 AND student_id = ?2 " +
-                        "ORDER BY problem_label"
-        ).setParameter(1, experimentId).setParameter(2, authorizedStudentId).getResultList();
-
-        @SuppressWarnings("unchecked")
-        List<Object[]> classRows = em.createNativeQuery(
-                "SELECT problem_label, AVG(actual_score) as avg_score, MAX(max_score) as full_score " +
-                        "FROM problem_score_detail WHERE experiment_id = ?1 " +
-                        "GROUP BY problem_label ORDER BY problem_label"
-        ).setParameter(1, experimentId).getResultList();
-
-        Map<String, double[]> classMap = new LinkedHashMap<>();
-        for (Object[] row : classRows) {
-            classMap.put((String) row[0], new double[]{
-                    ((Number) row[1]).doubleValue(),
-                    ((Number) row[2]).doubleValue()
-            });
-        }
-
-        List<Map<String, Object>> problems = new ArrayList<>();
-        for (Object[] row : myRows) {
-            String label = (String) row[0];
-            double maxScore = ((Number) row[2]).doubleValue();
-            double myScore = ((Number) row[3]).doubleValue();
-            double[] classStats = classMap.getOrDefault(label, new double[]{0, maxScore});
-
-            Map<String, Object> item = new LinkedHashMap<>();
-            item.put("label", label);
-            item.put("type", row[1]);
-            item.put("fullScore", round2(maxScore));
-            item.put("myScore", round2(myScore));
-            item.put("classAvg", round2(classStats[0]));
-            item.put("diff", round2(myScore - classStats[0]));
-            problems.add(item);
-        }
-
-        @SuppressWarnings("unchecked")
-        List<Object[]> totalRows = em.createNativeQuery(
-                "SELECT score FROM score WHERE experiment_id = ?1 AND username = ?2"
-        ).setParameter(1, experimentId).setParameter(2, authorizedStudentId).getResultList();
-        double myTotal = (!totalRows.isEmpty() && totalRows.get(0)[0] != null)
-                ? ((Number) totalRows.get(0)[0]).doubleValue()
-                : 0;
-
-        @SuppressWarnings("unchecked")
-        List<Object[]> statsRows = em.createNativeQuery(
-                "SELECT AVG(score), MAX(score), MIN(score), COUNT(*) " +
-                        "FROM score WHERE experiment_id = ?1 AND score IS NOT NULL"
-        ).setParameter(1, experimentId).getResultList();
+        List<Object[]> assignmentRows = em.createNativeQuery(
+                "SELECT COALESCE(sa.latest_total_score, sa.best_total_score, 0) AS my_score, " +
+                        "stats.class_avg, stats.class_max, stats.class_min, stats.total_students " +
+                        "FROM class_member cm " +
+                        "JOIN teaching_class tc ON tc.id = cm.class_id " +
+                        "JOIN assignment_offering ao ON ao.class_id = cm.class_id AND ao.id = ?1 " +
+                        "LEFT JOIN student_assignment sa ON sa.offering_id = ao.id AND sa.student_id = cm.student_id " +
+                        "LEFT JOIN ( " +
+                        "  SELECT sa2.offering_id, AVG(COALESCE(sa2.latest_total_score, sa2.best_total_score, 0)) AS class_avg, " +
+                        "         MAX(COALESCE(sa2.latest_total_score, sa2.best_total_score, 0)) AS class_max, " +
+                        "         MIN(COALESCE(sa2.latest_total_score, sa2.best_total_score, 0)) AS class_min, COUNT(*) AS total_students " +
+                        "  FROM student_assignment sa2 " +
+                        "  JOIN assignment_offering ao2 ON ao2.id = sa2.offering_id " +
+                        "  JOIN class_member cm2 ON cm2.class_id = ao2.class_id AND cm2.student_id = sa2.student_id AND cm2.member_status = 'ACTIVE' " +
+                        "  WHERE sa2.offering_id = ?1 " +
+                        "  GROUP BY sa2.offering_id " +
+                        ") stats ON stats.offering_id = ao.id " +
+                        "WHERE cm.student_id = ?2 AND cm.member_status = 'ACTIVE' " +
+                        "AND (?3 IS NULL OR ?3 = '' " +
+                        "OR tc.name = CONVERT(?3 USING utf8mb4) COLLATE utf8mb4_unicode_ci " +
+                        "OR tc.class_code = CONVERT(?3 USING utf8mb4) COLLATE utf8mb4_unicode_ci " +
+                        "OR tc.course_name = CONVERT(?3 USING utf8mb4) COLLATE utf8mb4_unicode_ci) " +
+                        "AND ao.status <> 'ARCHIVED'"
+        ).setParameter(1, offeringId)
+                .setParameter(2, studentProfileId)
+                .setParameter(3, classContext)
+                .getResultList();
 
         Map<String, Object> overview = new LinkedHashMap<>();
-        overview.put("myScore", round2(myTotal));
-        if (!statsRows.isEmpty() && statsRows.get(0)[0] != null) {
-            overview.put("classAvg", round2(((Number) statsRows.get(0)[0]).doubleValue()));
-            overview.put("classMax", round2(((Number) statsRows.get(0)[1]).doubleValue()));
-            overview.put("classMin", round2(((Number) statsRows.get(0)[2]).doubleValue()));
-            overview.put("totalStudents", ((Number) statsRows.get(0)[3]).intValue());
+        if (!assignmentRows.isEmpty()) {
+            Object[] row = assignmentRows.get(0);
+            overview.put("myScore", round2(toDouble(row[0])));
+            overview.put("classAvg", round2(toDouble(row[1])));
+            overview.put("classMax", round2(toDouble(row[2])));
+            overview.put("classMin", round2(toDouble(row[3])));
+            overview.put("totalStudents", toInt(row[4]));
+        } else {
+            overview.put("myScore", 0);
+            overview.put("classAvg", 0);
+            overview.put("classMax", 0);
+            overview.put("classMin", 0);
+            overview.put("totalStudents", 0);
+        }
+
+        @SuppressWarnings("unchecked")
+        List<Object[]> problemRows = em.createNativeQuery(
+                "SELECT ap.problem_no, ap.title, ap.max_score, COALESCE(sps.best_score, 0) AS my_score, " +
+                        "stats.class_avg " +
+                        "FROM class_member cm " +
+                        "JOIN teaching_class tc ON tc.id = cm.class_id " +
+                        "JOIN assignment_offering ao ON ao.class_id = cm.class_id AND ao.id = ?1 " +
+                        "JOIN assignment_problem ap ON ap.offering_id = ao.id AND ap.status = 'ACTIVE' " +
+                        "LEFT JOIN student_problem_state sps ON sps.offering_id = ap.offering_id AND sps.problem_id = ap.id AND sps.student_id = cm.student_id " +
+                        "LEFT JOIN ( " +
+                        "  SELECT sps2.problem_id, AVG(COALESCE(sps2.best_score, 0)) AS class_avg " +
+                        "  FROM student_problem_state sps2 " +
+                        "  JOIN assignment_offering ao2 ON ao2.id = sps2.offering_id " +
+                        "  JOIN class_member cm2 ON cm2.class_id = ao2.class_id AND cm2.student_id = sps2.student_id AND cm2.member_status = 'ACTIVE' " +
+                        "  WHERE sps2.offering_id = ?1 " +
+                        "  GROUP BY sps2.problem_id " +
+                        ") stats ON stats.problem_id = ap.id " +
+                        "WHERE cm.student_id = ?2 AND cm.member_status = 'ACTIVE' " +
+                        "AND (?3 IS NULL OR ?3 = '' " +
+                        "OR tc.name = CONVERT(?3 USING utf8mb4) COLLATE utf8mb4_unicode_ci " +
+                        "OR tc.class_code = CONVERT(?3 USING utf8mb4) COLLATE utf8mb4_unicode_ci " +
+                        "OR tc.course_name = CONVERT(?3 USING utf8mb4) COLLATE utf8mb4_unicode_ci) " +
+                        "AND ao.status <> 'ARCHIVED' " +
+                        "ORDER BY ap.sort_order, ap.problem_no"
+        ).setParameter(1, offeringId)
+                .setParameter(2, studentProfileId)
+                .setParameter(3, classContext)
+                .getResultList();
+
+        List<Map<String, Object>> problems = new ArrayList<>();
+        for (Object[] row : problemRows) {
+            double fullScore = toDouble(row[2]);
+            double myScore = toDouble(row[3]);
+            double classAvg = toDouble(row[4]);
+
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("label", row[0]);
+            item.put("type", row[1]);
+            item.put("fullScore", round2(fullScore));
+            item.put("myScore", round2(myScore));
+            item.put("classAvg", round2(classAvg));
+            item.put("diff", round2(myScore - classAvg));
+            problems.add(item);
         }
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("overview", overview);
         result.put("problems", problems);
         return ApiResponse.of(result);
+    }
+
+    private double classMedian(long offeringId) {
+        @SuppressWarnings("unchecked")
+        List<Object> rows = em.createNativeQuery(
+                "SELECT COALESCE(sa.best_total_score, sa.latest_total_score, 0) AS score " +
+                        "FROM student_assignment sa " +
+                        "JOIN assignment_offering ao ON ao.id = sa.offering_id " +
+                        "JOIN class_member cm ON cm.class_id = ao.class_id AND cm.student_id = sa.student_id AND cm.member_status = 'ACTIVE' " +
+                        "WHERE sa.offering_id = ?1 ORDER BY score"
+        ).setParameter(1, offeringId).getResultList();
+
+        if (rows.isEmpty()) {
+            return 0;
+        }
+        int size = rows.size();
+        if (size % 2 == 0) {
+            return (toDouble(rows.get(size / 2 - 1)) + toDouble(rows.get(size / 2))) / 2.0;
+        }
+        return toDouble(rows.get(size / 2));
+    }
+
+    private static int toInt(Object value) {
+        return value instanceof Number number ? number.intValue() : 0;
+    }
+
+    private static double toDouble(Object value) {
+        return value instanceof Number number ? number.doubleValue() : 0;
     }
 
     private static double round2(double value) {
