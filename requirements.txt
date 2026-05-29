@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+requests
+httpx
+pydantic
+selenium
+webdriver-manager
+opencv-python
+python-dotenv
+pymysql
