@@ -1,0 +1,10 @@
+runtime/
+output/
+__pycache__/
+*.py[cod]
+*.log
+*.pid
+.env
+.venv/
+venv/
+.pytest_cache/
