@@ -37,6 +37,11 @@ $healthUrl = "http://127.0.0.1:8100/health"
 function Resolve-SpiderPython {
   $candidates = @()
 
+  $candidates += @(
+    (Join-Path $scriptDir ".venv\Scripts\python.exe"),
+    (Join-Path $scriptDir "venv\Scripts\python.exe")
+  )
+
   if ($env:CONDA_PREFIX -and (Split-Path $env:CONDA_PREFIX -Leaf) -eq "spider") {
     $candidates += (Join-Path $env:CONDA_PREFIX "python.exe")
   }
@@ -55,6 +60,9 @@ function Resolve-SpiderPython {
   foreach ($p in ($candidates | Select-Object -Unique)) {
     if ($p -and (Test-Path $p)) { return $p }
   }
+
+  $pathPython = Get-Command python -ErrorAction SilentlyContinue
+  if ($pathPython) { return $pathPython.Source }
 
   return $null
 }
@@ -75,7 +83,7 @@ if (-not (Test-Path $appFile)) {
 
 $pythonExe = Resolve-SpiderPython
 if (-not $pythonExe) {
-  Write-Host "spider env python not found (expected: <conda_base>\\envs\\spider\\python.exe)" -ForegroundColor Red
+  Write-Host "python not found. Create .venv or install Python first." -ForegroundColor Red
   exit 1
 }
 
