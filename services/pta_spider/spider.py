@@ -808,6 +808,32 @@ class PTAClient:
 
         return all_subs
 
+    def _write_submissions_csv(self, base_dir, submissions):
+        import csv
+
+        with open(base_dir / "提交记录.csv", "w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["用户ID", "题目ID", "状态", "分数", "编译器", "用时", "内存", "提交时间"])
+            for sub in submissions:
+                writer.writerow([
+                    sub.get("userId", ""),
+                    sub.get("problemSetProblemId", ""),
+                    sub.get("status", ""),
+                    sub.get("score", ""),
+                    sub.get("compiler", ""),
+                    sub.get("time", ""),
+                    sub.get("memory", ""),
+                    sub.get("submitAt", ""),
+                ])
+        return len(submissions)
+
+    def _refresh_submissions_csv(self, ps_id, ps_name):
+        base_dir = self._problem_set_dir(ps_name)
+        submissions = self.get_all_submissions(ps_id)
+        count = self._write_submissions_csv(base_dir, submissions)
+        print(f"  提交记录: {count} 条")
+        return count
+
     def get_rankings(self, ps_id):
         """Get rankings"""
         return self.api_get(f"/problem-sets/{ps_id}/rankings")
@@ -1088,24 +1114,7 @@ class PTAClient:
 
         # 2. Crawl submissions
         try:
-            submissions = self.get_all_submissions(ps_id)
-            if submissions:
-                import csv
-                with open(base_dir / "提交记录.csv", "w", encoding="utf-8", newline="") as f:
-                    writer = csv.writer(f)
-                    writer.writerow(["用户ID", "题目ID", "状态", "分数", "编译器", "用时", "内存", "提交时间"])
-                    for sub in submissions:
-                        writer.writerow([
-                            sub.get("userId", ""),
-                            sub.get("problemSetProblemId", ""),
-                            sub.get("status", ""),
-                            sub.get("score", ""),
-                            sub.get("compiler", ""),
-                            sub.get("time", ""),
-                            sub.get("memory", ""),
-                            sub.get("submitAt", ""),
-                        ])
-                print(f"  提交记录: {len(submissions)} 条")
+            self._refresh_submissions_csv(ps_id, ps_name)
         except Exception as e:
             print(f"  获取提交记录失败: {e}")
 
@@ -1133,12 +1142,18 @@ class PTAClient:
 
         time.sleep(random.uniform(0.5, 1))
 
-    def _refresh_one_problem_set(self, ps_id, ps_name):
+    def _refresh_one_problem_set(self, ps_id, ps_name, include_submissions=True):
         """
-        刷新已爬取题目集的导出数据（不重新爬取题目内容和提交记录）。
-        只重新导出: PAPER_TRANSCRIPT, ANSWER_SHEET, SCORED_CODE
+        刷新已爬取题目集的动态数据（不重新爬取题目内容）。
+        会更新提交记录和导出文件: PAPER_TRANSCRIPT, ANSWER_SHEET, SCORED_CODE
         """
         base_dir = self._problem_set_dir(ps_name)
+        if include_submissions:
+            try:
+                self._refresh_submissions_csv(ps_id, ps_name)
+            except Exception as e:
+                print(f"  获取提交记录失败: {e}")
+
         export_dir = base_dir / "导出"
         export_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1162,9 +1177,9 @@ class PTAClient:
             except Exception as e:
                 print(f"  导出{cn_name}失败: {e}")
 
-    def refresh_exports(self, keyword=None):
+    def refresh_exports(self, keyword=None, include_submissions=True):
         """
-        刷新所有已爬取题目集的导出数据（成绩单/答题卡/得分代码）。
+        刷新所有已爬取题目集的动态数据（提交记录/成绩单/答题卡/得分代码）。
         用于学生持续提交后，重新拉取最新数据覆盖旧文件。
         不重新爬取题目内容（题目发布后不变）。
         """
@@ -1201,7 +1216,7 @@ class PTAClient:
             ps_name = ps.get("name", "未知")
             try:
                 print(f"\n--- 刷新导出: {ps_name} ---")
-                self._refresh_one_problem_set(ps_id, ps_name)
+                self._refresh_one_problem_set(ps_id, ps_name, include_submissions=include_submissions)
                 self.history.mark_export_refreshed(ps_id)
                 refreshed += 1
                 print(f"完成: {ps_name}")
@@ -1245,8 +1260,8 @@ def run_once(mode="incremental"):
     Run one crawl cycle (all accounts).
     mode:
       - "incremental": 只爬取新题目集（含题目内容+导出）
-      - "refresh": 刷新所有已爬取题目集的导出数据
-      - "full": 先增量爬新的，再刷新所有已有的导出
+      - "refresh": 刷新所有已爬取题目集的动态数据
+      - "full": 先增量爬新的，再刷新所有已有的动态数据
     """
     accounts = load_accounts()
     for acc in accounts:
@@ -1576,10 +1591,10 @@ if __name__ == "__main__":
         hours = int(sys.argv[2]) if len(sys.argv) > 2 else 24
         run_scheduled(hours)
     elif len(sys.argv) > 1 and sys.argv[1] == "--refresh":
-        # python spider.py --refresh  -> 只刷新导出数据
+        # python spider.py --refresh  -> 刷新提交记录和导出数据
         run_once(mode="refresh")
     elif len(sys.argv) > 1 and sys.argv[1] == "--full":
-        # python spider.py --full  -> 增量爬取 + 刷新导出
+        # python spider.py --full  -> 增量爬取 + 刷新动态数据
         run_once(mode="full")
     elif len(sys.argv) > 1 and sys.argv[1] == "--keyword":
         # python spider.py --keyword "keyword_here"
