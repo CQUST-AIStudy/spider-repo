@@ -642,30 +642,44 @@ class PTAClient:
     def search_problem_sets(self, keyword):
         """Search teaching problem sets (/api/problem-sets/admin)"""
         result = []
-        page = 0
-        while True:
-            filter_param = json.dumps({
-                "ownerId": "0",
-                "keyword": keyword,
-                "stage": {"stage": "NORMAL"},
-            })
-            sort_param = json.dumps({"type": "UPDATE_AT", "asc": False})
-            data = self.api_get("/problem-sets/admin", params={
-                "sort_by": sort_param,
-                "page": page,
-                "limit": 50,
-                "filter": filter_param,
-            })
-            sets = data.get("problemSets", [])
-            if not sets:
-                break
-            for s in sets:
-                print(f"  发现: {s.get('name', '?')}")
-            result.extend(sets)
-            if len(result) >= data.get("total", 0):
-                break
-            page += 1
-            time.sleep(random.uniform(0.5, 1))
+        seen_ids = set()
+        search_keywords = []
+        for item in [keyword, self._normalize_problem_set_keyword(keyword)]:
+            item = str(item or "").strip()
+            if item and item not in search_keywords:
+                search_keywords.append(item)
+
+        for search_keyword in search_keywords:
+            page = 0
+            print(f"Searching problem sets with keyword: {search_keyword}", flush=True)
+            while True:
+                filter_param = json.dumps({
+                    "ownerId": "0",
+                    "keyword": search_keyword,
+                    "stage": {"stage": "NORMAL"},
+                }, ensure_ascii=False)
+                sort_param = json.dumps({"type": "UPDATE_AT", "asc": False})
+                data = self.api_get("/problem-sets/admin", params={
+                    "sort_by": sort_param,
+                    "page": page,
+                    "limit": 50,
+                    "filter": filter_param,
+                })
+                sets = data.get("problemSets", [])
+                if not sets:
+                    break
+                for s in sets:
+                    ps_id = s.get("id")
+                    if ps_id and ps_id in seen_ids:
+                        continue
+                    if ps_id:
+                        seen_ids.add(ps_id)
+                    print(f"  发现: {s.get('name', '?')}")
+                    result.append(s)
+                if len(sets) < 50 or len(result) >= data.get("total", 0):
+                    break
+                page += 1
+                time.sleep(random.uniform(0.5, 1))
         print(f"搜索到 {len(result)} 个题目集")
         filtered_sets = self._filter_problem_sets_by_keyword(result, keyword)
         print(f"Filtered problem sets: {len(result)} -> {len(filtered_sets)}")
@@ -1431,9 +1445,15 @@ def _pta_selenium_login_override(self):
         ) from e
 
     self.driver.implicitly_wait(0)
+    login_ok = False
 
     try:
-        print("Selenium 鐧诲綍涓?..")
+        print("Selenium login starting...", flush=True)
+        try:
+            self.driver.set_window_position(80, 40)
+            self.driver.set_window_size(1440, 900)
+        except Exception:
+            pass
         self.driver.get(f"{BASE_URL}/auth/login")
         form_wait_seconds = max(1, int(os.getenv("PTA_SELENIUM_FORM_WAIT_SECONDS", "5")))
         WebDriverWait(self.driver, form_wait_seconds).until(
@@ -1475,11 +1495,20 @@ def _pta_selenium_login_override(self):
         if not authenticated:
             _pta_dump_login_debug(self)
             raise RuntimeError("login submitted but authenticated cookie was not detected")
-        print("鐧诲綍瀹屾垚锛宑ookie 宸茶浆绉诲埌 requests")
+        login_ok = True
+        print("Selenium login completed, cookies moved to requests", flush=True)
     finally:
         if self.driver:
-            self.driver.quit()
-            self.driver = None
+            keep_open_on_failure = (
+                not login_ok
+                and not getattr(self, "headless", _env_flag("PTA_HEADLESS", False))
+                and _env_flag("PTA_KEEP_BROWSER_OPEN_ON_FAILURE", True)
+            )
+            if keep_open_on_failure:
+                print("Selenium login failed; keeping Chrome open for inspection.", flush=True)
+            else:
+                self.driver.quit()
+                self.driver = None
         pass
 
 

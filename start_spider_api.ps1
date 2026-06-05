@@ -2,16 +2,32 @@
 # - checks if already running
 # - writes PID file
 # - waits for health check
-# - uses spider env python directly (no conda run)
+# - uses the selected Python directly; supports .venv and conda envs
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $env:PYTHONIOENCODING = "utf-8"
+$env:PYTHONUNBUFFERED = if ($env:PYTHONUNBUFFERED) { $env:PYTHONUNBUFFERED } else { "1" }
 $env:CONDA_NO_PLUGINS = "true"
+$machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if ($machinePath -or $userPath) {
+  $env:Path = (($machinePath, $userPath) | Where-Object { $_ }) -join ";"
+  [Environment]::SetEnvironmentVariable("PATH", $null, "Process")
+}
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$workspaceRoot = Split-Path -Parent $scriptDir
+$backendLocalEnvScript = Join-Path $workspaceRoot "backend-repo\AI_Ds\local.env.ps1"
+if (Test-Path $backendLocalEnvScript) {
+  . $backendLocalEnvScript
+}
 $localEnvScript = Join-Path $repoRoot "local.env.ps1"
 if (Test-Path $localEnvScript) {
   . $localEnvScript
+}
+$spiderLocalEnvScript = Join-Path $scriptDir "local.env.ps1"
+if (Test-Path $spiderLocalEnvScript) {
+  . $spiderLocalEnvScript
 }
 $runtimeDir = if ($env:PTA_RUNTIME_DIR) {
   $env:PTA_RUNTIME_DIR
@@ -23,10 +39,16 @@ $env:PTA_RUNTIME_DIR = $runtimeDir
 $env:PTA_CRAWL_DIR = if ($env:PTA_CRAWL_DIR) { $env:PTA_CRAWL_DIR } else { (Join-Path $scriptDir "output") }
 $env:JAVA_BACKEND_URL = if ($env:JAVA_BACKEND_URL) { $env:JAVA_BACKEND_URL } else { "http://127.0.0.1:8081" }
 $env:PTA_HEADLESS = if ($env:PTA_HEADLESS) { $env:PTA_HEADLESS } else { "false" }
+$env:PTA_KEEP_BROWSER_OPEN_ON_FAILURE = if ($env:PTA_KEEP_BROWSER_OPEN_ON_FAILURE) { $env:PTA_KEEP_BROWSER_OPEN_ON_FAILURE } else { "true" }
+$env:PTA_SELENIUM_FORM_WAIT_SECONDS = if ($env:PTA_SELENIUM_FORM_WAIT_SECONDS) { $env:PTA_SELENIUM_FORM_WAIT_SECONDS } else { "30" }
+$env:PTA_SELENIUM_AUTH_WAIT_SECONDS = if ($env:PTA_SELENIUM_AUTH_WAIT_SECONDS) { $env:PTA_SELENIUM_AUTH_WAIT_SECONDS } else { "60" }
 $env:PTA_BROWSER_HOME = if ($env:PTA_BROWSER_HOME) { $env:PTA_BROWSER_HOME } else { (Join-Path $runtimeDir "browser") }
 $env:SE_CACHE_PATH = if ($env:SE_CACHE_PATH) { $env:SE_CACHE_PATH } else { (Join-Path $runtimeDir ".selenium") }
 $env:ACADEMIC_UNIFIED_IMPORT_ENABLED = if ($env:ACADEMIC_UNIFIED_IMPORT_ENABLED) { $env:ACADEMIC_UNIFIED_IMPORT_ENABLED } else { "true" }
 $env:ACADEMIC_LEGACY_WRITE_ENABLED = if ($env:ACADEMIC_LEGACY_WRITE_ENABLED) { $env:ACADEMIC_LEGACY_WRITE_ENABLED } else { "true" }
+if (-not $env:DB_USER -and $env:DB_USERNAME) {
+  $env:DB_USER = $env:DB_USERNAME
+}
 
 $appFile = Join-Path $scriptDir "spider_api.py"
 $pidFile = Join-Path $runtimeDir "spider_api.pid"
@@ -36,6 +58,31 @@ $healthUrl = "http://127.0.0.1:8100/health"
 
 function Resolve-SpiderPython {
   $candidates = @()
+
+  if ($env:PTA_SPIDER_PYTHON) {
+    $candidates += $env:PTA_SPIDER_PYTHON
+  }
+
+  $condaRoots = @(
+    "D:\Anaconda",
+    "$env:USERPROFILE\anaconda3",
+    "$env:USERPROFILE\miniconda3",
+    "D:\Miniconda",
+    "F:\downloads\miniconda"
+  )
+
+  if ($env:CONDA_EXE) {
+    $condaBase = Split-Path (Split-Path $env:CONDA_EXE -Parent) -Parent
+    $condaRoots = @($condaBase) + $condaRoots
+  }
+
+  if ($env:PTA_CONDA_ENV) {
+    foreach ($root in ($condaRoots | Select-Object -Unique)) {
+      if ($root -and (Test-Path $root)) {
+        $candidates += (Join-Path $root "envs\$env:PTA_CONDA_ENV\python.exe")
+      }
+    }
+  }
 
   $candidates += @(
     (Join-Path $scriptDir ".venv\Scripts\python.exe"),
@@ -51,11 +98,14 @@ function Resolve-SpiderPython {
     $candidates += (Join-Path $condaBase "envs\spider\python.exe")
   }
 
-  $candidates += @(
-    "$env:USERPROFILE\miniconda3\envs\spider\python.exe",
-    "$env:USERPROFILE\anaconda3\envs\spider\python.exe",
-    "F:\downloads\miniconda\envs\spider\python.exe"
-  )
+  $preferredCondaEnvs = @("pta_spider_py310", "spider", "dl310", "opencv4", "jujube310")
+  foreach ($root in ($condaRoots | Select-Object -Unique)) {
+    foreach ($envName in $preferredCondaEnvs) {
+      if ($root -and (Test-Path $root)) {
+        $candidates += (Join-Path $root "envs\$envName\python.exe")
+      }
+    }
+  }
 
   foreach ($p in ($candidates | Select-Object -Unique)) {
     if ($p -and (Test-Path $p)) { return $p }
