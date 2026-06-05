@@ -125,7 +125,7 @@ def _iter_experiment_dirs(crawl_dir: Path):
 
 
 def _normalize_text(value) -> str:
-    return str(value or "").strip()
+    return "".join(str(value or "").split())
 
 
 def _find_best_matching_class(cursor, experiment_name: str):

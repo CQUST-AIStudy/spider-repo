@@ -267,8 +267,8 @@ def get_db():
     return pymysql.connect(
         host=os.getenv("DB_HOST", "localhost"),
         port=int(os.getenv("DB_PORT", "3306")),
-        user=os.getenv("DB_USER", "root"),
-        password=os.getenv("DB_PASSWORD", ""),
+        user=os.getenv("DB_USER") or os.getenv("DB_USERNAME", "root"),
+        password=os.getenv("DB_PASSWORD") or os.getenv("DB_PASS", ""),
         database=os.getenv("DB_NAME", "ptadatabase"),
         charset="utf8mb4",
     )
@@ -890,8 +890,8 @@ def get_db():
     config = {
         "host": os.getenv("DB_HOST", "localhost"),
         "port": int(os.getenv("DB_PORT", "3306")),
-        "user": os.getenv("DB_USER", "root"),
-        "password": os.getenv("DB_PASSWORD", ""),
+        "user": os.getenv("DB_USER") or os.getenv("DB_USERNAME", "root"),
+        "password": os.getenv("DB_PASSWORD") or os.getenv("DB_PASS", ""),
         "database": os.getenv("DB_NAME", "ptadatabase"),
         "charset": "utf8mb4",
     }
@@ -1363,6 +1363,7 @@ def sync_transcript(conn, exp_map):
             rows = _read_xlsx_rows(xlsx_files[0])
             if len(rows) < 4:
                 continue
+            cursor.execute("DELETE FROM score WHERE experiment_id = %s", (eid,))
             header_idx = 2
             sid_col, name_col, score_col = 1, 2, 4
             for i, row in enumerate(rows[:5]):
