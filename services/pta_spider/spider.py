@@ -19,7 +19,7 @@ import subprocess
 import tempfile
 import threading
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 # Windows 终端 UTF-8 输出修复
 if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
@@ -457,6 +457,53 @@ class PTAClient:
                 pending_ids.add(ps_id)
         return pending
 
+    @staticmethod
+    def _parse_pta_time(value):
+        if not value:
+            return None
+        text = str(value).strip()
+        try:
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            parsed = datetime.fromisoformat(text)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except ValueError:
+            return None
+
+    def get_sets_requiring_dynamic_refresh(self, all_sets, force=False):
+        crawled = self.history.get_all_crawled()
+        candidates = [ps for ps in all_sets if ps.get("id", "") in crawled]
+        if force:
+            return candidates
+
+        recent_limit = int(os.getenv("PTA_DYNAMIC_REFRESH_RECENT_LIMIT", "5"))
+        grace_days = int(os.getenv("PTA_DYNAMIC_REFRESH_GRACE_DAYS", "14"))
+        now = datetime.now(timezone.utc)
+
+        active = []
+        for ps in candidates:
+            end_at = self._parse_pta_time(ps.get("endAt"))
+            if end_at is None or now <= end_at + timedelta(days=grace_days):
+                active.append(ps)
+
+        def sort_key(ps):
+            update_at = self._parse_pta_time(ps.get("updateAt"))
+            if update_at is not None:
+                return update_at.timestamp()
+            try:
+                return float(ps.get("id", "0"))
+            except (TypeError, ValueError):
+                return 0.0
+
+        selected_by_id = {ps.get("id", ""): ps for ps in active}
+        if recent_limit > 0:
+            for ps in sorted(candidates, key=sort_key, reverse=True)[:recent_limit]:
+                selected_by_id[ps.get("id", "")] = ps
+
+        return sorted(selected_by_id.values(), key=sort_key, reverse=True)
+
     def _notify_cookie_status(self, status: str, error: str = ""):
         """通知 Java 后端 cookie 状态（OK / EXPIRED），用于前端告警"""
         backend_url = os.getenv("JAVA_BACKEND_URL", "http://localhost:8081")
@@ -470,9 +517,14 @@ class PTAClient:
         except Exception as e:
             print(f"通知后端 cookie 状态失败（不影响主流程）: {e}")
 
-    def _auto_sync_to_db(self):
+    def _auto_sync_to_db(self, experiment_names=None):
         """爬取/刷新完成后自动将数据同步到数据库"""
         try:
+            if experiment_names is not None:
+                experiment_names = [name for name in experiment_names if name]
+                if not experiment_names:
+                    print("\n--- 本轮没有变化的实验，跳过自动同步数据库 ---")
+                    return
             print("\n--- 自动同步数据到数据库 ---")
             # sync_to_db.py 和 spider.py 在同一目录
             import importlib
@@ -481,7 +533,7 @@ class PTAClient:
                 import sys as _sys
                 _sys.path.insert(0, os.path.dirname(__file__))
                 from sync_to_unified_db import run_configured_sync
-                report = run_configured_sync(strict=True)
+                report = run_configured_sync(strict=True, experiment_names=experiment_names)
                 if not report.get("ok"):
                     raise RuntimeError(report.get("error") or "database sync failed")
                 print("数据库同步完成")
@@ -999,7 +1051,7 @@ class PTAClient:
 
     # ==================== Incremental Crawl Core ====================
 
-    def crawl_incremental(self, keyword=None):
+    def crawl_incremental(self, keyword=None, auto_sync=True):
         """
         增量爬取：自动检测新题目集，只处理新增的。
         keyword: 搜索关键词，如 '计科23数据结构'，默认从 .env 读取
@@ -1045,7 +1097,8 @@ class PTAClient:
         print(f"\n本次增量爬取完成，处理了 {len(new_sets)} 个新题目集")
 
         # 自动同步到数据库
-        self._auto_sync_to_db()
+        if auto_sync:
+            self._auto_sync_to_db([ps.get("name", "未知") for ps in new_sets])
 
     def _crawl_one_problem_set(self, ps_id, ps_name):
         """Crawl all data for a single problem set, save to ./爬取结果/"""
@@ -1177,7 +1230,7 @@ class PTAClient:
             except Exception as e:
                 print(f"  导出{cn_name}失败: {e}")
 
-    def refresh_exports(self, keyword=None, include_submissions=True):
+    def refresh_exports(self, keyword=None, include_submissions=True, auto_sync=True, force=False):
         """
         刷新所有已爬取题目集的动态数据（提交记录/成绩单/答题卡/得分代码）。
         用于学生持续提交后，重新拉取最新数据覆盖旧文件。
@@ -1198,19 +1251,19 @@ class PTAClient:
             print("未搜索到任何题目集")
             return 0
 
-        # 只刷新已爬取过的题目集
-        crawled = self.history.get_all_crawled()
-        to_refresh = [ps for ps in all_sets if ps.get("id", "") in crawled]
+        # 只刷新已爬取过、且仍在动态刷新窗口内的题目集；force 时全刷。
+        to_refresh = self.get_sets_requiring_dynamic_refresh(all_sets, force=force)
 
         if not to_refresh:
             print("没有需要刷新的题目集")
             return 0
 
-        print(f"将刷新 {len(to_refresh)} 个题目集的导出数据:")
+        print(f"将刷新 {len(to_refresh)} 个题目集的动态数据:")
         for ps in to_refresh:
             print(f"  - {ps.get('name', '未知')}")
 
         refreshed = 0
+        refreshed_names = []
         for ps in to_refresh:
             ps_id = ps.get("id", "")
             ps_name = ps.get("name", "未知")
@@ -1219,6 +1272,7 @@ class PTAClient:
                 self._refresh_one_problem_set(ps_id, ps_name, include_submissions=include_submissions)
                 self.history.mark_export_refreshed(ps_id)
                 refreshed += 1
+                refreshed_names.append(ps_name)
                 print(f"完成: {ps_name}")
             except Exception as e:
                 print(f"刷新 {ps_name} 失败: {e}")
@@ -1226,7 +1280,8 @@ class PTAClient:
         print(f"\n导出数据刷新完成，处理了 {refreshed}/{len(to_refresh)} 个题目集")
 
         # 自动同步到数据库
-        self._auto_sync_to_db()
+        if auto_sync:
+            self._auto_sync_to_db(refreshed_names)
 
         return refreshed
 

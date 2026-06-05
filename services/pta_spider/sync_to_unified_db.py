@@ -125,6 +125,12 @@ def _iter_experiment_dirs(crawl_dir: Path):
     return sorted([d for d in crawl_dir.iterdir() if d.is_dir()], key=lambda p: p.name)
 
 
+def _normalize_experiment_names(experiment_names):
+    if not experiment_names:
+        return None
+    return {str(name).strip() for name in experiment_names if str(name).strip()}
+
+
 def _normalize_text(value) -> str:
     return str(value or "").strip()
 
@@ -1502,19 +1508,25 @@ def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dic
         raise
 
 
-def sync_all(crawl_dir=None, strict=True):
+def sync_all(crawl_dir=None, strict=True, experiment_names=None):
     crawl_dir = _get_crawl_dir(crawl_dir)
+    selected_names = _normalize_experiment_names(experiment_names)
     report = {
         "ok": False,
         "mode": "unified",
         "crawl_dir": str(crawl_dir),
+        "experiment_filter": sorted(selected_names) if selected_names else None,
         "experiments": [],
     }
     conn = legacy_sync.get_db()
     try:
         exp_dirs = _iter_experiment_dirs(crawl_dir)
+        if selected_names:
+            exp_dirs = [d for d in exp_dirs if d.name in selected_names]
         if not exp_dirs:
             message = f"No experiment data found in crawl directory: {crawl_dir}"
+            if selected_names:
+                message = f"No selected experiment data found in crawl directory: {sorted(selected_names)}"
             report["error"] = message
             if strict:
                 raise RuntimeError(message)
@@ -1553,7 +1565,7 @@ def sync_all(crawl_dir=None, strict=True):
         conn.close()
 
 
-def run_configured_sync(crawl_dir=None, strict=True):
+def run_configured_sync(crawl_dir=None, strict=True, experiment_names=None):
     use_unified = _flag("ACADEMIC_UNIFIED_IMPORT_ENABLED", False)
     legacy_write_enabled = _flag("ACADEMIC_LEGACY_WRITE_ENABLED", True)
     result = {
@@ -1562,9 +1574,9 @@ def run_configured_sync(crawl_dir=None, strict=True):
         "unified_enabled": use_unified,
     }
     if legacy_write_enabled:
-        result["legacy"] = legacy_sync.sync_all(crawl_dir=crawl_dir, strict=strict)
+        result["legacy"] = legacy_sync.sync_all(crawl_dir=crawl_dir, strict=strict, experiment_names=experiment_names)
     if use_unified:
-        result["unified"] = sync_all(crawl_dir=crawl_dir, strict=strict)
+        result["unified"] = sync_all(crawl_dir=crawl_dir, strict=strict, experiment_names=experiment_names)
     if use_unified:
         result["ok"] = bool(result.get("unified", {}).get("ok"))
     elif legacy_write_enabled:

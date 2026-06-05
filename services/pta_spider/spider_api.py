@@ -220,6 +220,7 @@ def _run_crawl(task):
         kw = task.keyword
         mode = task.mode
         all_sets = None
+        changed_experiment_names = set()
 
         # incremental / full: detect new problem sets
         if mode in (CrawlMode.INCREMENTAL, CrawlMode.FULL):
@@ -231,6 +232,7 @@ def _run_crawl(task):
                     try:
                         client._crawl_one_problem_set(ps["id"], ps.get("name", ""))
                         client.history.mark_crawled(ps["id"], ps.get("name", ""))
+                        changed_experiment_names.add(ps.get("name", ""))
                     except Exception as e:
                         print(f"crawl {ps.get('name','')} failed: {e}")
 
@@ -240,25 +242,15 @@ def _run_crawl(task):
             if ok or task.force:
                 if all_sets is None:
                     all_sets = client.search_problem_sets(kw)
-                crawled = client.history.get_all_crawled()
+                dynamic_sets = client.get_sets_requiring_dynamic_refresh(all_sets or [], force=task.force)
                 total_subs = 0
-                for ps in (all_sets or []):
-                    if ps["id"] in crawled:
-                        try:
-                            subs = client.get_all_submissions(ps["id"])
-                            if subs:
-                                base_dir = client._problem_set_dir(ps.get("name", ""))
-                                with open(base_dir / "\u63d0\u4ea4\u8bb0\u5f55.csv", "w", encoding="utf-8", newline="") as f:
-                                    w = csv.writer(f)
-                                    w.writerow(["\u7528\u6237ID","\u9898\u76eeID","\u72b6\u6001","\u5206\u6570","\u7f16\u8bd1\u5668","\u7528\u65f6","\u5185\u5b58","\u63d0\u4ea4\u65f6\u95f4"])
-                                    for s in subs:
-                                        w.writerow([s.get("userId",""),s.get("problemSetProblemId",""),
-                                                     s.get("status",""),s.get("score",""),s.get("compiler",""),
-                                                     s.get("time",""),s.get("memory",""),s.get("submitAt","")])
-                                total_subs += len(subs)
-                            time.sleep(1)
-                        except Exception as e:
-                            print(f"pull submissions failed {ps.get('name','')}: {e}")
+                for ps in dynamic_sets:
+                    try:
+                        total_subs += client._refresh_submissions_csv(ps["id"], ps.get("name", ""))
+                        changed_experiment_names.add(ps.get("name", ""))
+                        time.sleep(1)
+                    except Exception as e:
+                        print(f"pull submissions failed {ps.get('name','')}: {e}")
                 task.submissions_count = total_subs
                 _cooldown.mark(kw, "submissions")
             else:
@@ -272,7 +264,13 @@ def _run_crawl(task):
                 task.refreshed_count = client.refresh_exports(
                     kw,
                     include_submissions=(mode == CrawlMode.REFRESH),
+                    auto_sync=False,
+                    force=task.force,
                 )
+                if all_sets is None:
+                    all_sets = client.search_problem_sets(kw)
+                for ps in client.get_sets_requiring_dynamic_refresh(all_sets or [], force=task.force):
+                    changed_experiment_names.add(ps.get("name", ""))
                 _cooldown.mark(kw, "exports")
             else:
                 h, m = divmod(rem // 60, 60)
@@ -280,8 +278,11 @@ def _run_crawl(task):
 
         # sync to database
         try:
-            print("syncing to database...")
-            run_configured_sync(strict=False)
+            if changed_experiment_names:
+                print("syncing changed experiments to database...")
+                run_configured_sync(strict=False, experiment_names=changed_experiment_names)
+            else:
+                print("no changed experiments; skip database sync")
         except Exception as e:
             print(f"db sync failed: {e}")
 
@@ -321,6 +322,7 @@ def _run_crawl(task):
         kw = task.keyword
         mode = task.mode
         all_sets = None
+        changed_experiment_names = set()
 
         if mode in (CrawlMode.INCREMENTAL, CrawlMode.FULL):
             all_sets = client.search_problem_sets(kw)
@@ -331,6 +333,7 @@ def _run_crawl(task):
                     try:
                         client._crawl_one_problem_set(ps["id"], ps.get("name", ""))
                         client.history.mark_crawled(ps["id"], ps.get("name", ""))
+                        changed_experiment_names.add(ps.get("name", ""))
                     except Exception as e:
                         print(f"crawl {ps.get('name', '')} failed: {e}")
 
@@ -339,27 +342,15 @@ def _run_crawl(task):
             if ok or task.force:
                 if all_sets is None:
                     all_sets = client.search_problem_sets(kw)
-                crawled = client.history.get_all_crawled()
+                dynamic_sets = client.get_sets_requiring_dynamic_refresh(all_sets or [], force=task.force)
                 total_subs = 0
-                for ps in (all_sets or []):
-                    if ps["id"] in crawled:
-                        try:
-                            subs = client.get_all_submissions(ps["id"])
-                            if subs:
-                                base_dir = client._problem_set_dir(ps.get("name", ""))
-                                with open(base_dir / "提交记录.csv", "w", encoding="utf-8", newline="") as f:
-                                    w = csv.writer(f)
-                                    w.writerow(["用户ID", "题目ID", "状态", "分数", "编译器", "用时", "内存", "提交时间"])
-                                    for s in subs:
-                                        w.writerow([
-                                            s.get("userId", ""), s.get("problemSetProblemId", ""),
-                                            s.get("status", ""), s.get("score", ""), s.get("compiler", ""),
-                                            s.get("time", ""), s.get("memory", ""), s.get("submitAt", "")
-                                        ])
-                                total_subs += len(subs)
-                            time.sleep(1)
-                        except Exception as e:
-                            print(f"pull submissions failed {ps.get('name', '')}: {e}")
+                for ps in dynamic_sets:
+                    try:
+                        total_subs += client._refresh_submissions_csv(ps["id"], ps.get("name", ""))
+                        changed_experiment_names.add(ps.get("name", ""))
+                        time.sleep(1)
+                    except Exception as e:
+                        print(f"pull submissions failed {ps.get('name', '')}: {e}")
                 task.submissions_count = total_subs
                 _cooldown.mark(kw, "submissions")
             else:
@@ -372,16 +363,25 @@ def _run_crawl(task):
                 task.refreshed_count = client.refresh_exports(
                     kw,
                     include_submissions=(mode == CrawlMode.REFRESH),
+                    auto_sync=False,
+                    force=task.force,
                 )
+                if all_sets is None:
+                    all_sets = client.search_problem_sets(kw)
+                for ps in client.get_sets_requiring_dynamic_refresh(all_sets or [], force=task.force):
+                    changed_experiment_names.add(ps.get("name", ""))
                 _cooldown.mark(kw, "exports")
             else:
                 h, m = divmod(rem // 60, 60)
                 task.skipped_cooldown.append(f"exports(cooldown {h}h{m}m)")
 
-        print("syncing to database...")
-        report = run_configured_sync(strict=True)
-        if not report.get("ok"):
-            raise RuntimeError(report.get("error") or "database sync failed")
+        if changed_experiment_names:
+            print("syncing changed experiments to database...")
+            report = run_configured_sync(strict=True, experiment_names=changed_experiment_names)
+            if not report.get("ok"):
+                raise RuntimeError(report.get("error") or "database sync failed")
+        else:
+            print("no changed experiments; skip database sync")
 
         task.status = TaskStatus.SUCCESS
         task.finished_at = datetime.now().isoformat()
