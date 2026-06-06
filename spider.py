@@ -433,6 +433,17 @@ class PTAClient:
         base_dir.mkdir(parents=True, exist_ok=True)
         return base_dir
 
+    def _write_problem_set_info(self, ps_id, ps_name, problem_set_info):
+        """Persist PTA problem-set metadata, including deadline fields."""
+        if not isinstance(problem_set_info, dict):
+            return
+        base_dir = self._problem_set_dir(ps_name)
+        info = dict(problem_set_info)
+        info.setdefault("id", ps_id)
+        info.setdefault("name", ps_name)
+        with open(base_dir / "题目集信息.json", "w", encoding="utf-8") as f:
+            json.dump(info, f, ensure_ascii=False, indent=2)
+
     def get_sets_requiring_content(self, all_sets):
         """Return new sets plus history entries whose local content was lost."""
         pending = self.history.get_new_sets(all_sets)
@@ -981,6 +992,7 @@ class PTAClient:
             ps_name = ps.get("name", "未知")
             try:
                 print(f"\n--- 正在爬取: {ps_name} ---")
+                self._write_problem_set_info(ps_id, ps_name, ps)
                 self._crawl_one_problem_set(ps_id, ps_name)
                 self.history.mark_crawled(ps_id, ps_name)
                 print(f"完成: {ps_name}")
@@ -1135,6 +1147,7 @@ class PTAClient:
             ps_name = ps.get("name", "未知")
             try:
                 print(f"\n--- 刷新导出: {ps_name} ---")
+                self._write_problem_set_info(ps_id, ps_name, ps)
                 self._refresh_one_problem_set(ps_id, ps_name)
                 self.history.mark_export_refreshed(ps_id)
                 refreshed += 1

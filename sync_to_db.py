@@ -21,6 +21,7 @@ import os
 import sys
 import csv
 import io
+import json
 import posixpath
 import struct
 import zlib
@@ -28,7 +29,7 @@ import zipfile
 import re
 import traceback
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from html import unescape
 from html.parser import HTMLParser
 import xml.etree.ElementTree as ET
@@ -276,6 +277,41 @@ def get_db():
 
 # ==================== 1. 同步 experiment 表 ====================
 
+def _read_problem_set_info(exp_dir: Path):
+    info_file = exp_dir / "题目集信息.json"
+    if not info_file.exists():
+        return {}
+    try:
+        data = json.loads(info_file.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"  [警告] 解析题目集信息失败 ({info_file}): {e}")
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _first_value(data, *keys):
+    for key in keys:
+        value = data.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _parse_pta_datetime(value):
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    try:
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(text)
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone(timedelta(hours=8))).replace(tzinfo=None)
+        return parsed.strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return text[:19].replace("T", " ") if len(text) >= 19 else None
+
+
 def sync_experiments(conn):
     """扫描爬取结果目录，为每个实验文件夹创建/更新 experiment 记录"""
     cursor = conn.cursor()
@@ -288,20 +324,41 @@ def sync_experiments(conn):
 
     for idx, d in enumerate(exp_dirs, start=1):
         name = d.name
+        problem_set_info = _read_problem_set_info(d)
+        pta_deadline = _parse_pta_datetime(_first_value(
+            problem_set_info, "endAt", "deadlineAt", "deadline", "end_at", "deadline_at"
+        ))
+        pta_created_at = _parse_pta_datetime(_first_value(
+            problem_set_info, "createdAt", "createAt", "startAt", "created_at", "create_at", "start_at"
+        ))
+        pta_updated_at = _parse_pta_datetime(_first_value(
+            problem_set_info, "updatedAt", "updateAt", "updated_at", "update_at"
+        ))
+        topic_sum = 0
+        problem_file = d / "题目内容.txt"
+        if problem_file.exists():
+            content = problem_file.read_text(encoding="utf-8")
+            topic_sum = len(re.findall(r'^\[[^\]]+\]', content, re.MULTILINE))
+
         cursor.execute("SELECT experiment_id FROM experiment WHERE name = %s", (name,))
         row = cursor.fetchone()
         if row:
             exp_map[name] = row[0]
-        else:
-            topic_sum = 0
-            problem_file = d / "题目内容.txt"
-            if problem_file.exists():
-                content = problem_file.read_text(encoding="utf-8")
-                topic_sum = len(re.findall(r'^\[\d+\]', content, re.MULTILINE))
-
             cursor.execute(
-                "INSERT INTO experiment (num, name, topic_sum) VALUES (%s, %s, %s)",
-                (idx, name, topic_sum)
+                """UPDATE experiment
+                   SET num=%s,
+                       topic_sum=%s,
+                       deadline=COALESCE(%s, deadline),
+                       created_at=COALESCE(%s, created_at),
+                       updated_at=COALESCE(%s, updated_at)
+                   WHERE experiment_id=%s""",
+                (idx, topic_sum, pta_deadline, pta_created_at, pta_updated_at, exp_map[name])
+            )
+        else:
+            cursor.execute(
+                """INSERT INTO experiment (num, name, topic_sum, deadline, created_at, updated_at)
+                   VALUES (%s, %s, %s, %s, COALESCE(%s, CURRENT_TIMESTAMP), COALESCE(%s, CURRENT_TIMESTAMP))""",
+                (idx, name, topic_sum, pta_deadline, pta_created_at, pta_updated_at)
             )
             exp_map[name] = cursor.lastrowid
             print(f"  [新增] experiment: {name} (id={exp_map[name]}, 题目数={topic_sum})")

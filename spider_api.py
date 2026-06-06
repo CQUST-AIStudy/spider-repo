@@ -229,6 +229,7 @@ def _run_crawl(task):
                 task.new_sets_count = len(new_sets)
                 for ps in new_sets:
                     try:
+                        client._write_problem_set_info(ps["id"], ps.get("name", ""), ps)
                         client._crawl_one_problem_set(ps["id"], ps.get("name", ""))
                         client.history.mark_crawled(ps["id"], ps.get("name", ""))
                     except Exception as e:
@@ -245,6 +246,7 @@ def _run_crawl(task):
                 for ps in (all_sets or []):
                     if ps["id"] in crawled:
                         try:
+                            client._write_problem_set_info(ps["id"], ps.get("name", ""), ps)
                             subs = client.get_all_submissions(ps["id"])
                             if subs:
                                 base_dir = client._problem_set_dir(ps.get("name", ""))
@@ -269,6 +271,11 @@ def _run_crawl(task):
         if mode in (CrawlMode.REFRESH, CrawlMode.FULL):
             ok, rem, _ = _cooldown.check(kw, "exports", COOLDOWN_EXPORTS)
             if ok or task.force:
+                if all_sets is None:
+                    all_sets = client.search_problem_sets(kw)
+                for ps in (all_sets or []):
+                    if client.history.is_crawled(ps.get("id", "")):
+                        client._write_problem_set_info(ps["id"], ps.get("name", ""), ps)
                 task.refreshed_count = client.refresh_exports(kw)
                 _cooldown.mark(kw, "exports")
             else:
@@ -326,6 +333,7 @@ def _run_crawl(task):
                 task.new_sets_count = len(new_sets)
                 for ps in new_sets:
                     try:
+                        client._write_problem_set_info(ps["id"], ps.get("name", ""), ps)
                         client._crawl_one_problem_set(ps["id"], ps.get("name", ""))
                         client.history.mark_crawled(ps["id"], ps.get("name", ""))
                     except Exception as e:
@@ -341,6 +349,7 @@ def _run_crawl(task):
                 for ps in (all_sets or []):
                     if ps["id"] in crawled:
                         try:
+                            client._write_problem_set_info(ps["id"], ps.get("name", ""), ps)
                             subs = client.get_all_submissions(ps["id"])
                             if subs:
                                 base_dir = client._problem_set_dir(ps.get("name", ""))
@@ -366,6 +375,11 @@ def _run_crawl(task):
         if mode in (CrawlMode.REFRESH, CrawlMode.FULL):
             ok, rem, _ = _cooldown.check(kw, "exports", COOLDOWN_EXPORTS)
             if ok or task.force:
+                if all_sets is None:
+                    all_sets = client.search_problem_sets(kw)
+                for ps in (all_sets or []):
+                    if client.history.is_crawled(ps.get("id", "")):
+                        client._write_problem_set_info(ps["id"], ps.get("name", ""), ps)
                 task.refreshed_count = client.refresh_exports(kw)
                 _cooldown.mark(kw, "exports")
             else:

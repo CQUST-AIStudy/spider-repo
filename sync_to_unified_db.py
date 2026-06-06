@@ -220,22 +220,24 @@ def _ensure_assignment_offering(cursor, legacy_experiment_id: int, experiment_na
     template_id = _ensure_assignment_template(cursor, legacy_experiment_id, experiment_name)
     if template_id is None:
         return None
-    cursor.execute("SELECT num FROM experiment WHERE experiment_id = %s", (legacy_experiment_id,))
+    cursor.execute("SELECT num, deadline FROM experiment WHERE experiment_id = %s", (legacy_experiment_id,))
     experiment_row = cursor.fetchone()
     seq_no = experiment_row[0] if experiment_row else None
+    deadline_at = experiment_row[1] if experiment_row and len(experiment_row) > 1 else None
     source_offering_key = f"LEGACY_EXPERIMENT_OFFERING:{legacy_experiment_id}"
     cursor.execute(
         """
         INSERT INTO assignment_offering
-          (template_id, class_id, teacher_id, seq_no, title_override, published_at, status, source_system, source_offering_key)
+          (template_id, class_id, teacher_id, seq_no, title_override, deadline_at, published_at, status, source_system, source_offering_key)
         VALUES
-          (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP(3), 'PUBLISHED', %s, %s)
+          (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP(3), 'PUBLISHED', %s, %s)
         ON DUPLICATE KEY UPDATE
           template_id = VALUES(template_id),
           class_id = VALUES(class_id),
           teacher_id = VALUES(teacher_id),
           seq_no = COALESCE(VALUES(seq_no), assignment_offering.seq_no),
           title_override = VALUES(title_override),
+          deadline_at = COALESCE(VALUES(deadline_at), assignment_offering.deadline_at),
           status = 'PUBLISHED'
         """,
         (
@@ -244,6 +246,7 @@ def _ensure_assignment_offering(cursor, legacy_experiment_id: int, experiment_na
             class_match["teacher_user_id"],
             seq_no,
             experiment_name,
+            deadline_at,
             LEGACY_SOURCE_SYSTEM,
             source_offering_key,
         ),
@@ -262,6 +265,25 @@ def _ensure_assignment_offering(cursor, legacy_experiment_id: int, experiment_na
     if not row:
         return None
     return {"offering_id": row[0], "class_id": row[1], "teacher_id": row[2]}
+
+
+def _sync_assignment_offering_deadline(cursor, offering_id: int, legacy_experiment_id: int):
+    if not offering_id or not legacy_experiment_id:
+        return
+    cursor.execute("SELECT deadline FROM experiment WHERE experiment_id = %s", (legacy_experiment_id,))
+    row = cursor.fetchone()
+    deadline_at = row[0] if row else None
+    if deadline_at is None:
+        return
+    cursor.execute(
+        """
+        UPDATE assignment_offering
+        SET deadline_at = %s,
+            updated_at = CURRENT_TIMESTAMP(3)
+        WHERE id = %s
+        """,
+        (deadline_at, offering_id),
+    )
 
 
 def _read_transcript_rows(xlsx_path: Path):
@@ -970,6 +992,7 @@ def _resolve_experiment_and_offering(cursor, experiment_name: str):
             offering_row = (ensured["offering_id"], ensured["class_id"], ensured["teacher_id"])
     if not offering_row:
         return None
+    _sync_assignment_offering_deadline(cursor, offering_row[0], legacy_experiment_id)
     return {
         "legacy_experiment_id": legacy_experiment_id,
         "offering_id": offering_row[0],
