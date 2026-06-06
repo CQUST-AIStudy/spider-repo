@@ -8,3 +8,4 @@ webdriver-manager
 opencv-python
 python-dotenv
 pymysql
+bcrypt

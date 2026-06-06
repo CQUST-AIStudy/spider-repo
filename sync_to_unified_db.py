@@ -9,6 +9,13 @@ from pathlib import Path
 
 import sync_to_db as legacy_sync
 
+try:
+    import bcrypt as _bcrypt
+
+    _BCRYPT_AVAILABLE = True
+except ImportError:
+    _BCRYPT_AVAILABLE = False
+
 PTA_EXPORT_DIR = "导出"
 PTA_SOURCE_SYSTEM = "PTA"
 LEGACY_SOURCE_SYSTEM = "LEGACY_TAP"
@@ -448,8 +455,53 @@ def _ensure_student_profile(cursor, student_no: str, student_name: str):
         """,
         (student_no, student_name or student_no),
     )
-    cursor.execute("SELECT id FROM student_profile WHERE student_no = %s", (student_no,))
-    return cursor.fetchone()[0]
+    cursor.execute("SELECT id, user_id FROM student_profile WHERE student_no = %s", (student_no,))
+    row = cursor.fetchone()
+    student_profile_id = row[0]
+    user_id = row[1]
+
+    # Auto-create tap_user account for PTA-imported students without login credentials
+    if user_id is None:
+        _ensure_tap_user_and_bind(cursor, student_profile_id, student_no, student_name)
+
+    return student_profile_id
+
+
+def _ensure_tap_user_and_bind(cursor, student_profile_id, student_no, student_name):
+    """Create a tap_user account for PTA-imported students and bind it to student_profile."""
+    if not _BCRYPT_AVAILABLE:
+        print(f"  [WARN] bcrypt not available, skipping tap_user creation for {student_no}")
+        return
+
+    # Check if tap_user already exists for this student_no (username)
+    cursor.execute("SELECT id FROM tap_user WHERE username = %s", (student_no,))
+    row = cursor.fetchone()
+    if row:
+        tap_user_id = row[0]
+    else:
+        # Default password = student_no, hashed with BCrypt (compatible with Java BCryptPasswordEncoder)
+        password_hash = _bcrypt.hashpw(
+            student_no.encode("utf-8"),
+            _bcrypt.gensalt(),
+        ).decode("utf-8")
+
+        cursor.execute(
+            """
+            INSERT INTO tap_user (username, display_name, password_hash, role, enabled, created_at, updated_at)
+            VALUES (%s, %s, %s, 'STUDENT', TRUE, NOW(3), NOW(3))
+            """,
+            (student_no, student_name, password_hash),
+        )
+        tap_user_id = cursor.lastrowid
+        print(f"  [INFO] Created tap_user account for {student_no} (id={tap_user_id})")
+
+    # Bind tap_user.id to student_profile.user_id (only if still NULL)
+    cursor.execute(
+        "UPDATE student_profile SET user_id = %s WHERE id = %s AND user_id IS NULL",
+        (tap_user_id, student_profile_id),
+    )
+    if cursor.rowcount > 0:
+        print(f"  [INFO] Bound tap_user({tap_user_id}) to student_profile({student_profile_id}) for {student_no}")
 
 
 def _ensure_class_member(cursor, class_id: int, student_id: int):
@@ -461,6 +513,20 @@ def _ensure_class_member(cursor, class_id: int, student_id: int):
           member_status = 'ACTIVE',
           left_at = NULL,
           updated_at = CURRENT_TIMESTAMP(3)
+        """,
+        (class_id, student_id),
+    )
+
+    # Also insert into class_student for backward compatibility with legacy query paths
+    cursor.execute(
+        """
+        INSERT INTO class_student (class_id, student_num, student_name, joined_at)
+        SELECT %s, sp.student_no, sp.real_name, NOW()
+        FROM student_profile sp
+        WHERE sp.id = %s
+        ON DUPLICATE KEY UPDATE
+          student_name = COALESCE(NULLIF(VALUES(student_name), ''), class_student.student_name),
+          student_num  = COALESCE(NULLIF(VALUES(student_num), ''), class_student.student_num)
         """,
         (class_id, student_id),
     )
