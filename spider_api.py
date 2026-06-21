@@ -1,6 +1,6 @@
 ﻿"""
-PTA Spider API v2 - Data-type aware crawling with rate protection
-Cooldowns: submissions=4h, exports=24h, content=once
+PTA Spider API v2 - Data-type aware crawling with per-problem-set refresh policy
+Recent problem sets refresh hourly; older sets back off; ended sets are skipped automatically.
 """
 import asyncio, uuid, os, sys, time, csv
 import json as json_mod
@@ -22,12 +22,15 @@ from pydantic import BaseModel
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from spider import PTAClient, CrawlHistory, RUNTIME_DIR
+import sync_to_db as legacy_sync
 from sync_to_unified_db import run_configured_sync
 
 app = FastAPI(title="PTA Spider API", version="2.0.0")
 JAVA_BACKEND_URL = os.getenv("JAVA_BACKEND_URL", "http://127.0.0.1:8081")
 COOLDOWN_SUBMISSIONS = int(os.getenv("COOLDOWN_SUBMISSIONS", str(4 * 3600)))
 COOLDOWN_EXPORTS = int(os.getenv("COOLDOWN_EXPORTS", str(24 * 3600)))
+COOLDOWN_RECENT_EXPERIMENT = int(os.getenv("COOLDOWN_RECENT_EXPERIMENT", str(3600)))
+RECENT_EXPERIMENT_WINDOW_HOURS = int(os.getenv("RECENT_EXPERIMENT_WINDOW_HOURS", "24"))
 _cors_origins_raw = os.getenv("SPIDER_CORS_ALLOW_ORIGINS", "*").strip()
 if _cors_origins_raw == "*":
     _cors_origins = ["*"]
@@ -66,8 +69,10 @@ class CooldownManager:
             json_mod.dump(self._state, f, ensure_ascii=False, indent=2)
 
     def check(self, keyword, data_type, cooldown_sec):
-        k = f"{keyword}::{data_type}"
-        last_ts = self._state.get(k)
+        return self.check_key(self._key(keyword, data_type), cooldown_sec)
+
+    def check_key(self, key, cooldown_sec):
+        last_ts = self._state.get(key)
         if last_ts is None:
             return True, 0, ""
         elapsed = time.time() - last_ts
@@ -77,8 +82,15 @@ class CooldownManager:
         return False, remaining, datetime.fromtimestamp(last_ts).strftime("%m-%d %H:%M")
 
     def mark(self, keyword, data_type):
-        self._state[f"{keyword}::{data_type}"] = time.time()
+        self.mark_key(self._key(keyword, data_type))
+
+    def mark_key(self, key):
+        self._state[key] = time.time()
         self._save()
+
+    @staticmethod
+    def _key(keyword, data_type):
+        return f"{keyword}::{data_type}"
 
     def get_status(self, keyword):
         result = {}
@@ -94,6 +106,238 @@ class CooldownManager:
 
 
 _cooldown = CooldownManager()
+PUBLISH_TIME_KEYS = (
+    "publishedAt", "publishAt", "releasedAt", "releaseAt",
+    "startAt", "createdAt", "createAt",
+    "published_at", "publish_at", "released_at", "release_at",
+    "start_at", "created_at", "create_at",
+)
+DEADLINE_KEYS = (
+    "endAt", "deadlineAt", "deadline",
+    "end_at", "deadline_at",
+)
+
+
+def _first_non_empty(data, keys):
+    for key in keys:
+        value = data.get(key) if isinstance(data, dict) else None
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _parse_pta_time(value):
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        timestamp = value / 1000 if value > 10_000_000_000 else value
+        try:
+            return datetime.fromtimestamp(timestamp)
+        except (OSError, ValueError):
+            return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return _parse_pta_time(int(text))
+
+    normalized = text.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone().replace(tzinfo=None)
+        return parsed
+    except ValueError:
+        pass
+
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _problem_set_time(problem_set, keys):
+    return _parse_pta_time(_first_non_empty(problem_set, keys))
+
+
+def _problem_set_name(problem_set):
+    return str(problem_set.get("name") or problem_set.get("id") or "unknown").strip()
+
+
+def _offering_source_keys(experiment_id, class_id=None):
+    base = f"LEGACY_EXPERIMENT_OFFERING:{experiment_id}"
+    if class_id is None:
+        return [base]
+    return [f"{base}:CLASS:{class_id}", base]
+
+
+def _is_problem_set_closed(problem_set, now=None):
+    deadline = _problem_set_time(problem_set, DEADLINE_KEYS)
+    return deadline is not None and deadline <= (now or datetime.now())
+
+
+def _database_has_experiment_data(problem_set, class_id=None):
+    name = _problem_set_name(problem_set)
+    if not name or name == "unknown":
+        return False
+
+    has_data = False
+    conn = None
+    try:
+        conn = legacy_sync.get_db()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT experiment_id FROM experiment WHERE name = %s LIMIT 1", (name,))
+            row = cursor.fetchone()
+            if not row:
+                return False
+            experiment_id = row[0]
+
+            if class_id is None:
+                for table in ("submit_situation", "score", "student_code", "problem_score_detail"):
+                    try:
+                        cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE experiment_id = %s", (experiment_id,))
+                        count_row = cursor.fetchone()
+                        if count_row and int(count_row[0] or 0) > 0:
+                            has_data = True
+                            break
+                    except Exception:
+                        continue
+
+            if not has_data:
+                try:
+                    source_keys = _offering_source_keys(experiment_id, class_id)
+                    placeholders = ", ".join(["%s"] * len(source_keys))
+                    params = ["LEGACY_TAP", *source_keys]
+                    class_filter = ""
+                    if class_id is not None:
+                        class_filter = " AND class_id = %s"
+                        params.append(class_id)
+                    cursor.execute(
+                        f"""
+                        SELECT id
+                        FROM assignment_offering
+                        WHERE source_system = %s
+                          AND source_offering_key IN ({placeholders})
+                          {class_filter}
+                        LIMIT 1
+                        """,
+                        tuple(params),
+                    )
+                    offering_row = cursor.fetchone()
+                    if offering_row:
+                        cursor.execute(
+                            "SELECT COUNT(*) FROM student_problem_attempt WHERE offering_id = %s",
+                            (offering_row[0],),
+                        )
+                        attempt_row = cursor.fetchone()
+                        has_data = bool(attempt_row and int(attempt_row[0] or 0) > 0)
+                except Exception:
+                    pass
+
+            if not has_data and class_id is not None:
+                try:
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*)
+                        FROM import_job
+                        WHERE source_system = 'PTA'
+                          AND class_id = %s
+                          AND status = 'SUCCEEDED'
+                          AND JSON_UNQUOTE(JSON_EXTRACT(summary_json, '$.experiment')) = %s
+                        """,
+                        (class_id, name),
+                    )
+                    import_row = cursor.fetchone()
+                    has_data = bool(import_row and int(import_row[0] or 0) > 0)
+                except Exception:
+                    pass
+    except Exception as exc:
+        print(f"database existence check failed for {name}: {exc}")
+        has_data = False
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    return has_data
+
+
+def _problem_set_cooldown(problem_set, data_type, now=None):
+    now = now or datetime.now()
+    published_at = _problem_set_time(problem_set, PUBLISH_TIME_KEYS)
+    base = COOLDOWN_EXPORTS if data_type == "exports" else COOLDOWN_SUBMISSIONS
+    if published_at is None:
+        return base
+
+    age_seconds = max(0, (now - published_at).total_seconds())
+    if age_seconds < RECENT_EXPERIMENT_WINDOW_HOURS * 3600:
+        return COOLDOWN_RECENT_EXPERIMENT
+    if age_seconds < 7 * 24 * 3600:
+        return base
+    if age_seconds < 14 * 24 * 3600:
+        return base * 2
+    if age_seconds < 30 * 24 * 3600:
+        return base * 4
+    return base * 7
+
+
+def _problem_set_cooldown_key(problem_set, data_type):
+    ps_id = str(problem_set.get("id") or "").strip()
+    ps_name = str(problem_set.get("name") or "").strip()
+    identity = ps_id or f"name:{ps_name}"
+    return f"problem-set:{identity}::{data_type}"
+
+
+def _format_duration(seconds):
+    seconds = max(0, int(seconds))
+    days, rem = divmod(seconds, 24 * 3600)
+    hours, rem = divmod(rem, 3600)
+    minutes = rem // 60
+    if days:
+        return f"{days}d{hours}h"
+    if hours:
+        return f"{hours}h{minutes}m"
+    return f"{minutes}m"
+
+
+def _should_refresh_problem_set(problem_set, data_type, force=False, now=None, class_id=None):
+    now = now or datetime.now()
+    ps_name = _problem_set_name(problem_set)
+    if force:
+        return True, 0, f"{ps_name}: force"
+
+    has_database_data = None
+    if class_id is not None:
+        has_database_data = _database_has_experiment_data(problem_set, class_id)
+        if not has_database_data:
+            return True, 0, f"{ps_name}: database data is missing"
+
+    deadline = _problem_set_time(problem_set, DEADLINE_KEYS)
+    if deadline is not None and deadline <= now:
+        if has_database_data is None and not _database_has_experiment_data(problem_set, class_id):
+            return True, 0, f"{ps_name}: deadline passed but database data is missing"
+        return False, 0, f"{ps_name}: deadline passed at {deadline.strftime('%Y-%m-%d %H:%M')}"
+
+    cooldown = _problem_set_cooldown(problem_set, data_type, now)
+    ok, remaining, last = _cooldown.check_key(
+        _problem_set_cooldown_key(problem_set, data_type),
+        cooldown,
+    )
+    if ok:
+        return True, cooldown, f"{ps_name}: allowed every {_format_duration(cooldown)}"
+    return False, remaining, (
+        f"{ps_name}: {data_type} cooldown, last {last}, "
+        f"remaining {_format_duration(remaining)}"
+    )
+
+
+def _mark_problem_set_refreshed(problem_set, data_type):
+    _cooldown.mark_key(_problem_set_cooldown_key(problem_set, data_type))
 
 class TaskStatus(str, Enum):
     QUEUED = "QUEUED"
@@ -179,25 +423,46 @@ def _get_queue():
         _queue = asyncio.Queue(maxsize=MAX_QUEUE_SIZE)
     return _queue
 
-def _keyword_in_queue(keyword, mode):
+def _keyword_in_queue(keyword, mode, class_id=None):
     for t in _task_store.values():
-        if t.keyword == keyword and t.mode == mode and t.status in (TaskStatus.QUEUED, TaskStatus.RUNNING):
+        if (
+            t.keyword == keyword
+            and t.mode == mode
+            and t.class_id == class_id
+            and t.status in (TaskStatus.QUEUED, TaskStatus.RUNNING)
+        ):
             return t
     return None
 
-def _notify_java(class_id, status):
+def _notify_java(class_id, status, task_id=None):
     if class_id is None:
         return
     try:
+        payload = {"status": status}
+        if task_id:
+            payload["taskId"] = task_id
         with httpx.Client(timeout=10) as c:
             resp = c.put(
                 f"{JAVA_BACKEND_URL}/api/classes/{class_id}/pta-sync/callback",
-                json={"status": status},
+                json=payload,
             )
             resp.raise_for_status()
             print(f"callback ok: class_id={class_id}, status={status}, code={resp.status_code}")
     except Exception as e:
         print(f"  callback failed: {e}")
+
+
+def _write_submissions_csv(client, problem_set, submissions):
+    base_dir = client._problem_set_dir(problem_set.get("name", ""))
+    with open(base_dir / "提交记录.csv", "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["用户ID", "题目ID", "状态", "分数", "编译器", "用时", "内存", "提交时间"])
+        for s in submissions:
+            w.writerow([
+                s.get("userId", ""), s.get("problemSetProblemId", ""),
+                s.get("status", ""), s.get("score", ""), s.get("compiler", ""),
+                s.get("time", ""), s.get("memory", ""), s.get("submitAt", "")
+            ])
 
 def _cleanup_old_tasks():
     now = datetime.now()
@@ -206,98 +471,6 @@ def _cleanup_old_tasks():
              and (now - datetime.fromisoformat(t.finished_at)).total_seconds() > 3600]
     for tid in to_rm:
         del _task_store[tid]
-
-def _run_crawl(task):
-    try:
-        task.status = TaskStatus.RUNNING
-        task.started_at = datetime.now().isoformat()
-        client = PTAClient(task.username, task.password, allow_env_fallback=False)
-        client.force_selenium_login = task.force_selenium_login
-        if task.headless is not None:
-            client.headless = task.headless
-        if not client.ensure_login():
-            raise RuntimeError("PTA login failed, cookie may be expired")
-        kw = task.keyword
-        mode = task.mode
-        all_sets = None
-
-        # incremental / full: detect new problem sets
-        if mode in (CrawlMode.INCREMENTAL, CrawlMode.FULL):
-            all_sets = client.search_problem_sets(kw)
-            if all_sets:
-                new_sets = client.get_sets_requiring_content(all_sets)
-                task.new_sets_count = len(new_sets)
-                for ps in new_sets:
-                    try:
-                        client._write_problem_set_info(ps["id"], ps.get("name", ""), ps)
-                        client._crawl_one_problem_set(ps["id"], ps.get("name", ""))
-                        client.history.mark_crawled(ps["id"], ps.get("name", ""))
-                    except Exception as e:
-                        print(f"crawl {ps.get('name','')} failed: {e}")
-
-        # submissions / full: pull submission records
-        if mode in (CrawlMode.SUBMISSIONS, CrawlMode.FULL):
-            ok, rem, _ = _cooldown.check(kw, "submissions", COOLDOWN_SUBMISSIONS)
-            if ok or task.force:
-                if all_sets is None:
-                    all_sets = client.search_problem_sets(kw)
-                crawled = client.history.get_all_crawled()
-                total_subs = 0
-                for ps in (all_sets or []):
-                    if ps["id"] in crawled:
-                        try:
-                            client._write_problem_set_info(ps["id"], ps.get("name", ""), ps)
-                            subs = client.get_all_submissions(ps["id"])
-                            if subs:
-                                base_dir = client._problem_set_dir(ps.get("name", ""))
-                                with open(base_dir / "\u63d0\u4ea4\u8bb0\u5f55.csv", "w", encoding="utf-8", newline="") as f:
-                                    w = csv.writer(f)
-                                    w.writerow(["\u7528\u6237ID","\u9898\u76eeID","\u72b6\u6001","\u5206\u6570","\u7f16\u8bd1\u5668","\u7528\u65f6","\u5185\u5b58","\u63d0\u4ea4\u65f6\u95f4"])
-                                    for s in subs:
-                                        w.writerow([s.get("userId",""),s.get("problemSetProblemId",""),
-                                                     s.get("status",""),s.get("score",""),s.get("compiler",""),
-                                                     s.get("time",""),s.get("memory",""),s.get("submitAt","")])
-                                total_subs += len(subs)
-                            time.sleep(1)
-                        except Exception as e:
-                            print(f"pull submissions failed {ps.get('name','')}: {e}")
-                task.submissions_count = total_subs
-                _cooldown.mark(kw, "submissions")
-            else:
-                h, m = divmod(rem // 60, 60)
-                task.skipped_cooldown.append(f"submissions(cooldown {h}h{m}m)")
-
-        # refresh / full: re-export
-        if mode in (CrawlMode.REFRESH, CrawlMode.FULL):
-            ok, rem, _ = _cooldown.check(kw, "exports", COOLDOWN_EXPORTS)
-            if ok or task.force:
-                if all_sets is None:
-                    all_sets = client.search_problem_sets(kw)
-                for ps in (all_sets or []):
-                    if client.history.is_crawled(ps.get("id", "")):
-                        client._write_problem_set_info(ps["id"], ps.get("name", ""), ps)
-                task.refreshed_count = client.refresh_exports(kw)
-                _cooldown.mark(kw, "exports")
-            else:
-                h, m = divmod(rem // 60, 60)
-                task.skipped_cooldown.append(f"exports(cooldown {h}h{m}m)")
-
-        # sync to database
-        try:
-            print("syncing to database...")
-            run_configured_sync(strict=False)
-        except Exception as e:
-            print(f"db sync failed: {e}")
-
-        task.status = TaskStatus.SUCCESS
-        task.finished_at = datetime.now().isoformat()
-        _notify_java(task.class_id, "SUCCESS")
-    except Exception as e:
-        task.status = TaskStatus.FAILED
-        task.error = str(e)
-        task.finished_at = datetime.now().isoformat()
-        _notify_java(task.class_id, "FAILED")
-        print(f"task {task.task_id} failed: {e}")
 
 async def _worker():
     q = _get_queue()
@@ -325,6 +498,7 @@ def _run_crawl(task):
         kw = task.keyword
         mode = task.mode
         all_sets = None
+        content_crawled_ids = set()
 
         if mode in (CrawlMode.INCREMENTAL, CrawlMode.FULL):
             all_sets = client.search_problem_sets(kw)
@@ -333,72 +507,92 @@ def _run_crawl(task):
                 task.new_sets_count = len(new_sets)
                 for ps in new_sets:
                     try:
+                        if _is_problem_set_closed(ps) and _database_has_experiment_data(ps, task.class_id):
+                            reason = (
+                                f"{_problem_set_name(ps)}: deadline passed and database data exists; "
+                                "skip content crawl"
+                            )
+                            task.skipped_cooldown.append(reason)
+                            client.history.mark_crawled(ps["id"], ps.get("name", ""))
+                            continue
                         client._write_problem_set_info(ps["id"], ps.get("name", ""), ps)
                         client._crawl_one_problem_set(ps["id"], ps.get("name", ""))
                         client.history.mark_crawled(ps["id"], ps.get("name", ""))
+                        content_crawled_ids.add(ps.get("id", ""))
+                        _mark_problem_set_refreshed(ps, "submissions")
+                        _mark_problem_set_refreshed(ps, "exports")
                     except Exception as e:
                         print(f"crawl {ps.get('name', '')} failed: {e}")
 
         if mode in (CrawlMode.SUBMISSIONS, CrawlMode.FULL):
-            ok, rem, _ = _cooldown.check(kw, "submissions", COOLDOWN_SUBMISSIONS)
-            if ok or task.force:
-                if all_sets is None:
-                    all_sets = client.search_problem_sets(kw)
-                crawled = client.history.get_all_crawled()
-                total_subs = 0
-                for ps in (all_sets or []):
-                    if ps["id"] in crawled:
-                        try:
-                            client._write_problem_set_info(ps["id"], ps.get("name", ""), ps)
-                            subs = client.get_all_submissions(ps["id"])
-                            if subs:
-                                base_dir = client._problem_set_dir(ps.get("name", ""))
-                                with open(base_dir / "提交记录.csv", "w", encoding="utf-8", newline="") as f:
-                                    w = csv.writer(f)
-                                    w.writerow(["用户ID", "题目ID", "状态", "分数", "编译器", "用时", "内存", "提交时间"])
-                                    for s in subs:
-                                        w.writerow([
-                                            s.get("userId", ""), s.get("problemSetProblemId", ""),
-                                            s.get("status", ""), s.get("score", ""), s.get("compiler", ""),
-                                            s.get("time", ""), s.get("memory", ""), s.get("submitAt", "")
-                                        ])
-                                total_subs += len(subs)
-                            time.sleep(1)
-                        except Exception as e:
-                            print(f"pull submissions failed {ps.get('name', '')}: {e}")
-                task.submissions_count = total_subs
-                _cooldown.mark(kw, "submissions")
-            else:
-                h, m = divmod(rem // 60, 60)
-                task.skipped_cooldown.append(f"submissions(cooldown {h}h{m}m)")
+            if all_sets is None:
+                all_sets = client.search_problem_sets(kw)
+            crawled = client.history.get_all_crawled()
+            total_subs = 0
+            for ps in (all_sets or []):
+                ps_id = ps.get("id", "")
+                if ps_id in content_crawled_ids:
+                    continue
+                if ps_id not in crawled:
+                    continue
+                ok, _, reason = _should_refresh_problem_set(
+                    ps, "submissions", task.force, class_id=task.class_id
+                )
+                if not ok:
+                    task.skipped_cooldown.append(reason)
+                    continue
+                try:
+                    client._write_problem_set_info(ps["id"], ps.get("name", ""), ps)
+                    subs = client.get_all_submissions(ps["id"])
+                    if subs:
+                        _write_submissions_csv(client, ps, subs)
+                        total_subs += len(subs)
+                    _mark_problem_set_refreshed(ps, "submissions")
+                    time.sleep(1)
+                except Exception as e:
+                    print(f"pull submissions failed {ps.get('name', '')}: {e}")
+            task.submissions_count = total_subs
 
         if mode in (CrawlMode.REFRESH, CrawlMode.FULL):
-            ok, rem, _ = _cooldown.check(kw, "exports", COOLDOWN_EXPORTS)
-            if ok or task.force:
-                if all_sets is None:
-                    all_sets = client.search_problem_sets(kw)
-                for ps in (all_sets or []):
-                    if client.history.is_crawled(ps.get("id", "")):
-                        client._write_problem_set_info(ps["id"], ps.get("name", ""), ps)
-                task.refreshed_count = client.refresh_exports(kw)
-                _cooldown.mark(kw, "exports")
-            else:
-                h, m = divmod(rem // 60, 60)
-                task.skipped_cooldown.append(f"exports(cooldown {h}h{m}m)")
+            if all_sets is None:
+                all_sets = client.search_problem_sets(kw)
+            refreshed = 0
+            for ps in (all_sets or []):
+                ps_id = ps.get("id", "")
+                ps_name = ps.get("name", "")
+                if ps_id in content_crawled_ids:
+                    continue
+                if not client.history.is_crawled(ps_id):
+                    continue
+                ok, _, reason = _should_refresh_problem_set(
+                    ps, "exports", task.force, class_id=task.class_id
+                )
+                if not ok:
+                    task.skipped_cooldown.append(reason)
+                    continue
+                try:
+                    client._write_problem_set_info(ps_id, ps_name, ps)
+                    client._refresh_one_problem_set(ps_id, ps_name)
+                    client.history.mark_export_refreshed(ps_id)
+                    _mark_problem_set_refreshed(ps, "exports")
+                    refreshed += 1
+                except Exception as e:
+                    print(f"refresh exports failed {ps_name}: {e}")
+            task.refreshed_count = refreshed
 
         print("syncing to database...")
-        report = run_configured_sync(strict=True)
+        report = run_configured_sync(strict=True, class_id=task.class_id)
         if not report.get("ok"):
             raise RuntimeError(report.get("error") or "database sync failed")
 
         task.status = TaskStatus.SUCCESS
         task.finished_at = datetime.now().isoformat()
-        _notify_java(task.class_id, "SUCCESS")
+        _notify_java(task.class_id, "SUCCESS", task.task_id)
     except Exception as e:
         task.status = TaskStatus.FAILED
         task.error = str(e)
         task.finished_at = datetime.now().isoformat()
-        _notify_java(task.class_id, "FAILED")
+        _notify_java(task.class_id, "FAILED", task.task_id)
         print(f"task {task.task_id} failed: {e}")
 
 
@@ -421,22 +615,9 @@ async def crawl(req: CrawlRequest):
         raise HTTPException(400, "keyword required")
     if bool(req.username and req.username.strip()) != bool(req.password):
         raise HTTPException(400, "username and password must be provided together")
-    existing = _keyword_in_queue(keyword, req.mode)
+    existing = _keyword_in_queue(keyword, req.mode, req.class_id)
     if existing:
         return {"task_id": existing.task_id, "status": existing.status.value, "message": "same task already queued"}
-    if not req.force:
-        if req.mode == CrawlMode.SUBMISSIONS:
-            ok, rem, last = _cooldown.check(keyword, "submissions", COOLDOWN_SUBMISSIONS)
-            if not ok:
-                h, m = divmod(rem // 60, 60)
-                return {"blocked": True, "reason": "submissions_cooldown", "remaining_sec": rem,
-                        "last_time": last, "message": f"submissions cooldown, last: {last}, remaining {h}h{m}m"}
-        elif req.mode == CrawlMode.REFRESH:
-            ok, rem, last = _cooldown.check(keyword, "exports", COOLDOWN_EXPORTS)
-            if not ok:
-                h, m = divmod(rem // 60, 60)
-                return {"blocked": True, "reason": "exports_cooldown", "remaining_sec": rem,
-                        "last_time": last, "message": f"exports cooldown, last: {last}, remaining {h}h{m}m"}
     q = _get_queue()
     if q.qsize() >= MAX_QUEUE_SIZE:
         raise HTTPException(429, "queue full")

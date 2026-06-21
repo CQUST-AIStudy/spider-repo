@@ -61,6 +61,8 @@ PTA_USERNAME=PTA账号
 PTA_PASSWORD=PTA密码
 JAVA_BACKEND_URL=http://127.0.0.1:8081
 SPIDER_PORT=8100
+COOLDOWN_RECENT_EXPERIMENT=3600
+RECENT_EXPERIMENT_WINDOW_HOURS=24
 DB_HOST=127.0.0.1
 DB_PORT=3306
 DB_NAME=ptadatabase
@@ -95,6 +97,35 @@ http://127.0.0.1:8100
 ```text
 PTA_SPIDER_URL=http://127.0.0.1:8100
 ```
+
+## 自动更新触发方式
+
+`spider_api.py` 启动后只负责提供 API 和后台任务队列，不会自己定时发起爬取。服务启动时会创建 worker 等待任务，只有外部调用 `POST /crawl` 后，爬虫才会把任务加入队列并执行 `_run_crawl()`。
+
+因此，自动更新需要由后端定时器或其他调度程序负责调用爬虫服务。例如后端定时任务可以按固定频率请求：
+
+```http
+POST http://127.0.0.1:8100/crawl
+Content-Type: application/json
+
+{
+  "keyword": "PTA关键词",
+  "class_id": 123,
+  "mode": "full",
+  "force": false
+}
+```
+
+`mode` 会影响自动更新范围：
+
+```text
+incremental  只检查并爬取新题集
+submissions  刷新已爬题集的提交记录
+refresh      重新导出已爬题集的数据文件
+full         同时执行新题集检查、提交记录刷新和导出刷新
+```
+
+近期题集的小时级刷新、旧题集降频、已截止题集跳过等策略，都只在 `/crawl` 被调用后生效。也就是说，冷却配置决定“这次调用里哪些题集允许刷新”，但不会主动唤醒爬虫。如果希望近期题集接近每小时更新，后端定时器也需要按小时级频率调用 `/crawl`，通常建议使用 `mode: "full"`，让爬虫内部根据每个题集的冷却状态自行跳过不需要刷新的内容。
 
 ## 查看和停止服务
 

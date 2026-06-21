@@ -100,6 +100,20 @@ def _source_key(*parts: str) -> str:
     return hashlib.sha1("::".join(parts).encode("utf-8")).hexdigest()[:40]
 
 
+def _offering_source_key(legacy_experiment_id: int, class_id=None) -> str:
+    base = f"LEGACY_EXPERIMENT_OFFERING:{legacy_experiment_id}"
+    return f"{base}:CLASS:{class_id}" if class_id is not None else base
+
+
+def _offering_source_keys(legacy_experiment_id: int, class_id=None):
+    if class_id is None:
+        return [_offering_source_key(legacy_experiment_id)]
+    return [
+        _offering_source_key(legacy_experiment_id, class_id),
+        _offering_source_key(legacy_experiment_id),
+    ]
+
+
 def _attempt_source_key(offering_id: int, row: dict, student_no: str = "") -> str:
     submitted_marker = (row.get("submitted_at_text") or "").strip()
     if submitted_marker:
@@ -135,7 +149,34 @@ def _normalize_text(value) -> str:
     return "".join(str(value or "").split())
 
 
-def _find_best_matching_class(cursor, experiment_name: str):
+def _get_class_by_id(cursor, class_id):
+    if class_id is None:
+        return None
+    cursor.execute(
+        """
+        SELECT id, teacher_id, name, pta_keyword
+        FROM teaching_class
+        WHERE id = %s
+        LIMIT 1
+        """,
+        (class_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+    return {
+        "class_id": row[0],
+        "teacher_user_id": row[1],
+        "class_name": row[2],
+        "pta_keyword": row[3],
+    }
+
+
+def _find_best_matching_class(cursor, experiment_name: str, class_id=None):
+    explicit_class = _get_class_by_id(cursor, class_id)
+    if explicit_class:
+        return explicit_class
+
     target = _normalize_text(experiment_name)
     if not target:
         return None
@@ -220,8 +261,8 @@ def _ensure_assignment_template(cursor, legacy_experiment_id: int, experiment_na
     return row[0] if row else None
 
 
-def _ensure_assignment_offering(cursor, legacy_experiment_id: int, experiment_name: str):
-    class_match = _find_best_matching_class(cursor, experiment_name)
+def _ensure_assignment_offering(cursor, legacy_experiment_id: int, experiment_name: str, class_id=None):
+    class_match = _find_best_matching_class(cursor, experiment_name, class_id)
     if not class_match:
         return None
     template_id = _ensure_assignment_template(cursor, legacy_experiment_id, experiment_name)
@@ -231,7 +272,7 @@ def _ensure_assignment_offering(cursor, legacy_experiment_id: int, experiment_na
     experiment_row = cursor.fetchone()
     seq_no = experiment_row[0] if experiment_row else None
     deadline_at = experiment_row[1] if experiment_row and len(experiment_row) > 1 else None
-    source_offering_key = f"LEGACY_EXPERIMENT_OFFERING:{legacy_experiment_id}"
+    source_offering_key = _offering_source_key(legacy_experiment_id, class_match["class_id"])
     cursor.execute(
         """
         INSERT INTO assignment_offering
@@ -1036,24 +1077,30 @@ def _recalc_student_assignment(
             )
 
 
-def _resolve_experiment_and_offering(cursor, experiment_name: str):
+def _resolve_experiment_and_offering(cursor, experiment_name: str, class_id=None):
     cursor.execute("SELECT experiment_id FROM experiment WHERE name = %s", (experiment_name,))
     experiment_row = cursor.fetchone()
     if not experiment_row:
         return None
     legacy_experiment_id = experiment_row[0]
+    source_keys = _offering_source_keys(legacy_experiment_id, class_id)
+    placeholders = ", ".join(["%s"] * len(source_keys))
+    params = [LEGACY_SOURCE_SYSTEM, *source_keys, class_id, class_id]
     cursor.execute(
-        """
+        f"""
         SELECT id, class_id, teacher_id
         FROM assignment_offering
         WHERE source_system = %s
-          AND source_offering_key = %s
+          AND source_offering_key IN ({placeholders})
+          AND (%s IS NULL OR class_id = %s)
+        ORDER BY CASE WHEN source_offering_key LIKE %s THEN 0 ELSE 1 END
+        LIMIT 1
         """,
-        (LEGACY_SOURCE_SYSTEM, f"LEGACY_EXPERIMENT_OFFERING:{legacy_experiment_id}"),
+        tuple([*params, "%:CLASS:%"]),
     )
     offering_row = cursor.fetchone()
     if not offering_row:
-        ensured = _ensure_assignment_offering(cursor, legacy_experiment_id, experiment_name)
+        ensured = _ensure_assignment_offering(cursor, legacy_experiment_id, experiment_name, class_id)
         if ensured:
             offering_row = (ensured["offering_id"], ensured["class_id"], ensured["teacher_id"])
     if not offering_row:
@@ -1067,9 +1114,9 @@ def _resolve_experiment_and_offering(cursor, experiment_name: str):
     }
 
 
-def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dict, student_name_map: dict):
+def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dict, student_name_map: dict, class_id=None):
     cursor = conn.cursor()
-    resolved = _resolve_experiment_and_offering(cursor, exp_dir.name)
+    resolved = _resolve_experiment_and_offering(cursor, exp_dir.name, class_id)
     if not resolved:
         return {"experiment": exp_dir.name, "skipped": True, "reason": "missing assignment_offering mapping"}
 
@@ -1484,12 +1531,13 @@ def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dic
         raise
 
 
-def sync_all(crawl_dir=None, strict=True):
+def sync_all(crawl_dir=None, strict=True, class_id=None):
     crawl_dir = _get_crawl_dir(crawl_dir)
     report = {
         "ok": False,
         "mode": "unified",
         "crawl_dir": str(crawl_dir),
+        "class_id": class_id,
         "experiments": [],
     }
     conn = legacy_sync.get_db()
@@ -1501,6 +1549,8 @@ def sync_all(crawl_dir=None, strict=True):
             if strict:
                 raise RuntimeError(message)
             return report
+        legacy_experiment_map = legacy_sync.sync_experiments(conn)
+        report["legacy_experiment_upsert_count"] = len(legacy_experiment_map)
         exp_map = {}
         with conn.cursor() as cursor:
             for exp_dir in exp_dirs:
@@ -1513,7 +1563,9 @@ def sync_all(crawl_dir=None, strict=True):
 
         for exp_dir in exp_dirs:
             try:
-                report["experiments"].append(_sync_one_experiment(conn, crawl_dir, exp_dir, pta_user_map, student_name_map))
+                report["experiments"].append(
+                    _sync_one_experiment(conn, crawl_dir, exp_dir, pta_user_map, student_name_map, class_id)
+                )
             except Exception as exc:
                 report["experiments"].append(
                     {
@@ -1535,9 +1587,9 @@ def sync_all(crawl_dir=None, strict=True):
         conn.close()
 
 
-def run_configured_sync(crawl_dir=None, strict=True):
-    use_unified = _flag("ACADEMIC_UNIFIED_IMPORT_ENABLED", False)
-    legacy_write_enabled = _flag("ACADEMIC_LEGACY_WRITE_ENABLED", True)
+def run_configured_sync(crawl_dir=None, strict=True, class_id=None):
+    use_unified = _flag("ACADEMIC_UNIFIED_IMPORT_ENABLED", class_id is not None)
+    legacy_write_enabled = _flag("ACADEMIC_LEGACY_WRITE_ENABLED", class_id is None)
     result = {
         "ok": False,
         "legacy_enabled": legacy_write_enabled,
@@ -1546,7 +1598,7 @@ def run_configured_sync(crawl_dir=None, strict=True):
     if legacy_write_enabled:
         result["legacy"] = legacy_sync.sync_all(crawl_dir=crawl_dir, strict=strict)
     if use_unified:
-        result["unified"] = sync_all(crawl_dir=crawl_dir, strict=strict)
+        result["unified"] = sync_all(crawl_dir=crawl_dir, strict=strict, class_id=class_id)
     if use_unified:
         result["ok"] = bool(result.get("unified", {}).get("ok"))
     elif legacy_write_enabled:
