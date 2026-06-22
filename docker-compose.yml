@@ -1,0 +1,24 @@
+services:
+  spider:
+    build: .
+    image: pta-spider:latest
+    container_name: pta-spider
+    ports:
+      - "8100:8100"            # SPIDER_PORT，宿主机:容器
+    env_file:
+      - .env                   # PTA 账号、DB_*、JAVA_BACKEND_URL 等
+    environment:
+      # 以下路径必须显式设置：覆盖 .env 里可能的空值，
+      # 否则 os.getenv 返回空字符串导致 volume 挂载失效
+      - PTA_RUNTIME_DIR=/app/runtime
+      - PTA_CRAWL_DIR=/app/output
+      - PTA_BROWSER_HOME=/app/runtime/browser
+      - SE_CACHE_PATH=/app/runtime/.selenium
+      - PTA_HEADLESS=true
+      - PTA_KEEP_BROWSER_OPEN_ON_FAILURE=false
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./runtime:/app/runtime  # cookie/日志/selenium 缓存/chrome profile
+      - ./output:/app/output    # 爬取产物
+    restart: unless-stopped
+    shm_size: 2gb              # 给 headless Chrome 足够 /dev/shm，避免崩溃

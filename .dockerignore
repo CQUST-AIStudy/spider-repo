@@ -1,0 +1,36 @@
+# 本地虚拟环境
+.venv/
+venv/
+env/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 运行时产物与密钥（不应进镜像）
+runtime/
+output/
+.env
+.env.*
+!.env.example
+*.log
+*.pid
+conn_test.txt
+
+# Git
+.git/
+.gitignore
+
+# Windows 本地调试脚本（容器内用不到）
+start.ps1
+start_spider_api.ps1
+stop_spider_api.ps1
+status_spider_api.ps1
+
+# 文档
+README.md
+STARTUP.md
