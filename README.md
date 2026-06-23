@@ -1,117 +1,74 @@
-# PTA Spider Service
+# PTA Spider
 
-这是 PTA 数据爬取与同步服务。服务本体是 FastAPI，爬取登录由 Selenium + Google Chrome 完成，登录成功后主要通过 PTA API 抓取数据并同步到数据库。
+PTA 数据爬取与同步服务。服务本体是 FastAPI，登录由 Selenium + Google Chrome 完成；登录成功后主要通过 PTA API 抓取用户组授权的实验、提交记录、成绩单和代码，并同步到数据库或 Java 后端。
 
-## 目录结构
+## 项目结构
 
 ```text
 .
-├── src/pta_spider/              # 正式业务代码
-│   ├── spider.py                # PTA 爬虫核心
-│   ├── spider_api.py            # FastAPI 服务入口
-│   ├── sync_to_db.py            # 旧库同步逻辑
-│   └── sync_to_unified_db.py    # 统一库同步逻辑
-├── scripts/                     # 运维/一次性脚本
+├── src/pta_spider/
+│   ├── spider.py              # PTA 登录、用户组实验解析、数据抓取
+│   ├── spider_api.py          # FastAPI 服务与同步任务队列
+│   ├── sync_to_db.py          # 旧库同步
+│   └── sync_to_unified_db.py  # 统一库同步
+├── scripts/
 │   ├── capture_pta_cookie.py
 │   ├── crawl_examinee_submissions.py
-│   ├── maintenance/
-│   └── debug/
-├── tests/                       # 测试脚本
-├── runtime/                     # cookie、日志、Selenium 缓存，本地生成，不提交
-├── output/                      # 爬取结果，本地生成，不提交
+│   ├── debug/
+│   └── maintenance/
+├── tests/
+├── runtime/                   # cookie、日志、Selenium 缓存，本地生成，不提交
+├── output/                    # 爬取产物，本地生成，不提交
 ├── Dockerfile
 ├── docker-compose.yml
-├── requirements.txt
-├── spider.py                    # 兼容旧命令的包装入口
-└── spider_api.py                # 兼容旧命令的包装入口
+└── .env.example
 ```
 
-## 本地启动
+## 同步策略
+
+- 教师端按教学班配置 PTA 用户组名或用户组 ID。
+- 爬虫不再按 PTA 关键词模糊搜索实验列表，而是读取用户组授权的实验链接，再按班级绑定的实验 ID/名称做精确过滤。
+- 未截止实验默认 24 小时同步一次。
+- 已截止实验如果数据库已有数据，默认跳过；如果缺数据，会继续补抓。
+- 教师强制同步会跳过后端和爬虫的冷却限制。
+
+## 本地运行
 
 ```powershell
 cd H:\CQUST_AI\spider-repo
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-Copy-Item .env.example .env
-```
-
-编辑 `.env`，至少填写：
-
-```env
-PTA_USERNAME=你的PTA账号
-PTA_PASSWORD=你的PTA密码
-PTA_GROUP_ID=PTA用户组ID
-# 或者 PTA_GROUP_NAME=PTA用户组精确名称
-
-DB_HOST=127.0.0.1
-DB_PORT=3306
-DB_NAME=ptadatabase
-DB_USERNAME=root
-DB_PASSWORD=数据库密码
-JAVA_BACKEND_URL=http://127.0.0.1:8081
-SPIDER_PORT=8100
-```
-
-启动 API：
-
-```powershell
-.\.venv\Scripts\python.exe spider_api.py
+python -m pip install -r requirements.txt
+python spider_api.py
 ```
 
 健康检查：
 
-```powershell
-Invoke-WebRequest http://127.0.0.1:8100/health
-```
-
-触发爬取：
-
-```http
-POST http://127.0.0.1:8100/crawl
-Content-Type: application/json
-
-{
-  "group_id": "2028307022170722304",
-  "class_id": 123,
-  "mode": "full",
-  "force": false
-}
-```
-
-也可以使用用户组名称：
-
-```json
-{
-  "group_name": "计科25数据结构",
-  "class_id": 123,
-  "mode": "full"
-}
+```bash
+curl http://127.0.0.1:8100/health
 ```
 
 ## Docker 部署
 
-Dockerfile 已经把 Google Chrome Stable 和匹配的 ChromeDriver 放进镜像里：
+Dockerfile 会在镜像构建阶段安装 Linux 版 Google Chrome Stable，并下载与 Chrome 主版本匹配的 ChromeDriver：
 
-- Google Chrome 安装到 `/usr/bin/google-chrome`
-- ChromeDriver 安装到 `/usr/bin/chromedriver`
-- 容器默认设置：
-  - `PTA_CHROME_BINARY=/usr/bin/google-chrome`
-  - `PTA_CHROMEDRIVER_PATH=/usr/bin/chromedriver`
-  - `PTA_HEADLESS=true`
+- Google Chrome: `/usr/bin/google-chrome`
+- ChromeDriver: `/usr/bin/chromedriver`
+- 默认 headless: `PTA_HEADLESS=true`
 
-构建并启动：
+云服务器上直接构建并启动：
 
 ```bash
 cd /opt/pta-spider
 cp .env.example .env
 vim .env
 docker compose up -d --build
+docker compose logs -f pta-spider
 ```
 
-查看日志：
+检查浏览器版本：
 
 ```bash
-docker compose logs -f pta-spider
+docker compose exec pta-spider google-chrome --version
+docker compose exec pta-spider chromedriver --version
 ```
 
 健康检查：
@@ -126,14 +83,15 @@ curl http://127.0.0.1:8100/health
 docker compose down
 ```
 
-## 云服务器上的 Chrome 登录问题
+## 云服务器 Chrome 与 Cookie
 
-云服务器没有图形界面，所以容器默认使用 headless Chrome。一般建议这样处理：
+云服务器通常没有图形界面，所以容器默认使用 headless Chrome。长期爬取建议这样处理：
 
-1. 优先用本地或服务器上已有有效 cookie。服务会把 cookie 存在 `runtime/`，`docker-compose.yml` 已把 `./runtime` 挂载到容器内 `/app/runtime`，容器重建后 cookie 不会丢。
-2. 如果自动登录遇到滑块验证码失败，在前端或接口写入手动 cookie。接口是 `POST /cookie/update`，请求体里传浏览器导出的 cookie JSON 数组。
-3. 不建议把你本机的 Chrome 程序复制进容器。Dockerfile 会在构建时安装 Linux 版 Google Chrome，并下载匹配 ChromeDriver；Windows 版 Chrome 不能在 Linux 云服务器容器里运行。
-4. 如果云服务器网络无法访问 Google 下载源，可以先在能联网的机器构建镜像，再 `docker save` 导出镜像，上传服务器后 `docker load`。
+1. 让云服务器能够访问 Google Chrome 与 ChromeDriver 下载源，直接在服务器上 `docker compose up -d --build` 构建镜像。
+2. 不要把本机 Windows Chrome 复制进容器；Windows 版 Chrome 不能在 Linux 云服务器容器里运行。
+3. cookie 会保存在 `runtime/`，`docker-compose.yml` 已把宿主机 `./runtime` 挂载到容器内 `/app/runtime`，容器重建后 cookie 不会丢。
+4. 如果自动登录遇到滑块验证码失败，在前端或接口写入手动 cookie。接口是 `POST /cookie/update`，请求体传浏览器导出的 cookie JSON 数组。
+5. 如果服务器无法访问 `dl.google.com`、`googlechromelabs.github.io` 或 `storage.googleapis.com`，优先配置服务器出网、代理或可用镜像源，再重新构建镜像。
 
 ## 常用环境变量
 
@@ -151,6 +109,8 @@ PTA_CHROMEDRIVER_PATH=/usr/bin/chromedriver
 JAVA_BACKEND_URL=http://backend:8081
 SPIDER_PORT=8100
 SPIDER_CORS_ALLOW_ORIGINS=*
+COOLDOWN_SUBMISSIONS=86400
+COOLDOWN_EXPORTS=86400
 DB_HOST=mysql
 DB_PORT=3306
 DB_NAME=ptadatabase
