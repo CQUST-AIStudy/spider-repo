@@ -46,6 +46,29 @@ python spider_api.py
 curl http://127.0.0.1:8100/health
 ```
 
+触发爬取：
+
+```bash
+curl -X POST http://127.0.0.1:8100/crawl \
+  -H "Content-Type: application/json" \
+  -d '{
+    "group_name": "计科23数据结构",
+    "class_id": 123,
+    "mode": "full",
+    "force": true
+  }'
+```
+
+兼容旧测试字段：
+
+```json
+{
+  "keyword": "计科23数据结构",
+  "classId": 123,
+  "mode": "FULL"
+}
+```
+
 ## Docker 部署
 
 Dockerfile 会在镜像构建阶段安装 Linux 版 Google Chrome Stable，并下载与 Chrome 主版本匹配的 ChromeDriver：

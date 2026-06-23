@@ -353,16 +353,27 @@ class CrawlMode(str, Enum):
 
 class CrawlRequest(BaseModel):
     class_id: int | None = None
+    classId: int | None = None
     problem_set_id: str | None = None
+    problemSetId: str | None = None
     problem_set_name: str | None = None
+    problemSetName: str | None = None
     group_id: str | None = None
+    groupId: str | None = None
+    ptaGroupId: str | None = None
     group_name: str | None = None
-    mode: CrawlMode = CrawlMode.INCREMENTAL
+    groupName: str | None = None
+    ptaGroupName: str | None = None
+    keyword: str | None = None
+    ptaKeyword: str | None = None
+    mode: str | None = CrawlMode.INCREMENTAL.value
     force: bool = False
     credential_source: str | None = None
+    credentialSource: str | None = None
     username: str | None = None
     password: str | None = None
     force_selenium_login: bool = False
+    forceSeleniumLogin: bool | None = None
     headless: bool | None = None
 
 class TaskInfo:
@@ -646,12 +657,39 @@ async def health():
     pending = sum(1 for t in _task_store.values() if t.status in (TaskStatus.QUEUED, TaskStatus.RUNNING))
     return {"status": "ok", "pending_tasks": pending}
 
+
+def _first_text(*values):
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _parse_mode(value):
+    raw = _first_text(value) or CrawlMode.INCREMENTAL.value
+    normalized = raw.lower()
+    for mode in CrawlMode:
+        if normalized == mode.value:
+            return mode
+    allowed = ", ".join(mode.value for mode in CrawlMode)
+    raise HTTPException(400, f"invalid mode: {raw}; allowed: {allowed}")
+
+
 @app.post("/crawl")
 async def crawl(req: CrawlRequest):
-    group_id = req.group_id.strip() if req.group_id else None
-    group_name = req.group_name.strip() if req.group_name else None
-    problem_set_id = req.problem_set_id.strip() if req.problem_set_id else None
-    problem_set_name = req.problem_set_name.strip() if req.problem_set_name else None
+    class_id = req.class_id if req.class_id is not None else req.classId
+    group_id = _first_text(req.group_id, req.groupId, req.ptaGroupId)
+    group_name = _first_text(req.group_name, req.groupName, req.ptaGroupName, req.keyword, req.ptaKeyword)
+    problem_set_id = _first_text(req.problem_set_id, req.problemSetId)
+    problem_set_name = _first_text(req.problem_set_name, req.problemSetName)
+    credential_source = _first_text(req.credential_source, req.credentialSource)
+    force_selenium_login = req.force_selenium_login
+    if req.forceSeleniumLogin is not None:
+        force_selenium_login = req.forceSeleniumLogin
+    mode = _parse_mode(req.mode)
     keyword = (group_name or group_id or "").strip()
     if not keyword:
         raise HTTPException(400, "group_id or group_name required")
@@ -659,8 +697,8 @@ async def crawl(req: CrawlRequest):
         raise HTTPException(400, "username and password must be provided together")
     existing = _keyword_in_queue(
         keyword,
-        req.mode,
-        req.class_id,
+        mode,
+        class_id,
         group_id,
         problem_set_id,
         problem_set_name,
@@ -676,17 +714,17 @@ async def crawl(req: CrawlRequest):
     task = TaskInfo(
         tid,
         keyword,
-        req.class_id,
+        class_id,
         problem_set_id,
         problem_set_name,
         group_id,
         group_name,
-        req.mode,
+        mode,
         req.force,
-        req.credential_source,
+        credential_source,
         username,
         password,
-        req.force_selenium_login,
+        force_selenium_login,
         req.headless,
     )
     _task_store[tid] = task
@@ -695,7 +733,7 @@ async def crawl(req: CrawlRequest):
     force_hint = " (force)" if req.force else ""
     return {"task_id": tid, "status": task.status.value,
             "credential_source": task.credential_source,
-            "message": f"queued: {mode_cn.get(req.mode.value, req.mode.value)}{force_hint}"}
+            "message": f"queued: {mode_cn.get(mode.value, mode.value)}{force_hint}"}
 
 @app.get("/status/{task_id}")
 async def status(task_id: str):
