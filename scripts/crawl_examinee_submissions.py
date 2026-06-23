@@ -20,7 +20,8 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 
 URL_RE = re.compile(r"/problem-sets/(?P<problem_set_id>\d+)/examinees/(?P<pta_user_id>\d+)")
@@ -512,7 +513,7 @@ def insert_raw_api_row(
 
 
 def write_loaded_to_db(loaded):
-    import sync_to_db as legacy_sync
+    from pta_spider import sync_to_db as legacy_sync
     import sync_to_unified_db as unified
 
     conn = legacy_sync.get_db()
@@ -732,7 +733,7 @@ def main():
     parser.add_argument("--no-csv", action="store_true", help="Skip CSV export")
     args = parser.parse_args()
 
-    from spider import PTAClient
+    from pta_spider.spider import PTAClient
 
     client = PTAClient()
     if not client.ensure_login():

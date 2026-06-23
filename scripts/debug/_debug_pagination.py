@@ -11,16 +11,17 @@ if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
     except Exception:
         pass
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from spider import PTAClient
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+from pta_spider.spider import PTAClient
 
 client = PTAClient()
 if not client.ensure_login():
     print("login failed")
     sys.exit(1)
 
-keyword = os.getenv("experiment_name", "计科23数据结构")
-all_sets = client.search_problem_sets(keyword)
+group_id = os.getenv("PTA_GROUP_ID")
+group_name = os.getenv("PTA_GROUP_NAME") or os.getenv("experiment_name", "计科23数据结构")
+all_sets = client.search_problem_sets(group_id=group_id, group_name=group_name)
 
 # Pick a problem set that returned exactly 200 (likely has more)
 ps = all_sets[1]  # 第6次实验(二叉树的遍历)

@@ -17,8 +17,9 @@ if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
     except Exception:
         pass
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from spider import PTAClient
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+from pta_spider.spider import PTAClient
 from sync_to_db import sync_all, get_db, CRAWL_DIR
 
 CRAWL_BASE = Path(os.getenv("PTA_CRAWL_DIR", str(Path(__file__).resolve().parent / "output"))).resolve()
@@ -31,8 +32,9 @@ def test_submissions():
         return
 
     # 搜索所有题目集
-    keyword = os.getenv("experiment_name", "计科23数据结构")
-    all_sets = client.search_problem_sets(keyword)
+    group_id = os.getenv("PTA_GROUP_ID")
+    group_name = os.getenv("PTA_GROUP_NAME") or os.getenv("experiment_name", "计科23数据结构")
+    all_sets = client.search_problem_sets(group_id=group_id, group_name=group_name)
     if not all_sets:
         print("未找到题目集")
         return

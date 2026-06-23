@@ -1,6 +1,6 @@
 """临时脚本: 爬取计科24数据结构"""
 import sys, os
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src")))
 
 if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
     try:
@@ -8,7 +8,7 @@ if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
         sys.stderr.reconfigure(encoding='utf-8')
     except: pass
 
-from spider import PTAClient
+from pta_spider.spider import PTAClient
 
 client = PTAClient()
 if not client.ensure_login():
@@ -16,7 +16,7 @@ if not client.ensure_login():
     sys.exit(1)
 
 # 先搜索看看有多少题目集
-sets = client.search_problem_sets("计科24数据结构")
+sets = client.search_problem_sets(group_name=os.getenv("PTA_GROUP_NAME", "计科24数据结构"))
 print(f"\n搜索到 {len(sets)} 个题目集:")
 for s in sets:
     ps_id = s.get("id", "")

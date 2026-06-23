@@ -1,168 +1,165 @@
-# PTA 爬虫服务
+# PTA Spider Service
 
-这是 PTA 数据爬取与同步服务，可以作为独立的 FastAPI 服务运行，供 Java 后端调用，也可以直接运行脚本进行爬取和同步。
+这是 PTA 数据爬取与同步服务。服务本体是 FastAPI，爬取登录由 Selenium + Google Chrome 完成，登录成功后主要通过 PTA API 抓取数据并同步到数据库。
 
-## 目录说明
+## 目录结构
 
 ```text
 .
-├─ spider.py                  # PTA 爬虫核心逻辑
-├─ spider_api.py              # FastAPI 接口服务
-├─ capture_pta_cookie.py      # 手动获取/更新 PTA cookie
-├─ sync_to_db.py              # 旧版数据库同步脚本
-├─ sync_to_unified_db.py      # 统一数据库同步脚本
-├─ start_spider_api.ps1       # Windows 启动脚本
-├─ status_spider_api.ps1      # 查看服务状态
-├─ stop_spider_api.ps1        # 停止服务
-├─ output/                    # 爬取结果，Git 不上传
-└─ runtime/                   # cookie、日志、PID、浏览器缓存，Git 不上传
+├── src/pta_spider/              # 正式业务代码
+│   ├── spider.py                # PTA 爬虫核心
+│   ├── spider_api.py            # FastAPI 服务入口
+│   ├── sync_to_db.py            # 旧库同步逻辑
+│   └── sync_to_unified_db.py    # 统一库同步逻辑
+├── scripts/                     # 运维/一次性脚本
+│   ├── capture_pta_cookie.py
+│   ├── crawl_examinee_submissions.py
+│   ├── maintenance/
+│   └── debug/
+├── tests/                       # 测试脚本
+├── runtime/                     # cookie、日志、Selenium 缓存，本地生成，不提交
+├── output/                      # 爬取结果，本地生成，不提交
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+├── spider.py                    # 兼容旧命令的包装入口
+└── spider_api.py                # 兼容旧命令的包装入口
 ```
 
-默认情况下：
-
-```text
-爬取结果输出到：output/
-运行状态保存到：runtime/
-```
-
-如果需要自定义路径，可以设置环境变量：
+## 本地启动
 
 ```powershell
-$env:PTA_CRAWL_DIR = "D:\path\to\output"
-$env:PTA_RUNTIME_DIR = "D:\path\to\runtime"
-```
-
-## 环境准备
-
-建议使用 Python 虚拟环境：
-
-```powershell
+cd H:\CQUST_AI\spider-repo
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
-
-还需要本机安装 Chrome 或 Chromium，因为 PTA 登录需要 Selenium 启动浏览器。
-
-## 配置文件
-
-复制一份环境变量模板：
-
-```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
-然后填写 `.env` 中的 PTA 账号、数据库连接等配置。
+编辑 `.env`，至少填写：
 
-常用配置：
+```env
+PTA_USERNAME=你的PTA账号
+PTA_PASSWORD=你的PTA密码
+PTA_GROUP_ID=PTA用户组ID
+# 或者 PTA_GROUP_NAME=PTA用户组精确名称
 
-```text
-PTA_USERNAME=PTA账号
-PTA_PASSWORD=PTA密码
-JAVA_BACKEND_URL=http://127.0.0.1:8081
-SPIDER_PORT=8100
-COOLDOWN_RECENT_EXPERIMENT=3600
-RECENT_EXPERIMENT_WINDOW_HOURS=24
 DB_HOST=127.0.0.1
 DB_PORT=3306
 DB_NAME=ptadatabase
 DB_USERNAME=root
 DB_PASSWORD=数据库密码
+JAVA_BACKEND_URL=http://127.0.0.1:8081
+SPIDER_PORT=8100
 ```
 
-注意：`.env` 里可能包含账号密码，不要上传到 GitHub。
-
-## 启动服务
-
-Windows 下推荐使用：
+启动 API：
 
 ```powershell
-.\start_spider_api.ps1
+.\.venv\Scripts\python.exe spider_api.py
 ```
 
-也可以直接运行：
+健康检查：
 
 ```powershell
-python spider_api.py
+Invoke-WebRequest http://127.0.0.1:8100/health
 ```
 
-默认服务地址：
-
-```text
-http://127.0.0.1:8100
-```
-
-后端项目需要把 `PTA_SPIDER_URL` 指向这个地址，例如：
-
-```text
-PTA_SPIDER_URL=http://127.0.0.1:8100
-```
-
-## 自动更新触发方式
-
-`spider_api.py` 启动后只负责提供 API 和后台任务队列，不会自己定时发起爬取。服务启动时会创建 worker 等待任务，只有外部调用 `POST /crawl` 后，爬虫才会把任务加入队列并执行 `_run_crawl()`。
-
-因此，自动更新需要由后端定时器或其他调度程序负责调用爬虫服务。例如后端定时任务可以按固定频率请求：
+触发爬取：
 
 ```http
 POST http://127.0.0.1:8100/crawl
 Content-Type: application/json
 
 {
-  "keyword": "PTA关键词",
+  "group_id": "2028307022170722304",
   "class_id": 123,
   "mode": "full",
   "force": false
 }
 ```
 
-`mode` 会影响自动更新范围：
+也可以使用用户组名称：
 
-```text
-incremental  只检查并爬取新题集
-submissions  刷新已爬题集的提交记录
-refresh      重新导出已爬题集的数据文件
-full         同时执行新题集检查、提交记录刷新和导出刷新
+```json
+{
+  "group_name": "计科25数据结构",
+  "class_id": 123,
+  "mode": "full"
+}
 ```
 
-近期题集的小时级刷新、旧题集降频、已截止题集跳过等策略，都只在 `/crawl` 被调用后生效。也就是说，冷却配置决定“这次调用里哪些题集允许刷新”，但不会主动唤醒爬虫。如果希望近期题集接近每小时更新，后端定时器也需要按小时级频率调用 `/crawl`，通常建议使用 `mode: "full"`，让爬虫内部根据每个题集的冷却状态自行跳过不需要刷新的内容。
+## Docker 部署
 
-## 查看和停止服务
+Dockerfile 已经把 Google Chrome Stable 和匹配的 ChromeDriver 放进镜像里：
 
-查看状态：
+- Google Chrome 安装到 `/usr/bin/google-chrome`
+- ChromeDriver 安装到 `/usr/bin/chromedriver`
+- 容器默认设置：
+  - `PTA_CHROME_BINARY=/usr/bin/google-chrome`
+  - `PTA_CHROMEDRIVER_PATH=/usr/bin/chromedriver`
+  - `PTA_HEADLESS=true`
 
-```powershell
-.\status_spider_api.ps1
+构建并启动：
+
+```bash
+cd /opt/pta-spider
+cp .env.example .env
+vim .env
+docker compose up -d --build
+```
+
+查看日志：
+
+```bash
+docker compose logs -f pta-spider
+```
+
+健康检查：
+
+```bash
+curl http://127.0.0.1:8100/health
 ```
 
 停止服务：
 
-```powershell
-.\stop_spider_api.ps1
+```bash
+docker compose down
 ```
 
-## Git 上传注意事项
+## 云服务器上的 Chrome 登录问题
 
-需要上传：
+云服务器没有图形界面，所以容器默认使用 headless Chrome。一般建议这样处理：
 
-```text
-*.py
-*.ps1
-README.md
-requirements.txt
-.env.example
-.gitignore
-tools/
+1. 优先用本地或服务器上已有有效 cookie。服务会把 cookie 存在 `runtime/`，`docker-compose.yml` 已把 `./runtime` 挂载到容器内 `/app/runtime`，容器重建后 cookie 不会丢。
+2. 如果自动登录遇到滑块验证码失败，在前端或接口写入手动 cookie。接口是 `POST /cookie/update`，请求体里传浏览器导出的 cookie JSON 数组。
+3. 不建议把你本机的 Chrome 程序复制进容器。Dockerfile 会在构建时安装 Linux 版 Google Chrome，并下载匹配 ChromeDriver；Windows 版 Chrome 不能在 Linux 云服务器容器里运行。
+4. 如果云服务器网络无法访问 Google 下载源，可以先在能联网的机器构建镜像，再 `docker save` 导出镜像，上传服务器后 `docker load`。
+
+## 常用环境变量
+
+```env
+PTA_USERNAME=
+PTA_PASSWORD=
+PTA_GROUP_ID=
+PTA_GROUP_NAME=
+PTA_HEADLESS=true
+PTA_FORCE_SELENIUM_LOGIN=false
+PTA_RUNTIME_DIR=/app/runtime
+PTA_CRAWL_DIR=/app/output
+PTA_CHROME_BINARY=/usr/bin/google-chrome
+PTA_CHROMEDRIVER_PATH=/usr/bin/chromedriver
+JAVA_BACKEND_URL=http://backend:8081
+SPIDER_PORT=8100
+SPIDER_CORS_ALLOW_ORIGINS=*
+DB_HOST=mysql
+DB_PORT=3306
+DB_NAME=ptadatabase
+DB_USERNAME=root
+DB_PASSWORD=
 ```
 
-不要上传：
+## 注意事项
 
-```text
-runtime/
-output/
-.env
-__pycache__/
-.venv/
-```
-
-这些已经写进 `.gitignore`。
+- `.env`、`runtime/`、`output/` 都不应提交到 Git。
+- 云服务器部署时，`DB_HOST` 和 `JAVA_BACKEND_URL` 不要写 `127.0.0.1`，除非数据库和后端就在同一个容器里。Docker Compose 内部服务互访通常写服务名，例如 `mysql`、`backend`。
+- PTA 登录有验证码和风控，首次部署建议先跑通 cookie 导入，再做定时爬取。

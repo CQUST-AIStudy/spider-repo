@@ -7,7 +7,7 @@ import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import sync_to_db as legacy_sync
+from . import sync_to_db as legacy_sync
 
 try:
     import bcrypt as _bcrypt

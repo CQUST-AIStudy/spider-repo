@@ -10,9 +10,10 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(SCRIPT_DIR))
+PROJECT_ROOT = SCRIPT_DIR.parent
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-import spider as spider_mod
+from pta_spider import spider as spider_mod
 
 
 def build_driver():
@@ -78,9 +79,9 @@ def _find_visible_enabled(driver, selectors, timeout_seconds=5):
 
 def prefill_login_form(driver):
     username = os.getenv("PTA_USERNAME")
-    password = os.getenv("PTA_PASSPORT")
+    password = os.getenv("PTA_PASSWORD") or os.getenv("PTA_PASSPORT")
     if not username or not password:
-        print("PTA_USERNAME or PTA_PASSPORT is missing; leaving the form for manual input.")
+        print("PTA_USERNAME or PTA_PASSWORD is missing; leaving the form for manual input.")
         return
 
     username_input = _find_visible_enabled(driver, [
