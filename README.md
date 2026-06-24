@@ -106,12 +106,12 @@ PTA_RUNTIME_DIR=/app/runtime
 PTA_CRAWL_DIR=/app/output
 PTA_CHROME_BINARY=/usr/bin/google-chrome
 PTA_CHROMEDRIVER_PATH=/usr/bin/chromedriver
-JAVA_BACKEND_URL=http://backend:8081
+JAVA_BACKEND_URL=http://host.docker.internal:8081
 SPIDER_PORT=8100
 SPIDER_CORS_ALLOW_ORIGINS=*
 COOLDOWN_SUBMISSIONS=86400
 COOLDOWN_EXPORTS=86400
-DB_HOST=mysql
+DB_HOST=host.docker.internal
 DB_PORT=3306
 DB_NAME=ptadatabase
 DB_USERNAME=root
@@ -121,5 +121,5 @@ DB_PASSWORD=
 ## 注意事项
 
 - `.env`、`runtime/`、`output/` 都不应提交到 Git。
-- 云服务器部署时，`DB_HOST` 和 `JAVA_BACKEND_URL` 不要写 `127.0.0.1`，除非数据库和后端就在同一个容器里。Docker Compose 内部服务互访通常写服务名，例如 `mysql`、`backend`。
+- 云服务器部署时，`DB_HOST` 和 `JAVA_BACKEND_URL` 不要写 `127.0.0.1`，除非数据库和后端就在同一个容器里。单服务 compose 访问宿主机可用 `host.docker.internal`；统一根目录 compose 内部服务互访使用服务名，例如 `backend`。
 - PTA 登录有验证码和风控，首次部署建议先跑通 cookie 导入，再做定时爬取。
