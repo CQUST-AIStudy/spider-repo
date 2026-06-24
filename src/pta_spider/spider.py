@@ -20,6 +20,7 @@ import tempfile
 import threading
 from pathlib import Path
 from datetime import datetime
+from difflib import SequenceMatcher
 
 # Windows 终端 UTF-8 输出修复
 if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
@@ -250,8 +251,27 @@ class TokenBucketRateLimiter:
             time.sleep(0.5)
 
 
+def _env_int(name, default, minimum=None, maximum=None):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        value = int(str(raw).strip())
+    except ValueError:
+        print(f"Invalid integer for {name}: {raw!r}; using {default}")
+        return default
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
 # Global rate limiter instance
-_rate_limiter = TokenBucketRateLimiter(rate=20, per=60)
+_rate_limiter = TokenBucketRateLimiter(
+    rate=_env_int("PTA_API_RATE_LIMIT_PER_MINUTE", 20, minimum=1, maximum=120),
+    per=60,
+)
 
 
 class CrawlHistory:
@@ -674,10 +694,74 @@ class PTAClient:
         resp.raise_for_status()
         return resp.json()
 
-    def get_user_groups(self):
+    def get_user_groups(self, include_archived=None, search_text=None):
         """List PTA user groups visible to the current teacher account."""
-        data = self.api_get("/user-groups")
-        return data.get("userGroups", [])
+        if include_archived is None:
+            include_archived = _env_flag("PTA_INCLUDE_ARCHIVED_USER_GROUPS", True)
+
+        primary_groups = self._fetch_user_groups(search_text=search_text)
+        if primary_groups or not include_archived:
+            return primary_groups
+
+        return self._dedupe_user_groups(
+            self._fetch_user_groups(search_text=search_text, archived=False)
+            + self._fetch_user_groups(search_text=search_text, archived=True)
+        )
+
+    def _fetch_user_groups(self, search_text=None, archived=None):
+        """Fetch one PTA user-group page with optional archived filter."""
+        search_text = str(search_text or "").strip()
+        params = {}
+        if archived is not None:
+            params["archived"] = "true" if archived else "false"
+        if search_text:
+            params["keyword"] = search_text
+
+        try:
+            data = self.api_get("/user-groups", params=params or None)
+        except requests.exceptions.HTTPError as e:
+            if search_text:
+                print(f"user group filtered query failed ({e}); falling back to unfiltered list")
+                params.pop("keyword", None)
+                data = self.api_get("/user-groups", params=params or None)
+            else:
+                raise
+
+        groups = []
+        for group in data.get("userGroups", []) if isinstance(data, dict) else []:
+            if isinstance(group, dict):
+                group = dict(group)
+                if archived is not None:
+                    group["_query_archived"] = archived
+                groups.append(group)
+        return groups
+
+    def _fetch_user_group_candidates(self, search_text):
+        """Prefer /user-groups, then combine archived=false and archived=true."""
+        primary_groups = self._dedupe_user_groups(
+            self._fetch_user_groups(search_text=search_text)
+        )
+        if primary_groups:
+            return primary_groups, "primary"
+
+        fallback_groups = self._dedupe_user_groups(
+            self._fetch_user_groups(search_text=search_text, archived=False)
+            + self._fetch_user_groups(search_text=search_text, archived=True)
+        )
+        return fallback_groups, "archived-filtered"
+
+    def _dedupe_user_groups(self, groups):
+        result = []
+        seen_ids = set()
+        for group in groups:
+            group_id = str(group.get("id") or "").strip()
+            dedupe_key = group_id or self._normalize_group_name(group.get("name"))
+            if dedupe_key and dedupe_key in seen_ids:
+                continue
+            if dedupe_key:
+                seen_ids.add(dedupe_key)
+            result.append(group)
+        return result
 
     @staticmethod
     def _normalize_group_name(value):
@@ -685,13 +769,42 @@ class PTAClient:
             return ""
         return re.sub(r"\s+", "", str(value)).strip().lower()
 
+    @classmethod
+    def _user_group_fuzzy_score(cls, target, candidate):
+        target = cls._normalize_group_name(target)
+        candidate = cls._normalize_group_name(candidate)
+        if not target or not candidate or target == candidate:
+            return 1.0 if target and target == candidate else 0.0
+
+        # Avoid broad matches like "计科25" selecting a specific class by accident.
+        if min(len(target), len(candidate)) < 6:
+            return 0.0
+
+        ratio = SequenceMatcher(None, target, candidate).ratio()
+        if target in candidate or candidate in target:
+            coverage = min(len(target), len(candidate)) / max(len(target), len(candidate))
+            if coverage >= 0.72:
+                return max(ratio, 0.86 + min(0.08, coverage * 0.08))
+
+        ordered_pattern = ".*?".join(re.escape(ch) for ch in target)
+        if re.search(ordered_pattern, candidate):
+            coverage = len(target) / len(candidate)
+            if coverage >= 0.65:
+                return max(ratio, 0.82 + min(0.08, coverage * 0.08))
+
+        return ratio
+
     def find_user_group(self, group_name):
         """Find one user group by its unique display name."""
         normalized_target = self._normalize_group_name(group_name)
         if not normalized_target:
             return None
 
-        groups = self.get_user_groups()
+        groups, source = self._fetch_user_group_candidates(group_name)
+        return self._select_user_group_match(group_name, groups, source)
+
+    def _select_user_group_match(self, group_name, groups, source="primary"):
+        normalized_target = self._normalize_group_name(group_name)
         exact = [
             group for group in groups
             if self._normalize_group_name(group.get("name")) == normalized_target
@@ -699,8 +812,51 @@ class PTAClient:
         if len(exact) == 1:
             return exact[0]
         if len(exact) > 1:
+            active = [group for group in exact if not group.get("archived")]
+            if len(active) == 1:
+                return active[0]
             names = ", ".join(f"{g.get('name')}({g.get('id')})" for g in exact)
             raise RuntimeError(f"PTA user group name is not unique: {group_name}; matches: {names}")
+
+        min_score = float(os.getenv("PTA_USER_GROUP_FUZZY_MIN_SCORE", "0.82"))
+        scored = []
+        for group in groups:
+            score = self._user_group_fuzzy_score(group_name, group.get("name"))
+            if score >= min_score:
+                scored.append((score, group))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        if not scored:
+            return None
+
+        top_score, top_group = scored[0]
+        near = [(score, group) for score, group in scored if top_score - score < 0.04]
+        if len(near) == 1:
+            print(
+                "Fuzzy matched PTA user group: "
+                f"{group_name} -> {top_group.get('name')}({top_group.get('id')}), "
+                f"score={top_score:.2f}, source={source}"
+            )
+            return top_group
+
+        active_near = [
+            (score, group) for score, group in near
+            if not group.get("archived") and group.get("_query_archived") is not True
+        ]
+        if len(active_near) == 1 and active_near[0][0] >= 0.88:
+            score, group = active_near[0]
+            print(
+                "Fuzzy matched active PTA user group: "
+                f"{group_name} -> {group.get('name')}({group.get('id')}), "
+                f"score={score:.2f}, source={source}"
+            )
+            return group
+
+        names = ", ".join(
+            f"{group.get('name')}({group.get('id')}, score={score:.2f})"
+            for score, group in near[:8]
+        )
+        raise RuntimeError(f"PTA user group fuzzy match is ambiguous: {group_name}; candidates: {names}")
 
         return None
 

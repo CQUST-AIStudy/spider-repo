@@ -663,16 +663,13 @@ def _ensure_artifact(cursor, owner_id: int, artifact_type: str, text_content, so
         VALUES
           ('PTA_IMPORT_JOB', %s, %s, 'INLINE', %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
+          id = LAST_INSERT_ID(id),
           text_content = VALUES(text_content),
           mime_type = VALUES(mime_type)
         """,
         (owner_id, artifact_type, text_content, mime_type, PTA_SOURCE_SYSTEM, scoped_source_key),
     )
-    cursor.execute(
-        "SELECT id FROM artifact WHERE source_system = %s AND source_key = %s",
-        (PTA_SOURCE_SYSTEM, scoped_source_key),
-    )
-    return cursor.fetchone()[0]
+    return cursor.lastrowid
 
 
 def _ensure_assignment_problem(cursor, offering_id: int, pta_problem_id: str, cache: dict, title=None, sort_order=0):
@@ -687,17 +684,14 @@ def _ensure_assignment_problem(cursor, offering_id: int, pta_problem_id: str, ca
         VALUES
           (%s, %s, %s, %s, %s, 'ACTIVE')
         ON DUPLICATE KEY UPDATE
+          id = LAST_INSERT_ID(id),
           title = VALUES(title),
           sort_order = VALUES(sort_order),
           status = 'ACTIVE'
         """,
         (offering_id, pta_problem_id, pta_problem_id, title or f"PTA Problem {pta_problem_id}", sort_order),
     )
-    cursor.execute(
-        "SELECT id FROM assignment_problem WHERE offering_id = %s AND source_problem_id = %s",
-        (offering_id, pta_problem_id),
-    )
-    problem_id = cursor.fetchone()[0]
+    problem_id = cursor.lastrowid
     cache[pta_problem_id] = problem_id
     return problem_id
 
@@ -1214,6 +1208,17 @@ def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dic
         scored_code_rows = _read_scored_code_rows(files["SCORED_CODE"][0]) if "SCORED_CODE" in files else []
 
         student_no_to_id = {}
+        binding_cache = set()
+
+        def ensure_binding_once(student_id, pta_user_id):
+            if not pta_user_id:
+                return
+            key = (student_id, pta_user_id)
+            if key in binding_cache:
+                return
+            _ensure_binding(cursor, student_id, pta_user_id)
+            binding_cache.add(key)
+
         for row in transcript_rows:
             student_id = _ensure_student_profile(cursor, row["student_no"], row["student_name"])
             _ensure_class_member(cursor, resolved["class_id"], student_id)
@@ -1232,7 +1237,7 @@ def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dic
         for pta_user_id, student_no in pta_user_map.items():
             student_id = student_no_to_id.get(student_no)
             if student_id:
-                _ensure_binding(cursor, student_id, pta_user_id)
+                ensure_binding_once(student_id, pta_user_id)
 
         if "PAPER_TRANSCRIPT" in files:
             source_file_id = files["PAPER_TRANSCRIPT"][1]
@@ -1271,6 +1276,7 @@ def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dic
         problem_order = {}
         next_problem_order = 1
         unmapped_pta_users = set()
+
         for row in sorted(scored_code_rows, key=lambda item: (item["pta_problem_id"], item["student_no"], item["relative_name"])):
             if row["pta_problem_id"] not in problem_order:
                 problem_order[row["pta_problem_id"]] = next_problem_order
@@ -1289,9 +1295,7 @@ def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dic
                 student_id = _ensure_student_profile(cursor, row["student_no"], student_name)
                 _ensure_class_member(cursor, resolved["class_id"], student_id)
                 student_no_to_id[row["student_no"]] = student_id
-                _materialize_student_assignments(cursor, resolved["offering_id"], resolved["class_id"])
-            if row["pta_user_id"]:
-                _ensure_binding(cursor, student_id, row["pta_user_id"])
+            ensure_binding_once(student_id, row["pta_user_id"])
             code_artifact_id = _ensure_artifact(
                 cursor,
                 import_job_id,
@@ -1324,10 +1328,9 @@ def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dic
                 student_id = _ensure_student_profile(cursor, student_no, student_name)
                 _ensure_class_member(cursor, resolved["class_id"], student_id)
                 student_no_to_id[student_no] = student_id
-                _materialize_student_assignments(cursor, resolved["offering_id"], resolved["class_id"])
             student_id = student_no_to_id.get(student_no)
-            if student_id and row["pta_user_id"]:
-                _ensure_binding(cursor, student_id, row["pta_user_id"])
+            if student_id:
+                ensure_binding_once(student_id, row["pta_user_id"])
 
             raw_row_id = None
             if "SUBMISSIONS" in files:
@@ -1345,6 +1348,7 @@ def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dic
                       runtime_text = VALUES(runtime_text),
                       memory_text = VALUES(memory_text),
                       submitted_at_text = VALUES(submitted_at_text),
+                      id = LAST_INSERT_ID(id),
                       raw_json = VALUES(raw_json)
                     """,
                     (
@@ -1362,8 +1366,7 @@ def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dic
                         row["raw_json"],
                     ),
                 )
-                cursor.execute("SELECT id FROM pta_raw_submission_row WHERE source_file_id = %s AND row_no = %s", (source_file_id, row["row_no"]))
-                raw_row_id = cursor.fetchone()[0]
+                raw_row_id = cursor.lastrowid
 
             if not student_id or not problem_id:
                 continue
@@ -1414,7 +1417,6 @@ def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dic
                 student_id = _ensure_student_profile(cursor, row["student_no"], row["student_name"])
                 _ensure_class_member(cursor, resolved["class_id"], student_id)
                 student_no_to_id[row["student_no"]] = student_id
-                _materialize_student_assignments(cursor, resolved["offering_id"], resolved["class_id"])
             html_artifact_id = _ensure_artifact(
                 cursor,
                 import_job_id,
@@ -1482,6 +1484,9 @@ def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dic
                 )
         report["raw_answer_sheet_rows"] = len(answer_sheet_rows)
 
+        # Materialize once after all new students/problems have been discovered.
+        # Running this inside row loops repeats a class-wide INSERT...SELECT for
+        # every newly discovered student and slows large first-time imports.
         _materialize_student_assignments(cursor, resolved["offering_id"], resolved["class_id"])
         report["stale_problem_states_pruned"] = _prune_orphan_problem_states(cursor, resolved["offering_id"])
         _recalc_problem_state(cursor, resolved["offering_id"])
