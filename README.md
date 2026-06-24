@@ -48,9 +48,9 @@ curl http://127.0.0.1:8100/health
 
 ## Docker 部署
 
-Dockerfile 会在镜像构建阶段安装 Linux 版 Google Chrome Stable，并下载与 Chrome 主版本匹配的 ChromeDriver：
+Dockerfile 会在镜像构建阶段从 Debian 官方源安装 Linux 版 Chromium 与版本匹配的 ChromeDriver，避免依赖 Google 下载源：
 
-- Google Chrome: `/usr/bin/google-chrome`
+- Chromium: `/usr/bin/chromium`
 - ChromeDriver: `/usr/bin/chromedriver`
 - 默认 headless: `PTA_HEADLESS=true`
 
@@ -67,7 +67,7 @@ docker compose logs -f pta-spider
 检查浏览器版本：
 
 ```bash
-docker compose exec pta-spider google-chrome --version
+docker compose exec pta-spider chromium --version
 docker compose exec pta-spider chromedriver --version
 ```
 
@@ -87,11 +87,11 @@ docker compose down
 
 云服务器通常没有图形界面，所以容器默认使用 headless Chrome。长期爬取建议这样处理：
 
-1. 让云服务器能够访问 Google Chrome 与 ChromeDriver 下载源，直接在服务器上 `docker compose up -d --build` 构建镜像。
+1. 让云服务器能够访问 Debian 官方 apt 源，直接在服务器上 `docker compose up -d --build` 构建镜像。
 2. 不要把本机 Windows Chrome 复制进容器；Windows 版 Chrome 不能在 Linux 云服务器容器里运行。
 3. cookie 会保存在 `runtime/`，`docker-compose.yml` 已把宿主机 `./runtime` 挂载到容器内 `/app/runtime`，容器重建后 cookie 不会丢。
 4. 如果自动登录遇到滑块验证码失败，在前端或接口写入手动 cookie。接口是 `POST /cookie/update`，请求体传浏览器导出的 cookie JSON 数组。
-5. 如果服务器无法访问 `dl.google.com`、`googlechromelabs.github.io` 或 `storage.googleapis.com`，优先配置服务器出网、代理或可用镜像源，再重新构建镜像。
+5. 如果服务器无法访问 Debian 官方 apt 源，优先配置服务器出网、代理或可用镜像源，再重新构建镜像。
 
 ## 常用环境变量
 
@@ -104,7 +104,7 @@ PTA_HEADLESS=true
 PTA_FORCE_SELENIUM_LOGIN=false
 PTA_RUNTIME_DIR=/app/runtime
 PTA_CRAWL_DIR=/app/output
-PTA_CHROME_BINARY=/usr/bin/google-chrome
+PTA_CHROME_BINARY=/usr/bin/chromium
 PTA_CHROMEDRIVER_PATH=/usr/bin/chromedriver
 JAVA_BACKEND_URL=http://host.docker.internal:8081
 SPIDER_PORT=8100
