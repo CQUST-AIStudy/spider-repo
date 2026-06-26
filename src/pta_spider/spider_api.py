@@ -210,17 +210,6 @@ def _database_has_experiment_data(problem_set, class_id=None):
                 return False
             experiment_id = row[0]
 
-            if class_id is None:
-                for table in ("submit_situation", "score", "student_code", "problem_score_detail"):
-                    try:
-                        cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE experiment_id = %s", (experiment_id,))
-                        count_row = cursor.fetchone()
-                        if count_row and int(count_row[0] or 0) > 0:
-                            has_data = True
-                            break
-                    except Exception:
-                        continue
-
             if not has_data:
                 try:
                     source_keys = _offering_source_keys(experiment_id, class_id)

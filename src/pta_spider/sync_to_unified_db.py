@@ -164,6 +164,44 @@ def _load_pta_user_group_roster(crawl_dir: Path):
     return data
 
 
+def _resolve_class_id_from_roster(cursor, roster_payload):
+    if not roster_payload:
+        return None
+    group = roster_payload.get("group") or {}
+    pta_group_id = str(group.get("pta_group_id") or "").strip()
+    pta_group_name = str(group.get("pta_group_name") or "").strip()
+    if pta_group_id:
+        cursor.execute(
+            """
+            SELECT id
+            FROM teaching_class
+            WHERE pta_group_id = %s
+            LIMIT 1
+            """,
+            (pta_group_id,),
+        )
+        row = cursor.fetchone()
+        if row:
+            return row[0]
+    normalized_group_name = _normalize_text(pta_group_name)
+    if normalized_group_name:
+        cursor.execute(
+            """
+            SELECT id, name, pta_keyword, pta_group_name
+            FROM teaching_class
+            """
+        )
+        for class_id, class_name, pta_keyword, stored_group_name in cursor.fetchall():
+            candidates = [
+                _normalize_text(stored_group_name),
+                _normalize_text(pta_keyword),
+                _normalize_text(class_name),
+            ]
+            if normalized_group_name in candidates:
+                return class_id
+    return None
+
+
 def _normalize_text(value) -> str:
     return "".join(str(value or "").split())
 
@@ -1885,6 +1923,7 @@ def _sync_one_experiment(
 
 def sync_all(crawl_dir=None, strict=True, class_id=None):
     crawl_dir = _get_crawl_dir(crawl_dir)
+    roster_payload = _load_pta_user_group_roster(crawl_dir)
     report = {
         "ok": False,
         "mode": "unified",
@@ -1901,6 +1940,19 @@ def sync_all(crawl_dir=None, strict=True, class_id=None):
             if strict:
                 raise RuntimeError(message)
             return report
+        if class_id is None:
+            with conn.cursor() as cursor:
+                class_id = _resolve_class_id_from_roster(cursor, roster_payload)
+            report["class_id"] = class_id
+        if class_id is None:
+            message = (
+                "Unified PTA sync requires class_id or a PTA user group bound to teaching_class. "
+                "Set teaching_class.pta_group_id/pta_group_name or pass class_id in the crawl request."
+            )
+            report["error"] = message
+            if strict:
+                raise RuntimeError(message)
+            return report
         legacy_experiment_map = legacy_sync.sync_experiments(conn)
         report["legacy_experiment_upsert_count"] = len(legacy_experiment_map)
         exp_map = {}
@@ -1913,7 +1965,6 @@ def sync_all(crawl_dir=None, strict=True, class_id=None):
         pta_user_map = legacy_sync.build_pta_user_map(exp_map)
         student_name_map = legacy_sync.build_student_name_map(exp_map)
         pta_group_context = None
-        roster_payload = _load_pta_user_group_roster(crawl_dir)
         if roster_payload:
             with conn.cursor() as cursor:
                 pta_group_context = _ensure_pta_user_group_roster(cursor, roster_payload, class_id)
@@ -1960,24 +2011,19 @@ def sync_all(crawl_dir=None, strict=True, class_id=None):
 
 
 def run_configured_sync(crawl_dir=None, strict=True, class_id=None):
-    use_unified = _flag("ACADEMIC_UNIFIED_IMPORT_ENABLED", class_id is not None)
-    legacy_write_enabled = _flag("ACADEMIC_LEGACY_WRITE_ENABLED", class_id is None)
+    use_unified = _flag("ACADEMIC_UNIFIED_IMPORT_ENABLED", True)
     result = {
         "ok": False,
-        "legacy_enabled": legacy_write_enabled,
+        "legacy_enabled": False,
         "unified_enabled": use_unified,
     }
-    if legacy_write_enabled:
-        result["legacy"] = legacy_sync.sync_all(crawl_dir=crawl_dir, strict=strict)
     if use_unified:
         result["unified"] = sync_all(crawl_dir=crawl_dir, strict=strict, class_id=class_id)
     if use_unified:
         result["ok"] = bool(result.get("unified", {}).get("ok"))
-    elif legacy_write_enabled:
-        result["ok"] = bool(result.get("legacy", {}).get("ok"))
     else:
         result["ok"] = True
-        result["message"] = "No importer enabled"
+        result["message"] = "Unified importer disabled"
     return result
 
 
