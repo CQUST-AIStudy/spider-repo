@@ -1529,7 +1529,7 @@ class PTAClient:
         # 自动同步到数据库
         self._auto_sync_to_db()
 
-    def _crawl_one_problem_set(self, ps_id, ps_name, export_answer_sheet=True):
+    def _crawl_one_problem_set(self, ps_id, ps_name, export_answer_sheet=False):
         """Crawl all data for a single problem set, save to ./爬取结果/"""
         base_dir = self._problem_set_dir(ps_name)
 
@@ -1610,7 +1610,7 @@ class PTAClient:
 
         time.sleep(random.uniform(0.5, 1))
 
-    def _refresh_one_problem_set(self, ps_id, ps_name, export_answer_sheet=True):
+    def _refresh_one_problem_set(self, ps_id, ps_name, export_answer_sheet=False):
         """
         刷新已爬取题目集的导出数据（不重新爬取题目内容和提交记录）。
         只重新导出: PAPER_TRANSCRIPT, SCORED_CODE；ANSWER_SHEET 可由用户组总导出替代
