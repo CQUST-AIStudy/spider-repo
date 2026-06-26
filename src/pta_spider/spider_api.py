@@ -2,7 +2,7 @@
 PTA Spider API v2 - Data-type aware crawling with per-problem-set refresh policy.
 Open problem sets refresh daily; ended sets are skipped automatically unless forced or missing data.
 """
-import asyncio, uuid, os, sys, time, csv, shutil
+import asyncio, uuid, os, sys, time, csv, shutil, hashlib
 import json as json_mod
 from pathlib import Path
 from datetime import datetime
@@ -23,7 +23,7 @@ import re
 
 from .spider import PTAClient, CrawlHistory, RUNTIME_DIR
 from . import sync_to_db as legacy_sync
-from .sync_to_unified_db import run_configured_sync
+from .sync_to_unified_db import class_id_exists, resolve_class_id_for_roster, run_configured_sync
 
 app = FastAPI(title="PTA Spider API", version="2.0.0")
 JAVA_BACKEND_URL = os.getenv("JAVA_BACKEND_URL", "http://127.0.0.1:8081")
@@ -189,6 +189,22 @@ def _offering_source_keys(experiment_id, class_id=None):
     return [f"{base}:CLASS:{class_id}", base]
 
 
+def _pta_problem_set_source_id(problem_set):
+    ps_id = (problem_set or {}).get("id")
+    if ps_id not in (None, ""):
+        return str(ps_id).strip()[:64]
+    name = _problem_set_name(problem_set)
+    return "NAME-" + hashlib.sha1(f"problem-set-name::{name}".encode("utf-8")).hexdigest()[:40]
+
+
+def _pta_offering_source_keys(problem_set, class_id=None):
+    source_id = _pta_problem_set_source_id(problem_set)
+    base = f"PTA_PROBLEM_SET_OFFERING:{source_id}"
+    if class_id is None:
+        return [base]
+    return [f"{base}:CLASS:{class_id}", base]
+
+
 def _is_problem_set_closed(problem_set, now=None):
     deadline = _problem_set_time(problem_set, DEADLINE_KEYS)
     return deadline is not None and deadline <= (now or datetime.now())
@@ -204,6 +220,34 @@ def _database_has_experiment_data(problem_set, class_id=None):
     try:
         conn = legacy_sync.get_db()
         with conn.cursor() as cursor:
+            source_keys = _pta_offering_source_keys(problem_set, class_id)
+            placeholders = ", ".join(["%s"] * len(source_keys))
+            params = ["PTA", *source_keys]
+            class_filter = ""
+            if class_id is not None:
+                class_filter = " AND class_id = %s"
+                params.append(class_id)
+            cursor.execute(
+                f"""
+                SELECT id
+                FROM assignment_offering
+                WHERE source_system = %s
+                  AND source_offering_key IN ({placeholders})
+                  {class_filter}
+                LIMIT 1
+                """,
+                tuple(params),
+            )
+            offering_row = cursor.fetchone()
+            if offering_row:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM student_problem_attempt WHERE offering_id = %s",
+                    (offering_row[0],),
+                )
+                attempt_row = cursor.fetchone()
+                if attempt_row and int(attempt_row[0] or 0) > 0:
+                    return True
+
             cursor.execute("SELECT experiment_id FROM experiment WHERE name = %s LIMIT 1", (name,))
             row = cursor.fetchone()
             if not row:
@@ -571,6 +615,16 @@ def _run_crawl(task):
         )
         task.group_id = roster_payload["group"]["pta_group_id"]
         task.group_name = roster_payload["group"]["pta_group_name"]
+        if task.class_id is None:
+            task.class_id = resolve_class_id_for_roster(roster_payload)
+            if task.class_id is None:
+                raise RuntimeError(
+                    "PTA sync needs an existing teaching_class. "
+                    "Create the class in backend first, bind pta_group_id/pta_group_name, "
+                    "or trigger sync through backend so class_id is passed to the spider."
+                )
+        elif not class_id_exists(task.class_id):
+            raise RuntimeError(f"teaching_class not found for class_id={task.class_id}")
 
         mode = task.mode
         all_sets = None

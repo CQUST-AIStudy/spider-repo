@@ -4,7 +4,7 @@ import json
 import os
 import traceback
 import zipfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import sync_to_db as legacy_sync
@@ -41,6 +41,29 @@ def _safe_float(value, default=0.0):
         return default
 
 
+def _first_value(data, *keys):
+    for key in keys:
+        value = (data or {}).get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _read_problem_set_info(exp_dir: Path):
+    for info_file in (
+        exp_dir / "题目集信息.json",
+        exp_dir / "problem_set_info.json",
+    ):
+        if info_file.exists():
+            try:
+                data = json.loads(info_file.read_text(encoding="utf-8"))
+                return data if isinstance(data, dict) else {}
+            except Exception as exc:
+                print(f"  [WARN] failed to parse problem-set metadata ({info_file}): {exc}")
+                return {}
+    return {}
+
+
 def _is_valid_student_identity(student_no, student_name=""):
     no = str(student_no or "").strip()
     name = str(student_name or "").strip()
@@ -59,6 +82,14 @@ def _parse_pta_datetime(raw_text):
     if not text:
         return None
     normalized = text.replace("/", "-").replace("T", " ")
+    try:
+        iso_text = text[:-1] + "+00:00" if text.endswith("Z") else text
+        parsed = datetime.fromisoformat(iso_text)
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone(timedelta(hours=8))).replace(tzinfo=None)
+        return parsed
+    except ValueError:
+        pass
     for fmt in (
         "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%d %H:%M",
@@ -101,17 +132,43 @@ def _source_key(*parts: str) -> str:
     return hashlib.sha1("::".join(parts).encode("utf-8")).hexdigest()[:40]
 
 
-def _offering_source_key(legacy_experiment_id: int, class_id=None) -> str:
+def _pta_problem_set_source_id(problem_set_info: dict, experiment_name: str) -> str:
+    for key in ("id", "problemSetId", "problem_set_id", "problemSetID"):
+        value = (problem_set_info or {}).get(key)
+        if value not in (None, ""):
+            return str(value).strip()[:64]
+    return f"NAME-{_source_key('problem-set-name', experiment_name)}"
+
+
+def _template_source_key(problem_set_source_id: str) -> str:
+    return f"PTA_PROBLEM_SET_TEMPLATE:{problem_set_source_id}"[:128]
+
+
+def _offering_source_key(problem_set_source_id: str, class_id=None) -> str:
+    base = f"PTA_PROBLEM_SET_OFFERING:{problem_set_source_id}"
+    return f"{base}:CLASS:{class_id}" if class_id is not None else base
+
+
+def _offering_source_keys(problem_set_source_id: str, class_id=None):
+    if class_id is None:
+        return [_offering_source_key(problem_set_source_id)]
+    return [
+        _offering_source_key(problem_set_source_id, class_id),
+        _offering_source_key(problem_set_source_id),
+    ]
+
+
+def _legacy_offering_source_key(legacy_experiment_id: int, class_id=None) -> str:
     base = f"LEGACY_EXPERIMENT_OFFERING:{legacy_experiment_id}"
     return f"{base}:CLASS:{class_id}" if class_id is not None else base
 
 
-def _offering_source_keys(legacy_experiment_id: int, class_id=None):
+def _legacy_offering_source_keys(legacy_experiment_id: int, class_id=None):
     if class_id is None:
-        return [_offering_source_key(legacy_experiment_id)]
+        return [_legacy_offering_source_key(legacy_experiment_id)]
     return [
-        _offering_source_key(legacy_experiment_id, class_id),
-        _offering_source_key(legacy_experiment_id),
+        _legacy_offering_source_key(legacy_experiment_id, class_id),
+        _legacy_offering_source_key(legacy_experiment_id),
     ]
 
 
@@ -202,6 +259,27 @@ def _resolve_class_id_from_roster(cursor, roster_payload):
     return None
 
 
+def resolve_class_id_for_roster(roster_payload):
+    """Resolve a teaching_class.id from a PTA user-group roster payload."""
+    conn = legacy_sync.get_db()
+    try:
+        with conn.cursor() as cursor:
+            return _resolve_class_id_from_roster(cursor, roster_payload)
+    finally:
+        conn.close()
+
+
+def class_id_exists(class_id) -> bool:
+    if class_id is None:
+        return False
+    conn = legacy_sync.get_db()
+    try:
+        with conn.cursor() as cursor:
+            return _get_class_by_id(cursor, class_id) is not None
+    finally:
+        conn.close()
+
+
 def _normalize_text(value) -> str:
     return "".join(str(value or "").split())
 
@@ -233,6 +311,8 @@ def _find_best_matching_class(cursor, experiment_name: str, class_id=None):
     explicit_class = _get_class_by_id(cursor, class_id)
     if explicit_class:
         return explicit_class
+    if class_id is not None:
+        return None
 
     target = _normalize_text(experiment_name)
     if not target:
@@ -290,8 +370,8 @@ def _resolve_legacy_teacher_id(cursor, teacher_user_id):
     return str(row[0]) if row and row[0] is not None else None
 
 
-def _ensure_assignment_template(cursor, legacy_experiment_id: int, experiment_name: str):
-    source_template_key = f"LEGACY_EXPERIMENT_TEMPLATE:{legacy_experiment_id}"
+def _ensure_assignment_template(cursor, problem_set_source_id: str, experiment_name: str):
+    source_template_key = _template_source_key(problem_set_source_id)
     cursor.execute(
         """
         INSERT INTO assignment_template
@@ -302,7 +382,7 @@ def _ensure_assignment_template(cursor, legacy_experiment_id: int, experiment_na
           title = VALUES(title),
           status = 'ACTIVE'
         """,
-        (experiment_name, LEGACY_SOURCE_SYSTEM, source_template_key),
+        (experiment_name, PTA_SOURCE_SYSTEM, source_template_key),
     )
     cursor.execute(
         """
@@ -312,30 +392,36 @@ def _ensure_assignment_template(cursor, legacy_experiment_id: int, experiment_na
           AND source_template_key = %s
         LIMIT 1
         """,
-        (LEGACY_SOURCE_SYSTEM, source_template_key),
+        (PTA_SOURCE_SYSTEM, source_template_key),
     )
     row = cursor.fetchone()
     return row[0] if row else None
 
 
-def _ensure_assignment_offering(cursor, legacy_experiment_id: int, experiment_name: str, class_id=None):
+def _ensure_assignment_offering(cursor, experiment_name: str, class_id=None, problem_set_info=None):
     class_match = _find_best_matching_class(cursor, experiment_name, class_id)
     if not class_match:
         return None
-    template_id = _ensure_assignment_template(cursor, legacy_experiment_id, experiment_name)
+    problem_set_source_id = _pta_problem_set_source_id(problem_set_info or {}, experiment_name)
+    template_id = _ensure_assignment_template(cursor, problem_set_source_id, experiment_name)
     if template_id is None:
         return None
-    cursor.execute("SELECT num, deadline FROM experiment WHERE experiment_id = %s", (legacy_experiment_id,))
-    experiment_row = cursor.fetchone()
-    seq_no = experiment_row[0] if experiment_row else None
-    deadline_at = experiment_row[1] if experiment_row and len(experiment_row) > 1 else None
-    source_offering_key = _offering_source_key(legacy_experiment_id, class_match["class_id"])
+    seq_no = _safe_float(_first_value(problem_set_info or {}, "num", "seqNo", "seq_no", "order"), None)
+    if seq_no is not None:
+        seq_no = int(seq_no)
+    deadline_at = _parse_pta_datetime(_first_value(
+        problem_set_info or {}, "endAt", "deadlineAt", "deadline", "end_at", "deadline_at"
+    ))
+    source_offering_key = _offering_source_key(problem_set_source_id, class_match["class_id"])
     cursor.execute(
         """
         INSERT INTO assignment_offering
-          (template_id, class_id, teacher_id, seq_no, title_override, deadline_at, published_at, status, source_system, source_offering_key)
+          (
+            template_id, class_id, teacher_id, seq_no, title_override, deadline_at,
+            published_at, status, source_system, source_offering_key, pta_problem_set_id
+          )
         VALUES
-          (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP(3), 'PUBLISHED', %s, %s)
+          (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP(3), 'PUBLISHED', %s, %s, %s)
         ON DUPLICATE KEY UPDATE
           template_id = VALUES(template_id),
           class_id = VALUES(class_id),
@@ -343,6 +429,7 @@ def _ensure_assignment_offering(cursor, legacy_experiment_id: int, experiment_na
           seq_no = COALESCE(VALUES(seq_no), assignment_offering.seq_no),
           title_override = VALUES(title_override),
           deadline_at = COALESCE(VALUES(deadline_at), assignment_offering.deadline_at),
+          pta_problem_set_id = COALESCE(VALUES(pta_problem_set_id), assignment_offering.pta_problem_set_id),
           status = 'PUBLISHED'
         """,
         (
@@ -352,8 +439,9 @@ def _ensure_assignment_offering(cursor, legacy_experiment_id: int, experiment_na
             seq_no,
             experiment_name,
             deadline_at,
-            LEGACY_SOURCE_SYSTEM,
+            PTA_SOURCE_SYSTEM,
             source_offering_key,
+            problem_set_source_id,
         ),
     )
     cursor.execute(
@@ -364,7 +452,7 @@ def _ensure_assignment_offering(cursor, legacy_experiment_id: int, experiment_na
           AND source_offering_key = %s
         LIMIT 1
         """,
-        (LEGACY_SOURCE_SYSTEM, source_offering_key),
+        (PTA_SOURCE_SYSTEM, source_offering_key),
     )
     row = cursor.fetchone()
     if not row:
@@ -372,12 +460,12 @@ def _ensure_assignment_offering(cursor, legacy_experiment_id: int, experiment_na
     return {"offering_id": row[0], "class_id": row[1], "teacher_id": row[2]}
 
 
-def _sync_assignment_offering_deadline(cursor, offering_id: int, legacy_experiment_id: int):
-    if not offering_id or not legacy_experiment_id:
+def _sync_assignment_offering_deadline(cursor, offering_id: int, problem_set_info=None):
+    if not offering_id:
         return
-    cursor.execute("SELECT deadline FROM experiment WHERE experiment_id = %s", (legacy_experiment_id,))
-    row = cursor.fetchone()
-    deadline_at = row[0] if row else None
+    deadline_at = _parse_pta_datetime(_first_value(
+        problem_set_info or {}, "endAt", "deadlineAt", "deadline", "end_at", "deadline_at"
+    ))
     if deadline_at is None:
         return
     cursor.execute(
@@ -615,20 +703,6 @@ def _ensure_class_member(cursor, class_id: int, student_id: int):
         (class_id, student_id),
     )
 
-    # Also insert into class_student for backward compatibility with legacy query paths
-    cursor.execute(
-        """
-        INSERT INTO class_student (class_id, student_num, student_name, joined_at)
-        SELECT %s, sp.student_no, sp.real_name, NOW()
-        FROM student_profile sp
-        WHERE sp.id = %s
-        ON DUPLICATE KEY UPDATE
-          student_name = COALESCE(NULLIF(VALUES(student_name), ''), class_student.student_name),
-          student_num  = COALESCE(NULLIF(VALUES(student_num), ''), class_student.student_num)
-        """,
-        (class_id, student_id),
-    )
-
 
 def _ensure_binding(cursor, entity_id: int, external_id: str):
     if not external_id:
@@ -712,6 +786,7 @@ def _ensure_pta_user_group_roster(cursor, roster_payload, class_id=None):
 
     student_no_to_id = {}
     student_no_to_name = {}
+    pta_user_to_student_no = {}
     active_student_nos = set()
 
     for member in members:
@@ -724,7 +799,9 @@ def _ensure_pta_user_group_roster(cursor, roster_payload, class_id=None):
         if class_id is not None:
             _ensure_class_member(cursor, class_id, student_id)
         if member.get("pta_user_id"):
-            _ensure_binding(cursor, student_id, str(member.get("pta_user_id")).strip())
+            pta_user_id = str(member.get("pta_user_id")).strip()
+            pta_user_to_student_no[pta_user_id] = student_no
+            _ensure_binding(cursor, student_id, pta_user_id)
 
         cursor.execute(
             """
@@ -794,6 +871,7 @@ def _ensure_pta_user_group_roster(cursor, roster_payload, class_id=None):
         "pta_group_name": pta_group_name,
         "student_no_to_id": student_no_to_id,
         "student_no_to_name": student_no_to_name,
+        "pta_user_to_student_no": pta_user_to_student_no,
         "active_student_nos": active_student_nos,
     }
 
@@ -1375,15 +1453,13 @@ def _recalc_student_assignment(
             )
 
 
-def _resolve_experiment_and_offering(cursor, experiment_name: str, class_id=None):
-    cursor.execute("SELECT experiment_id FROM experiment WHERE name = %s", (experiment_name,))
-    experiment_row = cursor.fetchone()
-    if not experiment_row:
-        return None
-    legacy_experiment_id = experiment_row[0]
-    source_keys = _offering_source_keys(legacy_experiment_id, class_id)
+def _resolve_experiment_and_offering(cursor, exp_dir: Path, class_id=None):
+    experiment_name = exp_dir.name
+    problem_set_info = _read_problem_set_info(exp_dir)
+    problem_set_source_id = _pta_problem_set_source_id(problem_set_info, experiment_name)
+    source_keys = _offering_source_keys(problem_set_source_id, class_id)
     placeholders = ", ".join(["%s"] * len(source_keys))
-    params = [LEGACY_SOURCE_SYSTEM, *source_keys, class_id, class_id]
+    params = [PTA_SOURCE_SYSTEM, *source_keys, class_id, class_id]
     cursor.execute(
         f"""
         SELECT id, class_id, teacher_id
@@ -1398,18 +1474,87 @@ def _resolve_experiment_and_offering(cursor, experiment_name: str, class_id=None
     )
     offering_row = cursor.fetchone()
     if not offering_row:
-        ensured = _ensure_assignment_offering(cursor, legacy_experiment_id, experiment_name, class_id)
+        legacy_row = _resolve_legacy_offering(cursor, experiment_name, class_id)
+        if legacy_row:
+            offering_row = _migrate_legacy_offering_to_pta(
+                cursor,
+                legacy_row,
+                experiment_name,
+                problem_set_source_id,
+                problem_set_info,
+            )
+    if not offering_row:
+        ensured = _ensure_assignment_offering(cursor, experiment_name, class_id, problem_set_info)
         if ensured:
             offering_row = (ensured["offering_id"], ensured["class_id"], ensured["teacher_id"])
     if not offering_row:
         return None
-    _sync_assignment_offering_deadline(cursor, offering_row[0], legacy_experiment_id)
+    _sync_assignment_offering_deadline(cursor, offering_row[0], problem_set_info)
     return {
-        "legacy_experiment_id": legacy_experiment_id,
+        "pta_problem_set_id": problem_set_source_id,
         "offering_id": offering_row[0],
         "class_id": offering_row[1],
         "teacher_id": offering_row[2],
     }
+
+
+def _resolve_legacy_offering(cursor, experiment_name: str, class_id=None):
+    cursor.execute("SELECT experiment_id FROM experiment WHERE name = %s", (experiment_name,))
+    experiment_row = cursor.fetchone()
+    if not experiment_row:
+        return None
+    source_keys = _legacy_offering_source_keys(experiment_row[0], class_id)
+    placeholders = ", ".join(["%s"] * len(source_keys))
+    params = [LEGACY_SOURCE_SYSTEM, *source_keys, class_id, class_id]
+    cursor.execute(
+        f"""
+        SELECT id, class_id, teacher_id
+        FROM assignment_offering
+        WHERE source_system = %s
+          AND source_offering_key IN ({placeholders})
+          AND (%s IS NULL OR class_id = %s)
+        ORDER BY CASE WHEN source_offering_key LIKE %s THEN 0 ELSE 1 END
+        LIMIT 1
+        """,
+        tuple([*params, "%:CLASS:%"]),
+    )
+    return cursor.fetchone()
+
+
+def _migrate_legacy_offering_to_pta(
+    cursor,
+    offering_row,
+    experiment_name: str,
+    problem_set_source_id: str,
+    problem_set_info=None,
+):
+    offering_id, offering_class_id, teacher_id = offering_row
+    template_id = _ensure_assignment_template(cursor, problem_set_source_id, experiment_name)
+    source_offering_key = _offering_source_key(problem_set_source_id, offering_class_id)
+    deadline_at = _parse_pta_datetime(_first_value(
+        problem_set_info or {}, "endAt", "deadlineAt", "deadline", "end_at", "deadline_at"
+    ))
+    cursor.execute(
+        """
+        UPDATE assignment_offering
+        SET template_id = COALESCE(%s, template_id),
+            source_system = %s,
+            source_offering_key = %s,
+            pta_problem_set_id = %s,
+            deadline_at = COALESCE(%s, deadline_at),
+            updated_at = CURRENT_TIMESTAMP(3)
+        WHERE id = %s
+        """,
+        (
+            template_id,
+            PTA_SOURCE_SYSTEM,
+            source_offering_key,
+            problem_set_source_id,
+            deadline_at,
+            offering_id,
+        ),
+    )
+    return (offering_id, offering_class_id, teacher_id)
 
 
 def _sync_one_experiment(
@@ -1422,7 +1567,7 @@ def _sync_one_experiment(
     pta_group_context=None,
 ):
     cursor = conn.cursor()
-    resolved = _resolve_experiment_and_offering(cursor, exp_dir.name, class_id)
+    resolved = _resolve_experiment_and_offering(cursor, exp_dir, class_id)
     if not resolved:
         return {"experiment": exp_dir.name, "skipped": True, "reason": "missing assignment_offering mapping"}
     _update_assignment_offering_pta_group(cursor, resolved["offering_id"], pta_group_context)
@@ -1740,6 +1885,7 @@ def _sync_one_experiment(
                 VALUES
                   (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
+                  submitted_at = VALUES(submitted_at),
                   judge_status = VALUES(judge_status),
                   score = VALUES(score),
                   compiler = VALUES(compiler),
@@ -1953,17 +2099,13 @@ def sync_all(crawl_dir=None, strict=True, class_id=None):
             if strict:
                 raise RuntimeError(message)
             return report
-        legacy_experiment_map = legacy_sync.sync_experiments(conn)
-        report["legacy_experiment_upsert_count"] = len(legacy_experiment_map)
-        exp_map = {}
         with conn.cursor() as cursor:
-            for exp_dir in exp_dirs:
-                cursor.execute("SELECT experiment_id FROM experiment WHERE name = %s", (exp_dir.name,))
-                row = cursor.fetchone()
-                if row:
-                    exp_map[exp_dir.name] = row[0]
-        pta_user_map = legacy_sync.build_pta_user_map(exp_map)
-        student_name_map = legacy_sync.build_student_name_map(exp_map)
+            if _get_class_by_id(cursor, class_id) is None:
+                message = f"Unified PTA sync requires an existing teaching_class, class_id={class_id} was not found."
+                report["error"] = message
+                if strict:
+                    raise RuntimeError(message)
+                return report
         pta_group_context = None
         if roster_payload:
             with conn.cursor() as cursor:
@@ -1975,6 +2117,9 @@ def sync_all(crawl_dir=None, strict=True, class_id=None):
                     "pta_group_name": pta_group_context["pta_group_name"],
                     "member_count": len(pta_group_context["active_student_nos"]),
                 }
+        pta_user_map, student_name_map = _build_student_maps_from_crawl(crawl_dir, pta_group_context)
+        report["pta_user_mappings"] = len(pta_user_map)
+        report["student_name_mappings"] = len(student_name_map)
 
         for exp_dir in exp_dirs:
             try:
@@ -2025,6 +2170,44 @@ def run_configured_sync(crawl_dir=None, strict=True, class_id=None):
         result["ok"] = True
         result["message"] = "Unified importer disabled"
     return result
+
+
+def _experiment_export_files(exp_dir: Path):
+    export_dir = exp_dir / PTA_EXPORT_DIR
+    files = {}
+    if not export_dir.exists():
+        return files
+    for pattern, role in (
+        ("*PAPER_TRANSCRIPT*.xlsx", "PAPER_TRANSCRIPT"),
+        ("*ANSWER_SHEET*.zip", "ANSWER_SHEET"),
+        ("*SCORED_CODE*.zip", "SCORED_CODE"),
+    ):
+        matched = sorted(export_dir.glob(pattern))
+        if matched:
+            files[role] = matched[0]
+    return files
+
+
+def _build_student_maps_from_crawl(crawl_dir: Path, pta_group_context=None):
+    pta_user_map = {}
+    student_name_map = {}
+    if pta_group_context:
+        pta_user_map.update(pta_group_context.get("pta_user_to_student_no", {}))
+        student_name_map.update(pta_group_context.get("student_no_to_name", {}))
+
+    for exp_dir in _iter_experiment_dirs(crawl_dir):
+        files = _experiment_export_files(exp_dir)
+        if "PAPER_TRANSCRIPT" in files:
+            for row in _read_transcript_rows(files["PAPER_TRANSCRIPT"]):
+                student_name_map[row["student_no"]] = row["student_name"]
+        if "ANSWER_SHEET" in files:
+            for row in _read_answer_sheet_rows(files["ANSWER_SHEET"]):
+                student_name_map[row["student_no"]] = row["student_name"]
+        if "SCORED_CODE" in files:
+            for row in _read_scored_code_rows(files["SCORED_CODE"]):
+                if row.get("pta_user_id") and row.get("student_no"):
+                    pta_user_map.setdefault(row["pta_user_id"], row["student_no"])
+    return pta_user_map, student_name_map
 
 
 if __name__ == "__main__":
