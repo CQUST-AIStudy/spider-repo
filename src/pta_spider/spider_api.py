@@ -2,7 +2,7 @@
 PTA Spider API v2 - Data-type aware crawling with per-problem-set refresh policy.
 Open problem sets refresh daily; ended sets are skipped automatically unless forced or missing data.
 """
-import asyncio, uuid, os, sys, time, csv
+import asyncio, uuid, os, sys, time, csv, shutil
 import json as json_mod
 from pathlib import Path
 from datetime import datetime
@@ -417,6 +417,7 @@ class TaskInfo:
         self.refreshed_count = 0
         self.submissions_count = 0
         self.skipped_cooldown = []
+        self.crawl_dir = None
 
     def to_dict(self):
         return {
@@ -437,6 +438,7 @@ class TaskInfo:
             "refreshed_count": self.refreshed_count,
             "submissions_count": self.submissions_count,
             "skipped_cooldown": self.skipped_cooldown,
+            "crawl_dir": self.crawl_dir,
         }
 
 MAX_QUEUE_SIZE = 5
@@ -494,6 +496,30 @@ def _write_submissions_csv(client, problem_set, submissions):
                 s.get("time", ""), s.get("memory", ""), s.get("submitAt", "")
             ])
 
+
+def _safe_path_fragment(value):
+    text = str(value or "").strip()
+    text = re.sub(r"[^\w.-]+", "_", text, flags=re.UNICODE).strip("._")
+    return text[:80] or "none"
+
+
+def _task_crawl_dir(base_dir: Path, task: TaskInfo) -> Path:
+    class_part = f"class-{task.class_id}" if task.class_id is not None else "class-none"
+    label = task.problem_set_id or task.problem_set_name or task.group_id or task.group_name or task.keyword
+    task_part = _safe_path_fragment(f"{class_part}-{label}-{task.task_id}")
+    return (Path(base_dir).resolve() / "_task_runs" / task_part).resolve()
+
+
+def _cleanup_task_crawl_dir(task_dir: Path, base_dir: Path):
+    task_dir = Path(task_dir).resolve()
+    task_runs_dir = (Path(base_dir).resolve() / "_task_runs").resolve()
+    try:
+        task_dir.relative_to(task_runs_dir)
+    except ValueError as exc:
+        raise RuntimeError(f"refusing to cleanup outside task runs directory: {task_dir}") from exc
+    if task_dir.exists():
+        shutil.rmtree(task_dir)
+
 def _cleanup_old_tasks():
     now = datetime.now()
     to_rm = [tid for tid, t in _task_store.items()
@@ -531,19 +557,38 @@ async def _worker():
 
 
 def _run_crawl(task):
+    client = None
+    base_crawl_dir = None
+    task_crawl_dir = None
     try:
         task.status = TaskStatus.RUNNING
         task.started_at = datetime.now().isoformat()
         client = PTAClient(task.username, task.password, allow_env_fallback=False)
+        base_crawl_dir = Path(client.crawl_dir).resolve()
+        task_crawl_dir = _task_crawl_dir(base_crawl_dir, task)
+        task_crawl_dir.mkdir(parents=True, exist_ok=True)
+        client.crawl_dir = task_crawl_dir
+        task.crawl_dir = str(task_crawl_dir)
         client.force_selenium_login = task.force_selenium_login
         if task.headless is not None:
             client.headless = task.headless
         if not client.ensure_login():
             raise RuntimeError("PTA login failed, cookie may be expired")
 
+        roster_payload = client.write_user_group_roster(
+            group_id=task.group_id,
+            group_name=task.group_name,
+            crawl_dir=task_crawl_dir,
+        )
+        task.group_id = roster_payload["group"]["pta_group_id"]
+        task.group_name = roster_payload["group"]["pta_group_name"]
+
         mode = task.mode
         all_sets = None
         content_crawled_ids = set()
+        crawl_errors = []
+        needs_group_answer_export = False
+        completed_content_sets = []
 
         if mode in (CrawlMode.INCREMENTAL, CrawlMode.FULL):
             all_sets = _resolve_problem_sets(client, task)
@@ -565,13 +610,15 @@ def _run_crawl(task):
                             client.history.mark_crawled(ps["id"], ps.get("name", ""))
                             continue
                         client._write_problem_set_info(ps["id"], ps.get("name", ""), ps)
-                        client._crawl_one_problem_set(ps["id"], ps.get("name", ""))
-                        client.history.mark_crawled(ps["id"], ps.get("name", ""))
+                        client._crawl_one_problem_set(ps["id"], ps.get("name", ""), export_answer_sheet=False)
+                        completed_content_sets.append(ps)
                         content_crawled_ids.add(ps.get("id", ""))
+                        needs_group_answer_export = True
                         _mark_problem_set_refreshed(ps, "submissions")
                         _mark_problem_set_refreshed(ps, "exports")
                     except Exception as e:
                         print(f"crawl {ps.get('name', '')} failed: {e}")
+                        crawl_errors.append(f"{ps.get('name', '')}: {e}")
 
         if mode in (CrawlMode.SUBMISSIONS, CrawlMode.FULL):
             if all_sets is None:
@@ -600,6 +647,7 @@ def _run_crawl(task):
                     time.sleep(1)
                 except Exception as e:
                     print(f"pull submissions failed {ps.get('name', '')}: {e}")
+                    crawl_errors.append(f"{ps.get('name', '')} submissions: {e}")
             task.submissions_count = total_subs
 
         if mode in (CrawlMode.REFRESH, CrawlMode.FULL):
@@ -621,21 +669,43 @@ def _run_crawl(task):
                     continue
                 try:
                     client._write_problem_set_info(ps_id, ps_name, ps)
-                    client._refresh_one_problem_set(ps_id, ps_name)
+                    client._refresh_one_problem_set(ps_id, ps_name, export_answer_sheet=False)
                     client.history.mark_export_refreshed(ps_id)
                     _mark_problem_set_refreshed(ps, "exports")
+                    needs_group_answer_export = True
                     refreshed += 1
                 except Exception as e:
                     print(f"refresh exports failed {ps_name}: {e}")
+                    crawl_errors.append(f"{ps_name} exports: {e}")
             task.refreshed_count = refreshed
 
+        if needs_group_answer_export and not crawl_errors:
+            try:
+                client.export_group_answer_sheets(
+                    group_id=task.group_id,
+                    group_name=task.group_name,
+                    crawl_dir=task_crawl_dir,
+                )
+                for ps in completed_content_sets:
+                    client.history.mark_crawled(ps.get("id", ""), ps.get("name", ""))
+            except Exception as e:
+                print(f"group answer export failed: {e}")
+                crawl_errors.append(f"group answer export: {e}")
+
+        if crawl_errors:
+            raise RuntimeError("; ".join(crawl_errors[:5]))
+
+        if not task_crawl_dir or not any(p.is_dir() for p in task_crawl_dir.iterdir()):
+            raise RuntimeError("no PTA data was downloaded for this task")
+
         print("syncing to database...")
-        report = run_configured_sync(strict=True, class_id=task.class_id)
+        report = run_configured_sync(crawl_dir=task_crawl_dir, strict=True, class_id=task.class_id)
         if not report.get("ok"):
             raise RuntimeError(report.get("error") or "database sync failed")
 
         task.status = TaskStatus.SUCCESS
         task.finished_at = datetime.now().isoformat()
+        _cleanup_task_crawl_dir(task_crawl_dir, base_crawl_dir)
         _notify_java(task.class_id, "SUCCESS", task.task_id)
     except Exception as e:
         task.status = TaskStatus.FAILED

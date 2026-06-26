@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import zipfile
 from pathlib import Path
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -42,6 +43,11 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 from dotenv import load_dotenv
+
+try:
+    from .group_exports import inspect_group_answer_export, split_group_answer_export
+except ImportError:
+    from group_exports import inspect_group_answer_export, split_group_answer_export
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = PACKAGE_DIR.parents[1]
@@ -865,6 +871,125 @@ class PTAClient:
         data = self.api_get(f"/user-groups/{group_id}/permissions")
         return data.get("userGroupProblemSets", [])
 
+    def _find_user_group_by_id(self, group_id):
+        """Find one visible PTA user group by id, used to enrich roster metadata."""
+        target = str(group_id or "").strip()
+        if not target:
+            return None
+        for group in self.get_user_groups(include_archived=True):
+            if str(group.get("id") or "").strip() == target:
+                return group
+        return None
+
+    def get_user_group_members(self, group_id, limit=100):
+        """Fetch authoritative PTA user-group members from the overview member API."""
+        group_id = str(group_id or "").strip()
+        if not group_id:
+            raise RuntimeError("PTA user group id is required for member fetch")
+
+        members = []
+        page = 0
+        total = None
+        while True:
+            payload = {
+                "page": page,
+                "limit": limit,
+                "studentUserFilter": {
+                    "field": "STUDENT_NUMBER",
+                    "keyword": "",
+                    "unbindOnly": False,
+                },
+            }
+            resp = self.api_post(
+                f"/user-groups/{group_id}/user-group-members",
+                json_data=payload,
+            )
+            data = resp.json() if resp.text else {}
+            if not isinstance(data, dict):
+                raise RuntimeError(f"unexpected PTA user-group members payload: {type(data)}")
+
+            total = data.get("total", total)
+            student_user_by_id = data.get("studentUserById") or {}
+            user_by_id = data.get("userById") or {}
+            page_members = data.get("members") or []
+
+            for item in page_members:
+                if not isinstance(item, dict):
+                    continue
+                student_user_id = str(item.get("studentUserId") or "").strip()
+                pta_user_id = str(item.get("userId") or "").strip()
+                student_user = student_user_by_id.get(student_user_id) or {}
+                user_info = user_by_id.get(pta_user_id) or {}
+                student_no = str(
+                    student_user.get("studentNumber")
+                    or student_user.get("studentNo")
+                    or user_info.get("studentNumber")
+                    or ""
+                ).strip()
+                student_name = str(
+                    student_user.get("name")
+                    or user_info.get("name")
+                    or user_info.get("nickname")
+                    or ""
+                ).strip()
+                if not student_no:
+                    continue
+                members.append(
+                    {
+                        "pta_group_id": group_id,
+                        "pta_member_id": str(item.get("id") or "").strip() or None,
+                        "pta_user_id": pta_user_id or None,
+                        "pta_student_user_id": student_user_id or None,
+                        "student_no": student_no,
+                        "student_name": student_name or student_no,
+                        "raw_json": {
+                            "member": item,
+                            "studentUser": student_user,
+                            "user": user_info,
+                        },
+                    }
+                )
+
+            if len(page_members) < limit:
+                break
+            if total is not None and len(members) >= int(total):
+                break
+            page += 1
+            time.sleep(0.3)
+
+        return {
+            "pta_group_id": group_id,
+            "total": total if total is not None else len(members),
+            "members": members,
+        }
+
+    def write_user_group_roster(self, group_id=None, group_name=None, crawl_dir=None):
+        """Write PTA user-group roster metadata for the database sync step."""
+        group_id, group_name = self._resolve_user_group_id(group_id, group_name)
+        if not group_id:
+            raise RuntimeError("PTA user group id or exact user group name is required for roster sync")
+        group_meta = self._find_user_group_by_id(group_id) or {}
+        group_name = group_name or group_meta.get("name") or group_id
+        roster = self.get_user_group_members(group_id)
+        crawl_dir = Path(crawl_dir or self.crawl_dir)
+        crawl_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "fetched_at": datetime.now().isoformat(timespec="seconds"),
+            "group": {
+                "pta_group_id": str(group_id),
+                "pta_group_name": group_name,
+                "raw_json": group_meta,
+            },
+            "members": roster["members"],
+            "member_count": len(roster["members"]),
+            "reported_total": roster.get("total"),
+        }
+        out_path = crawl_dir / "_pta_user_group_roster.json"
+        with out_path.open("w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        print(f"  PTA用户组花名册已写入: {out_path} ({len(roster['members'])}人)")
+        return payload
+
     def get_problem_sets_by_user_group(self, group_id, group_name=None):
         """Fetch problem sets authorized to a PTA user group."""
         result = []
@@ -1019,6 +1144,43 @@ class PTAClient:
             resp.raise_for_status()
             return resp
 
+    @staticmethod
+    def _export_id_from_payload(payload):
+        if not isinstance(payload, dict):
+            return None
+        for key in ("id", "exportId", "export_id"):
+            value = payload.get(key)
+            if value:
+                return str(value)
+        for key in ("export", "data", "result"):
+            value = PTAClient._export_id_from_payload(payload.get(key))
+            if value:
+                return value
+        return None
+
+    @staticmethod
+    def _validate_downloaded_export(path, expected_bytes=None):
+        path = Path(path)
+        if not path.exists():
+            raise RuntimeError(f"downloaded export is missing: {path}")
+        actual_bytes = path.stat().st_size
+        if actual_bytes <= 0:
+            raise RuntimeError(f"downloaded export is empty: {path}")
+        if expected_bytes is not None and actual_bytes != expected_bytes:
+            raise RuntimeError(
+                f"downloaded export is incomplete: {path} "
+                f"({actual_bytes}/{expected_bytes} bytes)"
+            )
+        if any(suffix.lower() in {".zip", ".xlsx"} for suffix in path.suffixes):
+            try:
+                with zipfile.ZipFile(path, "r") as zf:
+                    suffixes = {suffix.lower() for suffix in path.suffixes}
+                    if not zf.infolist() and ".xlsx" in suffixes:
+                        raise RuntimeError(f"downloaded export has no members: {path}")
+            except zipfile.BadZipFile as exc:
+                raise RuntimeError(f"downloaded export is not a valid zip/xlsx: {path}") from exc
+        return True
+
     def create_export(self, ps_id, ps_name, export_type="ANSWER_SHEET"):
         """
         创建导出任务。
@@ -1030,7 +1192,7 @@ class PTAClient:
           SCORED_CODE      — 得分代码
           PAPER_ANALYSIS   — 答卷分析
         """
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
 
         type_config = {
             "ANSWER_SHEET": ("答题卡", "exportAnswerSheet"),
@@ -1053,24 +1215,43 @@ class PTAClient:
 
         print(f"  创建导出任务: {payload['title']}")
         resp = self.api_post("/exports", json_data=payload)
-        return resp.json() if resp.text else {}
+        result = resp.json() if resp.text else {}
+        if not isinstance(result, dict):
+            result = {"raw": result}
+        result["_requested_title"] = payload["title"]
+        result["_requested_at"] = time.time()
+        result["_requested_type"] = export_type
+        return result
 
-    def wait_export_ready(self, ps_id, export_type="ANSWER_SHEET", timeout=120):
+    def wait_export_ready(self, ps_id, export_type="ANSWER_SHEET", timeout=180, export_marker=None):
         """
         轮询等待导出任务完成，返回 docUrl 下载链接。
         status: WAITING → READY 表示完成
         """
         filter_param = json.dumps({"problemSetId": ps_id})
         start = time.time()
+        expected_id = self._export_id_from_payload(export_marker or {})
+        expected_title = (export_marker or {}).get("_requested_title")
 
         while time.time() - start < timeout:
             data = self.api_get("/exports", params={
-                "page": 0, "limit": 10,
+                "page": 0, "limit": 20,
                 "filter": filter_param,
             })
             exports = data.get("exports", [])
             for exp in exports:
-                if exp.get("type") == export_type and exp.get("status") == "READY":
+                if exp.get("type") != export_type:
+                    continue
+                exp_id = self._export_id_from_payload(exp)
+                exp_title = exp.get("title") or exp.get("name")
+                if expected_id and exp_id and exp_id != expected_id:
+                    continue
+                if expected_title and exp_title != expected_title:
+                    continue
+                status = exp.get("status")
+                if status == "FAILED":
+                    raise RuntimeError(f"PTA export failed: {expected_title or export_type}")
+                if status == "READY":
                     doc_url = exp.get("docUrl", "")
                     if doc_url:
                         print(f"\n  导出完成，获取到下载链接")
@@ -1079,8 +1260,7 @@ class PTAClient:
             print(f"  等待导出完成... ({elapsed}s)", end="\r")
             time.sleep(3)
 
-        print(f"\n  导出超时({timeout}s)")
-        return None
+        raise TimeoutError(f"PTA export timed out: {expected_title or export_type} ({timeout}s)")
 
     def download_export(self, download_url, save_path):
         """Download export file (COS signed URL)"""
@@ -1094,11 +1274,27 @@ class PTAClient:
             )
         resp.raise_for_status()
         os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
-        with open(save_path, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=8192):
-                f.write(chunk)
+        expected_bytes = resp.headers.get("Content-Length")
+        expected_bytes = int(expected_bytes) if expected_bytes and expected_bytes.isdigit() else None
+        tmp_path = f"{save_path}.part-{os.getpid()}-{int(time.time() * 1000)}"
+        bytes_written = 0
+        try:
+            with open(tmp_path, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    bytes_written += len(chunk)
+                f.flush()
+                os.fsync(f.fileno())
+            self._validate_downloaded_export(tmp_path, expected_bytes)
+            os.replace(tmp_path, save_path)
+        except Exception:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
         size_mb = os.path.getsize(save_path) / 1024 / 1024
-        print(f"  已下载: {save_path} ({size_mb:.1f}MB)")
+        print(f"  已下载: {save_path} ({size_mb:.1f}MB, {bytes_written} bytes)")
 
     def export_and_download(self, ps_id, ps_name, export_type="ANSWER_SHEET", save_dir="./答题情况", max_retries=3):
         """
@@ -1115,10 +1311,10 @@ class PTAClient:
                     print(f"  403 重试 ({attempt}/{max_retries})，等待 {wait}s...")
                     time.sleep(wait)
 
-                self.create_export(ps_id, ps_name, export_type)
+                export_marker = self.create_export(ps_id, ps_name, export_type)
                 time.sleep(3)  # Wait for task creation, avoid rate limit
 
-                doc_url = self.wait_export_ready(ps_id, export_type)
+                doc_url = self.wait_export_ready(ps_id, export_type, export_marker=export_marker)
                 if doc_url:
                     # Determine file extension from docUrl
                     if doc_url.endswith(".xlsx") or ".xlsx?" in doc_url:
@@ -1127,8 +1323,9 @@ class PTAClient:
                         ext = ".zip"
                     save_path = os.path.join(save_dir, f"{ps_name}-{export_type}{ext}")
                     self.download_export(doc_url, save_path)
+                    self._validate_downloaded_export(save_path)
                     return save_path
-                return None
+                raise RuntimeError(f"PTA export did not produce a download URL: {ps_name} {export_type}")
 
             except requests.exceptions.HTTPError as e:
                 if e.response is not None and e.response.status_code == 403:
@@ -1142,6 +1339,127 @@ class PTAClient:
                     raise  # 非 403 错误直接抛出
 
         return None
+
+    def _resolve_user_group_id(self, group_id=None, group_name=None):
+        if group_id:
+            return str(group_id), group_name
+        if not group_name:
+            return None, group_name
+        group = self.find_user_group(group_name)
+        if not group:
+            raise RuntimeError(f"PTA user group not found: {group_name}")
+        return str(group.get("id")), group.get("name") or group_name
+
+    def _group_answer_export_payloads(self, group_id, title):
+        group_id = str(group_id)
+        return [
+            {
+                "type": "USER_GROUP_PAPER",
+                "title": title,
+                "detail": {"exportUserGroupPaper": {"userGroupId": group_id}},
+            },
+            {
+                "type": "ANSWER_SHEET",
+                "title": title,
+                "detail": {"exportAnswerSheet": {"userGroupId": group_id}},
+            },
+        ]
+
+    def create_group_answer_sheet_export(self, group_id, group_name=None):
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
+        title = f"{group_name or group_id}-用户组答卷-{timestamp}"
+        errors = []
+        for payload in self._group_answer_export_payloads(group_id, title):
+            try:
+                print(f"  创建用户组答卷导出任务: {payload['title']}")
+                resp = self.api_post("/exports", json_data=payload)
+                result = resp.json() if resp.text else {}
+                if not isinstance(result, dict):
+                    result = {"raw": result}
+                result["_requested_title"] = title
+                result["_requested_at"] = time.time()
+                result["_requested_type"] = payload.get("type")
+                result["_requested_group_id"] = str(group_id)
+                return result
+            except requests.exceptions.HTTPError as exc:
+                status = exc.response.status_code if exc.response is not None else "unknown"
+                errors.append(f"{status}: {payload.get('detail')}")
+                if status not in (400, 403, 404, 422):
+                    raise
+        raise RuntimeError(f"failed to create PTA user-group answer export; tried: {'; '.join(errors)}")
+
+    def wait_group_answer_export_ready(self, group_id, export_marker, timeout=300):
+        start = time.time()
+        expected_id = self._export_id_from_payload(export_marker or {})
+        expected_title = (export_marker or {}).get("_requested_title")
+        expected_type = (export_marker or {}).get("_requested_type") or "USER_GROUP_PAPER"
+        filter_candidates = [
+            {"userGroupId": str(group_id)},
+            {"groupId": str(group_id)},
+            {},
+        ]
+
+        while time.time() - start < timeout:
+            seen = []
+            for filter_obj in filter_candidates:
+                data = self.api_get("/exports", params={
+                    "page": 0,
+                    "limit": 20,
+                    "filter": json.dumps(filter_obj, ensure_ascii=False),
+                })
+                for exp in data.get("exports", []):
+                    if exp.get("type") != expected_type:
+                        continue
+                    exp_id = self._export_id_from_payload(exp)
+                    exp_title = exp.get("title") or exp.get("name")
+                    seen.append(exp_title)
+                    if expected_id and exp_id and exp_id != expected_id:
+                        continue
+                    if expected_title and exp_title != expected_title:
+                        continue
+                    status = exp.get("status")
+                    if status == "FAILED":
+                        raise RuntimeError(f"PTA user-group answer export failed: {expected_title}")
+                    if status == "READY":
+                        doc_url = exp.get("docUrl", "")
+                        if doc_url:
+                            print("\n  用户组答卷导出完成，获取到下载链接")
+                            return doc_url
+            elapsed = int(time.time() - start)
+            print(f"  等待用户组答卷导出完成... ({elapsed}s)", end="\r")
+            time.sleep(3)
+
+        sample = ", ".join(str(x) for x in seen[:5])
+        raise TimeoutError(f"PTA user-group answer export timed out: {expected_title}; seen: {sample}")
+
+    def export_group_answer_sheets(self, group_id=None, group_name=None, crawl_dir=None):
+        group_id, group_name = self._resolve_user_group_id(group_id, group_name)
+        if not group_id:
+            raise RuntimeError("PTA user group id or exact user group name is required for group answer export")
+        crawl_dir = Path(crawl_dir or self.crawl_dir)
+        save_dir = crawl_dir / "_group_exports"
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        marker = self.create_group_answer_sheet_export(group_id, group_name)
+        time.sleep(3)
+        doc_url = self.wait_group_answer_export_ready(group_id, marker)
+        title = marker.get("_requested_title") or f"{group_name or group_id}-用户组答卷"
+        save_path = save_dir / f"{title}.zip"
+        self.download_export(doc_url, str(save_path))
+        self._validate_downloaded_export(str(save_path))
+        summary = inspect_group_answer_export(save_path)
+        if summary.get("experiment_count", 0) <= 0:
+            raise RuntimeError(f"PTA user-group answer export has no student answer sheets: {save_path}")
+        split_result = split_group_answer_export(
+            save_path,
+            crawl_dir,
+            group_name=group_name,
+            overwrite=True,
+        )
+        if not split_result.get("written"):
+            raise RuntimeError(f"PTA user-group answer export produced no per-experiment answer sheets: {save_path}")
+        print(f"  用户组答卷已拆分为 {len(split_result['written'])} 个实验 ANSWER_SHEET.zip")
+        return split_result
 
     # ==================== Incremental Crawl Core ====================
 
@@ -1164,6 +1482,10 @@ class PTAClient:
             return
 
         # 2. search all problem sets
+        roster_payload = self.write_user_group_roster(group_id=group_id, group_name=group_name)
+        group_id = roster_payload["group"]["pta_group_id"]
+        group_name = roster_payload["group"]["pta_group_name"]
+
         all_sets = self.search_problem_sets(group_id=group_id, group_name=group_name)
         if not all_sets:
             print("未搜索到任何题目集")
@@ -1179,25 +1501,35 @@ class PTAClient:
         for ps in new_sets:
             print(f"  - {ps.get('name', '未知')}")
 
-        # 4. crawl each new set
+        # 4. crawl each new set; answer sheets are exported once at user-group level.
+        completed_sets = []
         for ps in new_sets:
             ps_id = ps.get("id", "")
             ps_name = ps.get("name", "未知")
             try:
                 print(f"\n--- 正在爬取: {ps_name} ---")
                 self._write_problem_set_info(ps_id, ps_name, ps)
-                self._crawl_one_problem_set(ps_id, ps_name)
-                self.history.mark_crawled(ps_id, ps_name)
+                self._crawl_one_problem_set(ps_id, ps_name, export_answer_sheet=False)
+                completed_sets.append(ps)
                 print(f"完成: {ps_name}")
             except Exception as e:
                 print(f"爬取 {ps_name} 失败: {e}")
 
-        print(f"\n本次增量爬取完成，处理了 {len(new_sets)} 个新题目集")
+        if completed_sets:
+            try:
+                self.export_group_answer_sheets(group_id=group_id, group_name=group_name)
+                for ps in completed_sets:
+                    self.history.mark_crawled(ps.get("id", ""), ps.get("name", ""))
+            except Exception as e:
+                print(f"用户组答卷导出失败，本次不写入数据库: {e}")
+                return
+
+        print(f"\n本次增量爬取完成，处理了 {len(completed_sets)}/{len(new_sets)} 个新题目集")
 
         # 自动同步到数据库
         self._auto_sync_to_db()
 
-    def _crawl_one_problem_set(self, ps_id, ps_name):
+    def _crawl_one_problem_set(self, ps_id, ps_name, export_answer_sheet=True):
         """Crawl all data for a single problem set, save to ./爬取结果/"""
         base_dir = self._problem_set_dir(ps_name)
 
@@ -1251,31 +1583,37 @@ class PTAClient:
         # 3. Export essential types only (PAPER/PAPER_ACCURATE/PAPER_ANALYSIS are redundant/computable)
         export_dir = base_dir / "导出"
         export_configs = [
-            ("ANSWER_SHEET",     "答题卡"),
             ("PAPER_TRANSCRIPT", "成绩单"),
             ("SCORED_CODE",      "得分代码"),
         ]
+        if export_answer_sheet:
+            export_configs.insert(0, ("ANSWER_SHEET", "答题卡"))
+        failed_exports = []
         for export_type, cn_name in export_configs:
             try:
                 self.export_and_download(ps_id, ps_name, export_type, str(export_dir))
                 time.sleep(random.uniform(3, 5))  # Export is heavy, longer interval
             except requests.exceptions.HTTPError as e:
                 if e.response is not None and e.response.status_code == 403:
-                    print(f"  导出{cn_name}: 无权限（重试后仍失败），跳过")
+                    print(f"  导出{cn_name}: 无权限（重试后仍失败）")
                 elif e.response is not None and e.response.status_code == 429:
                     print(f"  导出{cn_name}: 请求过于频繁，等待30s后继续...")
                     time.sleep(30)
                 else:
                     print(f"  导出{cn_name}失败: {e}")
+                failed_exports.append(cn_name)
             except Exception as e:
                 print(f"  导出{cn_name}失败: {e}")
+                failed_exports.append(cn_name)
+        if failed_exports:
+            raise RuntimeError(f"required PTA exports failed: {', '.join(failed_exports)}")
 
         time.sleep(random.uniform(0.5, 1))
 
-    def _refresh_one_problem_set(self, ps_id, ps_name):
+    def _refresh_one_problem_set(self, ps_id, ps_name, export_answer_sheet=True):
         """
         刷新已爬取题目集的导出数据（不重新爬取题目内容和提交记录）。
-        只重新导出: PAPER_TRANSCRIPT, ANSWER_SHEET, SCORED_CODE
+        只重新导出: PAPER_TRANSCRIPT, SCORED_CODE；ANSWER_SHEET 可由用户组总导出替代
         """
         base_dir = self._problem_set_dir(ps_name)
         export_dir = base_dir / "导出"
@@ -1283,23 +1621,29 @@ class PTAClient:
 
         export_configs = [
             ("PAPER_TRANSCRIPT", "成绩单"),
-            ("ANSWER_SHEET",     "答题卡"),
             ("SCORED_CODE",      "得分代码"),
         ]
+        if export_answer_sheet:
+            export_configs.insert(1, ("ANSWER_SHEET", "答题卡"))
+        failed_exports = []
         for export_type, cn_name in export_configs:
             try:
                 self.export_and_download(ps_id, ps_name, export_type, str(export_dir))
                 time.sleep(random.uniform(3, 5))
             except requests.exceptions.HTTPError as e:
                 if e.response is not None and e.response.status_code == 403:
-                    print(f"  导出{cn_name}: 无权限（重试后仍失败），跳过")
+                    print(f"  导出{cn_name}: 无权限（重试后仍失败）")
                 elif e.response is not None and e.response.status_code == 429:
                     print(f"  导出{cn_name}: 请求过于频繁，等待30s后继续...")
                     time.sleep(30)
                 else:
                     print(f"  导出{cn_name}失败: {e}")
+                failed_exports.append(cn_name)
             except Exception as e:
                 print(f"  导出{cn_name}失败: {e}")
+                failed_exports.append(cn_name)
+        if failed_exports:
+            raise RuntimeError(f"required PTA exports failed: {', '.join(failed_exports)}")
 
     def refresh_exports(self, group_id=None, group_name=None):
         """
@@ -1321,6 +1665,10 @@ class PTAClient:
             return 0
 
         # 搜索所有题目集（需要获取 ps_id）
+        roster_payload = self.write_user_group_roster(group_id=group_id, group_name=group_name)
+        group_id = roster_payload["group"]["pta_group_id"]
+        group_name = roster_payload["group"]["pta_group_name"]
+
         all_sets = self.search_problem_sets(group_id=group_id, group_name=group_name)
         if not all_sets:
             print("未搜索到任何题目集")
@@ -1339,18 +1687,28 @@ class PTAClient:
             print(f"  - {ps.get('name', '未知')}")
 
         refreshed = 0
+        refreshed_sets = []
         for ps in to_refresh:
             ps_id = ps.get("id", "")
             ps_name = ps.get("name", "未知")
             try:
                 print(f"\n--- 刷新导出: {ps_name} ---")
                 self._write_problem_set_info(ps_id, ps_name, ps)
-                self._refresh_one_problem_set(ps_id, ps_name)
-                self.history.mark_export_refreshed(ps_id)
+                self._refresh_one_problem_set(ps_id, ps_name, export_answer_sheet=False)
+                refreshed_sets.append(ps)
                 refreshed += 1
                 print(f"完成: {ps_name}")
             except Exception as e:
                 print(f"刷新 {ps_name} 失败: {e}")
+
+        if refreshed_sets:
+            try:
+                self.export_group_answer_sheets(group_id=group_id, group_name=group_name)
+                for ps in refreshed_sets:
+                    self.history.mark_export_refreshed(ps.get("id", ""))
+            except Exception as e:
+                print(f"用户组答卷导出失败，本次不写入数据库: {e}")
+                return 0
 
         print(f"\n导出数据刷新完成，处理了 {refreshed}/{len(to_refresh)} 个题目集")
 

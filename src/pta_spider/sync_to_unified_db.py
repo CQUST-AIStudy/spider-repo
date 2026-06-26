@@ -19,6 +19,7 @@ except ImportError:
 PTA_EXPORT_DIR = "导出"
 PTA_SOURCE_SYSTEM = "PTA"
 LEGACY_SOURCE_SYSTEM = "LEGACY_TAP"
+PTA_USER_GROUP_ROSTER_FILE = "_pta_user_group_roster.json"
 
 
 def _flag(name: str, default: bool = False) -> bool:
@@ -142,7 +143,25 @@ def _get_crawl_dir(crawl_dir=None) -> Path:
 def _iter_experiment_dirs(crawl_dir: Path):
     if not crawl_dir.exists():
         return []
-    return sorted([d for d in crawl_dir.iterdir() if d.is_dir()], key=lambda p: p.name)
+    return sorted(
+        [d for d in crawl_dir.iterdir() if d.is_dir() and not d.name.startswith("_")],
+        key=lambda p: p.name,
+    )
+
+
+def _load_pta_user_group_roster(crawl_dir: Path):
+    path = crawl_dir / PTA_USER_GROUP_ROSTER_FILE
+    if not path.exists():
+        return None
+    with path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        return None
+    group = data.get("group") or {}
+    members = data.get("members") or []
+    if not group.get("pta_group_id") or not isinstance(members, list):
+        return None
+    return data
 
 
 def _normalize_text(value) -> str:
@@ -615,6 +634,172 @@ def _ensure_binding(cursor, entity_id: int, external_id: str):
     )
 
 
+def _ensure_pta_user_group_roster(cursor, roster_payload, class_id=None):
+    if not roster_payload:
+        return None
+
+    group = roster_payload.get("group") or {}
+    pta_group_id = str(group.get("pta_group_id") or "").strip()
+    if not pta_group_id:
+        return None
+    pta_group_name = str(group.get("pta_group_name") or "").strip() or pta_group_id
+    members = [
+        item for item in (roster_payload.get("members") or [])
+        if _is_valid_student_identity(item.get("student_no"), item.get("student_name"))
+    ]
+    cursor.execute(
+        """
+        INSERT INTO pta_user_group
+          (class_id, pta_group_id, pta_group_name, member_count, last_roster_sync_at, raw_json)
+        VALUES
+          (%s, %s, %s, %s, CURRENT_TIMESTAMP(3), %s)
+        ON DUPLICATE KEY UPDATE
+          id = LAST_INSERT_ID(id),
+          class_id = COALESCE(VALUES(class_id), pta_user_group.class_id),
+          pta_group_name = VALUES(pta_group_name),
+          member_count = VALUES(member_count),
+          last_roster_sync_at = CURRENT_TIMESTAMP(3),
+          raw_json = VALUES(raw_json),
+          updated_at = CURRENT_TIMESTAMP(3)
+        """,
+        (
+            class_id,
+            pta_group_id,
+            pta_group_name,
+            len(members),
+            json.dumps(group.get("raw_json") or group, ensure_ascii=False),
+        ),
+    )
+    pta_user_group_id = cursor.lastrowid
+
+    student_no_to_id = {}
+    student_no_to_name = {}
+    active_student_nos = set()
+
+    for member in members:
+        student_no = str(member.get("student_no") or "").strip()
+        student_name = str(member.get("student_name") or "").strip() or student_no
+        active_student_nos.add(student_no)
+        student_no_to_name[student_no] = student_name
+        student_id = _ensure_student_profile(cursor, student_no, student_name)
+        student_no_to_id[student_no] = student_id
+        if class_id is not None:
+            _ensure_class_member(cursor, class_id, student_id)
+        if member.get("pta_user_id"):
+            _ensure_binding(cursor, student_id, str(member.get("pta_user_id")).strip())
+
+        cursor.execute(
+            """
+            INSERT INTO pta_user_group_member
+              (
+                pta_user_group_id, class_id, student_id, student_no, student_name,
+                pta_member_id, pta_user_id, pta_student_user_id,
+                member_status, left_at, raw_json
+              )
+            VALUES
+              (%s, %s, %s, %s, %s, %s, %s, %s, 'ACTIVE', NULL, %s)
+            ON DUPLICATE KEY UPDATE
+              class_id = VALUES(class_id),
+              student_id = VALUES(student_id),
+              student_name = VALUES(student_name),
+              pta_member_id = VALUES(pta_member_id),
+              pta_user_id = VALUES(pta_user_id),
+              pta_student_user_id = VALUES(pta_student_user_id),
+              member_status = 'ACTIVE',
+              left_at = NULL,
+              raw_json = VALUES(raw_json),
+              updated_at = CURRENT_TIMESTAMP(3)
+            """,
+            (
+                pta_user_group_id,
+                class_id,
+                student_id,
+                student_no,
+                student_name,
+                member.get("pta_member_id"),
+                member.get("pta_user_id"),
+                member.get("pta_student_user_id"),
+                json.dumps(member.get("raw_json") or member, ensure_ascii=False),
+            ),
+        )
+
+    if active_student_nos:
+        placeholders = ", ".join(["%s"] * len(active_student_nos))
+        cursor.execute(
+            f"""
+            UPDATE pta_user_group_member
+            SET member_status = 'LEFT',
+                left_at = COALESCE(left_at, CURRENT_TIMESTAMP(3)),
+                updated_at = CURRENT_TIMESTAMP(3)
+            WHERE pta_user_group_id = %s
+              AND member_status = 'ACTIVE'
+              AND student_no NOT IN ({placeholders})
+            """,
+            tuple([pta_user_group_id, *sorted(active_student_nos)]),
+        )
+    else:
+        cursor.execute(
+            """
+            UPDATE pta_user_group_member
+            SET member_status = 'LEFT',
+                left_at = COALESCE(left_at, CURRENT_TIMESTAMP(3)),
+                updated_at = CURRENT_TIMESTAMP(3)
+            WHERE pta_user_group_id = %s
+              AND member_status = 'ACTIVE'
+            """,
+            (pta_user_group_id,),
+        )
+
+    return {
+        "pta_user_group_id": pta_user_group_id,
+        "pta_group_id": pta_group_id,
+        "pta_group_name": pta_group_name,
+        "student_no_to_id": student_no_to_id,
+        "student_no_to_name": student_no_to_name,
+        "active_student_nos": active_student_nos,
+    }
+
+
+def _update_assignment_offering_pta_group(cursor, offering_id: int, pta_group_context):
+    if not pta_group_context:
+        return
+    cursor.execute(
+        """
+        UPDATE assignment_offering
+        SET pta_user_group_id = %s,
+            pta_group_id = %s,
+            updated_at = CURRENT_TIMESTAMP(3)
+        WHERE id = %s
+        """,
+        (
+            pta_group_context["pta_user_group_id"],
+            pta_group_context["pta_group_id"],
+            offering_id,
+        ),
+    )
+
+
+def _is_official_roster_student(pta_group_context, student_no: str):
+    if not pta_group_context:
+        return True
+    return str(student_no or "").strip() in pta_group_context.get("active_student_nos", set())
+
+
+def _ensure_class_member_if_official(cursor, class_id, student_id, student_no, pta_group_context):
+    if class_id is None:
+        return
+    if _is_official_roster_student(pta_group_context, student_no):
+        _ensure_class_member(cursor, class_id, student_id)
+
+
+def _participant_roster_scope(pta_group_context, student_no: str):
+    if not pta_group_context:
+        return "CLASS_ROSTER"
+    if _is_official_roster_student(pta_group_context, student_no):
+        return "PTA_USER_GROUP"
+    return "GUEST_PARTICIPANT"
+
+
 def _ensure_import_job(cursor, class_id, summary=None):
     cursor.execute(
         """
@@ -696,17 +881,57 @@ def _ensure_assignment_problem(cursor, offering_id: int, pta_problem_id: str, ca
     return problem_id
 
 
-def _materialize_student_assignments(cursor, offering_id: int, class_id: int):
+def _materialize_student_assignments(cursor, offering_id: int, class_id: int, pta_group_context=None):
+    roster_scope_value = "PTA_USER_GROUP" if pta_group_context else "CLASS_ROSTER"
+    roster_scope_update = """
+              roster_scope = CASE
+                WHEN student_assignment.roster_scope = 'GUEST_PARTICIPANT'
+                THEN student_assignment.roster_scope
+                ELSE VALUES(roster_scope)
+              END,
+    """
+    if pta_group_context:
+        cursor.execute(
+            f"""
+            INSERT INTO student_assignment (
+              offering_id, student_id, roster_scope, submission_status,
+              accepted_problem_count, submitted_problem_count, problem_count,
+              created_at, updated_at
+            )
+            SELECT
+              %s,
+              ugm.student_id,
+              %s,
+              'NOT_STARTED',
+              0,
+              0,
+              (SELECT COUNT(*) FROM assignment_problem ap WHERE ap.offering_id = %s AND ap.status = 'ACTIVE'),
+              CURRENT_TIMESTAMP(3),
+              CURRENT_TIMESTAMP(3)
+            FROM pta_user_group_member ugm
+            WHERE ugm.pta_user_group_id = %s
+              AND ugm.member_status = 'ACTIVE'
+              AND ugm.student_id IS NOT NULL
+            ON DUPLICATE KEY UPDATE
+              {roster_scope_update}
+              problem_count = VALUES(problem_count),
+              updated_at = CURRENT_TIMESTAMP(3)
+            """,
+            (offering_id, roster_scope_value, offering_id, pta_group_context["pta_user_group_id"]),
+        )
+        return
+
     cursor.execute(
-        """
+        f"""
         INSERT INTO student_assignment (
-          offering_id, student_id, submission_status,
+          offering_id, student_id, roster_scope, submission_status,
           accepted_problem_count, submitted_problem_count, problem_count,
           created_at, updated_at
         )
         SELECT
           %s,
           cm.student_id,
+          %s,
           'NOT_STARTED',
           0,
           0,
@@ -717,10 +942,38 @@ def _materialize_student_assignments(cursor, offering_id: int, class_id: int):
         WHERE cm.class_id = %s
           AND cm.member_status = 'ACTIVE'
         ON DUPLICATE KEY UPDATE
+          {roster_scope_update}
           problem_count = VALUES(problem_count),
           updated_at = CURRENT_TIMESTAMP(3)
         """,
-        (offering_id, offering_id, class_id),
+        (offering_id, roster_scope_value, offering_id, class_id),
+    )
+
+
+def _ensure_student_assignment_participant(cursor, offering_id: int, student_id: int, roster_scope: str):
+    cursor.execute(
+        """
+        INSERT INTO student_assignment (
+          offering_id, student_id, roster_scope, submission_status,
+          accepted_problem_count, submitted_problem_count, problem_count,
+          created_at, updated_at
+        )
+        VALUES (
+          %s, %s, %s, 'NOT_STARTED',
+          0, 0,
+          (SELECT COUNT(*) FROM assignment_problem ap WHERE ap.offering_id = %s AND ap.status = 'ACTIVE'),
+          CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3)
+        )
+        ON DUPLICATE KEY UPDATE
+          roster_scope = CASE
+            WHEN student_assignment.roster_scope IN ('CLASS_ROSTER', 'PTA_USER_GROUP')
+            THEN student_assignment.roster_scope
+            ELSE VALUES(roster_scope)
+          END,
+          problem_count = VALUES(problem_count),
+          updated_at = CURRENT_TIMESTAMP(3)
+        """,
+        (offering_id, student_id, roster_scope, offering_id),
     )
 
 
@@ -734,6 +987,19 @@ def _table_has_column(cursor, table_name: str, column_name: str):
           AND column_name = %s
         """,
         (table_name, column_name),
+    )
+    return bool(cursor.fetchone()[0])
+
+
+def _table_exists(cursor, table_name: str):
+    cursor.execute(
+        """
+        SELECT COUNT(*)
+        FROM information_schema.tables
+        WHERE table_schema = DATABASE()
+          AND table_name = %s
+        """,
+        (table_name,),
     )
     return bool(cursor.fetchone()[0])
 
@@ -1108,11 +1374,20 @@ def _resolve_experiment_and_offering(cursor, experiment_name: str, class_id=None
     }
 
 
-def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dict, student_name_map: dict, class_id=None):
+def _sync_one_experiment(
+    conn,
+    crawl_dir: Path,
+    exp_dir: Path,
+    pta_user_map: dict,
+    student_name_map: dict,
+    class_id=None,
+    pta_group_context=None,
+):
     cursor = conn.cursor()
     resolved = _resolve_experiment_and_offering(cursor, exp_dir.name, class_id)
     if not resolved:
         return {"experiment": exp_dir.name, "skipped": True, "reason": "missing assignment_offering mapping"}
+    _update_assignment_offering_pta_group(cursor, resolved["offering_id"], pta_group_context)
 
     import_job_id = _ensure_import_job(cursor, resolved["class_id"], {"experiment": exp_dir.name})
     conn.commit()
@@ -1127,6 +1402,7 @@ def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dic
         "raw_answer_sheet_rows": 0,
         "attempts_upserted": 0,
         "students_resolved": 0,
+        "official_roster_students": len(pta_group_context.get("active_student_nos", [])) if pta_group_context else None,
         "unmapped_submission_rows": 0,
         "stale_attempts_pruned": 0,
         "stale_problem_states_pruned": 0,
@@ -1207,7 +1483,7 @@ def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dic
         answer_sheet_rows = _read_answer_sheet_rows(files["ANSWER_SHEET"][0]) if "ANSWER_SHEET" in files else []
         scored_code_rows = _read_scored_code_rows(files["SCORED_CODE"][0]) if "SCORED_CODE" in files else []
 
-        student_no_to_id = {}
+        student_no_to_id = dict(pta_group_context.get("student_no_to_id", {})) if pta_group_context else {}
         binding_cache = set()
 
         def ensure_binding_once(student_id, pta_user_id):
@@ -1221,8 +1497,20 @@ def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dic
 
         for row in transcript_rows:
             student_id = _ensure_student_profile(cursor, row["student_no"], row["student_name"])
-            _ensure_class_member(cursor, resolved["class_id"], student_id)
+            _ensure_class_member_if_official(
+                cursor,
+                resolved["class_id"],
+                student_id,
+                row["student_no"],
+                pta_group_context,
+            )
             student_no_to_id[row["student_no"]] = student_id
+            _ensure_student_assignment_participant(
+                cursor,
+                resolved["offering_id"],
+                student_id,
+                _participant_roster_scope(pta_group_context, row["student_no"]),
+            )
         for student_no, student_name in student_name_map.items():
             if student_no in student_no_to_id:
                 continue
@@ -1230,7 +1518,13 @@ def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dic
                 continue
             if any(r["student_no"] == student_no for r in answer_sheet_rows):
                 student_id = _ensure_student_profile(cursor, student_no, student_name)
-                _ensure_class_member(cursor, resolved["class_id"], student_id)
+                _ensure_class_member_if_official(
+                    cursor,
+                    resolved["class_id"],
+                    student_id,
+                    student_no,
+                    pta_group_context,
+                )
                 student_no_to_id[student_no] = student_id
         report["students_resolved"] = len(student_no_to_id)
 
@@ -1268,7 +1562,12 @@ def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dic
                 )
             report["raw_transcript_rows"] = len(transcript_rows)
 
-        _materialize_student_assignments(cursor, resolved["offering_id"], resolved["class_id"])
+        _materialize_student_assignments(
+            cursor,
+            resolved["offering_id"],
+            resolved["class_id"],
+            pta_group_context,
+        )
 
         problem_cache = {}
         code_artifact_updates = {}
@@ -1293,9 +1592,21 @@ def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dic
             if not student_id:
                 student_name = student_name_map.get(row["student_no"], row["student_no"])
                 student_id = _ensure_student_profile(cursor, row["student_no"], student_name)
-                _ensure_class_member(cursor, resolved["class_id"], student_id)
+                _ensure_class_member_if_official(
+                    cursor,
+                    resolved["class_id"],
+                    student_id,
+                    row["student_no"],
+                    pta_group_context,
+                )
                 student_no_to_id[row["student_no"]] = student_id
             ensure_binding_once(student_id, row["pta_user_id"])
+            _ensure_student_assignment_participant(
+                cursor,
+                resolved["offering_id"],
+                student_id,
+                _participant_roster_scope(pta_group_context, row["student_no"]),
+            )
             code_artifact_id = _ensure_artifact(
                 cursor,
                 import_job_id,
@@ -1326,7 +1637,13 @@ def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dic
                 student_no = None
             if student_no and student_no not in student_no_to_id:
                 student_id = _ensure_student_profile(cursor, student_no, student_name)
-                _ensure_class_member(cursor, resolved["class_id"], student_id)
+                _ensure_class_member_if_official(
+                    cursor,
+                    resolved["class_id"],
+                    student_id,
+                    student_no,
+                    pta_group_context,
+                )
                 student_no_to_id[student_no] = student_id
             student_id = student_no_to_id.get(student_no)
             if student_id:
@@ -1370,6 +1687,12 @@ def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dic
 
             if not student_id or not problem_id:
                 continue
+            _ensure_student_assignment_participant(
+                cursor,
+                resolved["offering_id"],
+                student_id,
+                _participant_roster_scope(pta_group_context, student_no),
+            )
 
             source_attempt_key = _attempt_source_key(resolved["offering_id"], row, student_no)
             cursor.execute(
@@ -1415,8 +1738,20 @@ def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dic
             student_id = student_no_to_id.get(row["student_no"])
             if not student_id:
                 student_id = _ensure_student_profile(cursor, row["student_no"], row["student_name"])
-                _ensure_class_member(cursor, resolved["class_id"], student_id)
+                _ensure_class_member_if_official(
+                    cursor,
+                    resolved["class_id"],
+                    student_id,
+                    row["student_no"],
+                    pta_group_context,
+                )
                 student_no_to_id[row["student_no"]] = student_id
+            _ensure_student_assignment_participant(
+                cursor,
+                resolved["offering_id"],
+                student_id,
+                _participant_roster_scope(pta_group_context, row["student_no"]),
+            )
             html_artifact_id = _ensure_artifact(
                 cursor,
                 import_job_id,
@@ -1487,7 +1822,19 @@ def _sync_one_experiment(conn, crawl_dir: Path, exp_dir: Path, pta_user_map: dic
         # Materialize once after all new students/problems have been discovered.
         # Running this inside row loops repeats a class-wide INSERT...SELECT for
         # every newly discovered student and slows large first-time imports.
-        _materialize_student_assignments(cursor, resolved["offering_id"], resolved["class_id"])
+        _materialize_student_assignments(
+            cursor,
+            resolved["offering_id"],
+            resolved["class_id"],
+            pta_group_context,
+        )
+        for student_no, student_id in student_no_to_id.items():
+            _ensure_student_assignment_participant(
+                cursor,
+                resolved["offering_id"],
+                student_id,
+                _participant_roster_scope(pta_group_context, student_no),
+            )
         report["stale_problem_states_pruned"] = _prune_orphan_problem_states(cursor, resolved["offering_id"])
         _recalc_problem_state(cursor, resolved["offering_id"])
         for (problem_id, student_id), artifact_id in code_artifact_updates.items():
@@ -1565,11 +1912,31 @@ def sync_all(crawl_dir=None, strict=True, class_id=None):
                     exp_map[exp_dir.name] = row[0]
         pta_user_map = legacy_sync.build_pta_user_map(exp_map)
         student_name_map = legacy_sync.build_student_name_map(exp_map)
+        pta_group_context = None
+        roster_payload = _load_pta_user_group_roster(crawl_dir)
+        if roster_payload:
+            with conn.cursor() as cursor:
+                pta_group_context = _ensure_pta_user_group_roster(cursor, roster_payload, class_id)
+            conn.commit()
+            if pta_group_context:
+                report["pta_user_group"] = {
+                    "pta_group_id": pta_group_context["pta_group_id"],
+                    "pta_group_name": pta_group_context["pta_group_name"],
+                    "member_count": len(pta_group_context["active_student_nos"]),
+                }
 
         for exp_dir in exp_dirs:
             try:
                 report["experiments"].append(
-                    _sync_one_experiment(conn, crawl_dir, exp_dir, pta_user_map, student_name_map, class_id)
+                    _sync_one_experiment(
+                        conn,
+                        crawl_dir,
+                        exp_dir,
+                        pta_user_map,
+                        student_name_map,
+                        class_id,
+                        pta_group_context,
+                    )
                 )
             except Exception as exc:
                 report["experiments"].append(
