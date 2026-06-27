@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 import threading
 import zipfile
+from collections import defaultdict
 from pathlib import Path
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -271,6 +272,10 @@ def _env_int(name, default, minimum=None, maximum=None):
     if maximum is not None:
         value = min(maximum, value)
     return value
+
+
+EXPORT_RETRY_ROUNDS = _env_int("PTA_EXPORT_RETRY_ROUNDS", 2, minimum=0, maximum=10)
+EXPORT_RETRY_DELAY_SECONDS = _env_int("PTA_EXPORT_RETRY_DELAY_SECONDS", 20, minimum=0, maximum=600)
 
 
 # Global rate limiter instance
@@ -1529,6 +1534,71 @@ class PTAClient:
         # 自动同步到数据库
         self._auto_sync_to_db()
 
+    def _required_export_configs(self, export_answer_sheet=False, answer_sheet_index=0):
+        export_configs = [
+            ("PAPER_TRANSCRIPT", "成绩单"),
+            ("SCORED_CODE", "得分代码"),
+        ]
+        if export_answer_sheet:
+            export_configs.insert(answer_sheet_index, ("ANSWER_SHEET", "答题卡"))
+        return export_configs
+
+    def _format_export_failure(self, cn_name, exc):
+        if isinstance(exc, requests.exceptions.HTTPError) and exc.response is not None:
+            status_code = exc.response.status_code
+            if status_code == 403:
+                return f"导出{cn_name}: 无权限/签名未就绪"
+            if status_code == 429:
+                return f"导出{cn_name}: PTA 限流"
+            return f"导出{cn_name}: HTTP {status_code} {exc}"
+        return f"导出{cn_name}: {exc}"
+
+    def _export_required_files(self, ps_id, ps_name, export_dir, export_configs):
+        pending = list(export_configs)
+        attempts = defaultdict(list)
+        max_round = EXPORT_RETRY_ROUNDS + 1
+
+        for round_no in range(1, max_round + 1):
+            if round_no > 1:
+                names = ", ".join(cn_name for _, cn_name in pending)
+                print(f"  集中重试 PTA 导出 ({round_no}/{max_round}): {ps_name} -> {names}")
+                if EXPORT_RETRY_DELAY_SECONDS > 0:
+                    time.sleep(EXPORT_RETRY_DELAY_SECONDS)
+
+            failed = []
+            for export_type, cn_name in pending:
+                try:
+                    self.export_and_download(ps_id, ps_name, export_type, str(export_dir))
+                    time.sleep(random.uniform(3, 5))
+                except Exception as exc:
+                    message = self._format_export_failure(cn_name, exc)
+                    print(f"  {message}")
+                    attempts[(export_type, cn_name)].append(message)
+                    failed.append((export_type, cn_name))
+                    if (
+                        isinstance(exc, requests.exceptions.HTTPError)
+                        and exc.response is not None
+                        and exc.response.status_code == 429
+                    ):
+                        time.sleep(30)
+
+            if not failed:
+                if round_no > 1:
+                    print(f"  PTA 导出补跑成功: {ps_name}")
+                return
+            pending = failed
+
+        failed_names = [cn_name for _, cn_name in pending]
+        details = []
+        for key in pending:
+            messages = attempts.get(key) or []
+            details.append(f"{key[1]}({messages[-1]})" if messages else key[1])
+        print(f"  PTA 导出最终失败点: {ps_name} -> {'; '.join(details)}")
+        raise RuntimeError(
+            f"required PTA exports failed after {EXPORT_RETRY_ROUNDS} retry round(s): "
+            f"{', '.join(failed_names)}"
+        )
+
     def _crawl_one_problem_set(self, ps_id, ps_name, export_answer_sheet=False):
         """Crawl all data for a single problem set, save to ./爬取结果/"""
         base_dir = self._problem_set_dir(ps_name)
@@ -1582,32 +1652,12 @@ class PTAClient:
 
         # 3. Export essential types only (PAPER/PAPER_ACCURATE/PAPER_ANALYSIS are redundant/computable)
         export_dir = base_dir / "导出"
-        export_configs = [
-            ("PAPER_TRANSCRIPT", "成绩单"),
-            ("SCORED_CODE",      "得分代码"),
-        ]
-        if export_answer_sheet:
-            export_configs.insert(0, ("ANSWER_SHEET", "答题卡"))
-        failed_exports = []
-        for export_type, cn_name in export_configs:
-            try:
-                self.export_and_download(ps_id, ps_name, export_type, str(export_dir))
-                time.sleep(random.uniform(3, 5))  # Export is heavy, longer interval
-            except requests.exceptions.HTTPError as e:
-                if e.response is not None and e.response.status_code == 403:
-                    print(f"  导出{cn_name}: 无权限（重试后仍失败）")
-                elif e.response is not None and e.response.status_code == 429:
-                    print(f"  导出{cn_name}: 请求过于频繁，等待30s后继续...")
-                    time.sleep(30)
-                else:
-                    print(f"  导出{cn_name}失败: {e}")
-                failed_exports.append(cn_name)
-            except Exception as e:
-                print(f"  导出{cn_name}失败: {e}")
-                failed_exports.append(cn_name)
-        if failed_exports:
-            raise RuntimeError(f"required PTA exports failed: {', '.join(failed_exports)}")
-
+        self._export_required_files(
+            ps_id,
+            ps_name,
+            export_dir,
+            self._required_export_configs(export_answer_sheet, answer_sheet_index=0),
+        )
         time.sleep(random.uniform(0.5, 1))
 
     def _refresh_one_problem_set(self, ps_id, ps_name, export_answer_sheet=False):
@@ -1619,31 +1669,12 @@ class PTAClient:
         export_dir = base_dir / "导出"
         export_dir.mkdir(parents=True, exist_ok=True)
 
-        export_configs = [
-            ("PAPER_TRANSCRIPT", "成绩单"),
-            ("SCORED_CODE",      "得分代码"),
-        ]
-        if export_answer_sheet:
-            export_configs.insert(1, ("ANSWER_SHEET", "答题卡"))
-        failed_exports = []
-        for export_type, cn_name in export_configs:
-            try:
-                self.export_and_download(ps_id, ps_name, export_type, str(export_dir))
-                time.sleep(random.uniform(3, 5))
-            except requests.exceptions.HTTPError as e:
-                if e.response is not None and e.response.status_code == 403:
-                    print(f"  导出{cn_name}: 无权限（重试后仍失败）")
-                elif e.response is not None and e.response.status_code == 429:
-                    print(f"  导出{cn_name}: 请求过于频繁，等待30s后继续...")
-                    time.sleep(30)
-                else:
-                    print(f"  导出{cn_name}失败: {e}")
-                failed_exports.append(cn_name)
-            except Exception as e:
-                print(f"  导出{cn_name}失败: {e}")
-                failed_exports.append(cn_name)
-        if failed_exports:
-            raise RuntimeError(f"required PTA exports failed: {', '.join(failed_exports)}")
+        self._export_required_files(
+            ps_id,
+            ps_name,
+            export_dir,
+            self._required_export_configs(export_answer_sheet, answer_sheet_index=1),
+        )
 
     def refresh_exports(self, group_id=None, group_name=None):
         """

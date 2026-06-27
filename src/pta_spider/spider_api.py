@@ -536,7 +536,28 @@ def _safe_path_fragment(value):
     return text[:80] or "none"
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _crawl_cache_scope(task: TaskInfo) -> str:
+    if task.class_id is not None:
+        return f"class-{task.class_id}"
+    if task.group_id:
+        return f"group-{_safe_path_fragment(task.group_id)}"
+    if task.group_name:
+        return f"group-{_safe_path_fragment(task.group_name)}"
+    if task.keyword:
+        return f"keyword-{_safe_path_fragment(task.keyword)}"
+    return "default"
+
+
 def _task_crawl_dir(base_dir: Path, task: TaskInfo) -> Path:
+    if _env_bool("PTA_STABLE_CRAWL_CACHE_ENABLED", True):
+        return (Path(base_dir).resolve() / "_cache" / _crawl_cache_scope(task)).resolve()
     class_part = f"class-{task.class_id}" if task.class_id is not None else "class-none"
     label = task.problem_set_id or task.problem_set_name or task.group_id or task.group_name or task.keyword
     task_part = _safe_path_fragment(f"{class_part}-{label}-{task.task_id}")
@@ -548,8 +569,9 @@ def _cleanup_task_crawl_dir(task_dir: Path, base_dir: Path):
     task_runs_dir = (Path(base_dir).resolve() / "_task_runs").resolve()
     try:
         task_dir.relative_to(task_runs_dir)
-    except ValueError as exc:
-        raise RuntimeError(f"refusing to cleanup outside task runs directory: {task_dir}") from exc
+    except ValueError:
+        print(f"skip cleanup for stable PTA crawl cache: {task_dir}")
+        return
     if task_dir.exists():
         shutil.rmtree(task_dir)
 
@@ -748,7 +770,10 @@ def _run_crawl(task):
 
         task.status = TaskStatus.SUCCESS
         task.finished_at = datetime.now().isoformat()
-        _cleanup_task_crawl_dir(task_crawl_dir, base_crawl_dir)
+        if _env_bool("PTA_KEEP_LOCAL_CRAWL_DATA", True):
+            print(f"keep local PTA crawl data: {task_crawl_dir}")
+        else:
+            _cleanup_task_crawl_dir(task_crawl_dir, base_crawl_dir)
         _notify_java(task.class_id, "SUCCESS", task.task_id)
     except Exception as e:
         task.status = TaskStatus.FAILED
