@@ -87,6 +87,51 @@ def _read_problem_set_info(exp_dir: Path):
     return {}
 
 
+def _read_problem_detail_rows(json_path: Path):
+    if not json_path or not json_path.exists():
+        return []
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"  [WARN] failed to parse problem detail metadata ({json_path}): {exc}")
+        return []
+    if isinstance(data, dict):
+        data = data.get("problems") or data.get("items") or []
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict)]
+
+
+def _safe_int(value, default=None):
+    try:
+        if value in (None, ""):
+            return default
+        return int(float(str(value).strip()))
+    except (ValueError, TypeError):
+        return default
+
+
+def _knowledge_strings(points):
+    if not isinstance(points, list):
+        return "", ""
+    paths = []
+    leaves = []
+    for item in points:
+        if isinstance(item, dict):
+            path = item.get("path") or item.get("namePath") or item.get("fullName") or item.get("name")
+            leaf = item.get("name") or item.get("title") or path
+        else:
+            path = str(item or "")
+            leaf = path
+        path = str(path or "").strip()
+        leaf = str(leaf or "").strip()
+        if path:
+            paths.append(path)
+        if leaf:
+            leaves.append(leaf)
+    return "; ".join(dict.fromkeys(paths)), "; ".join(dict.fromkeys(leaves))
+
+
 def _is_valid_student_identity(student_no, student_name=""):
     no = str(student_no or "").strip()
     name = str(student_name or "").strip()
@@ -1266,6 +1311,104 @@ def _bulk_ensure_assignment_problems(cursor, offering_id: int, problem_specs, ca
     return cache
 
 
+def _bulk_upsert_pta_problem_details(cursor, legacy_experiment_id, experiment_name, problem_set_id, detail_rows):
+    if not legacy_experiment_id or not detail_rows:
+        return 0
+    if not _table_exists(cursor, "pta_problem_detail"):
+        return 0
+
+    rows = []
+    for item in detail_rows:
+        problem_set_problem_id = str(item.get("problem_set_problem_id") or item.get("id") or "").strip()
+        if not problem_set_problem_id:
+            continue
+        knowledge_points = item.get("knowledge_points") or item.get("knowledgePoints") or []
+        knowledge_path, knowledge_leaf = _knowledge_strings(knowledge_points)
+        knowledge_point_ids = item.get("knowledge_point_ids") or item.get("knowledgePointIds") or []
+        content = item.get("content_md") or item.get("content_html") or item.get("content") or ""
+        content_format = item.get("content_format")
+        if not content_format:
+            content_format = "markdown" if item.get("content_md") else ("html" if item.get("content_html") else "markdown")
+        image_urls = item.get("image_urls") or item.get("imageUrls") or []
+        raw_json = item.get("raw_json") or item
+        rows.append(
+            (
+                legacy_experiment_id,
+                experiment_name,
+                str(item.get("problem_set_id") or problem_set_id or ""),
+                problem_set_problem_id,
+                str(item.get("pta_global_problem_id") or "") or None,
+                str(item.get("problem_url") or "") or None,
+                str(item.get("problem_label") or "") or None,
+                str(item.get("title") or "") or None,
+                _safe_float(item.get("score"), None),
+                str(item.get("problem_type") or "") or None,
+                _safe_int(item.get("difficulty_level")),
+                str(item.get("difficulty_label") or "") or None,
+                _safe_int(item.get("problem_pool_index")),
+                _safe_int(item.get("index_in_problem_pool")),
+                knowledge_path or None,
+                knowledge_leaf or None,
+                json.dumps(knowledge_point_ids, ensure_ascii=False),
+                json.dumps(knowledge_points, ensure_ascii=False),
+                content,
+                str(content_format or "markdown"),
+                json.dumps(image_urls, ensure_ascii=False),
+                json.dumps(raw_json, ensure_ascii=False),
+            )
+        )
+    if not rows:
+        return 0
+
+    cursor.executemany(
+        """
+        INSERT INTO pta_problem_detail (
+          experiment_id, experiment_name, problem_set_id,
+          problem_set_problem_id, pta_global_problem_id, problem_url,
+          problem_label, title, score, problem_type,
+          difficulty_level, difficulty_label,
+          problem_pool_index, index_in_problem_pool,
+          knowledge_path, knowledge_leaf,
+          knowledge_point_ids, knowledge_points_json,
+          content, content_format, image_urls_json, raw_json
+        )
+        VALUES (
+          %s, %s, %s,
+          %s, %s, %s,
+          %s, %s, %s, %s,
+          %s, %s,
+          %s, %s,
+          %s, %s,
+          %s, %s,
+          %s, %s, %s, %s
+        )
+        ON DUPLICATE KEY UPDATE
+          experiment_name = VALUES(experiment_name),
+          problem_set_id = VALUES(problem_set_id),
+          pta_global_problem_id = VALUES(pta_global_problem_id),
+          problem_url = VALUES(problem_url),
+          problem_label = VALUES(problem_label),
+          title = VALUES(title),
+          score = VALUES(score),
+          problem_type = VALUES(problem_type),
+          difficulty_level = VALUES(difficulty_level),
+          difficulty_label = VALUES(difficulty_label),
+          problem_pool_index = VALUES(problem_pool_index),
+          index_in_problem_pool = VALUES(index_in_problem_pool),
+          knowledge_path = VALUES(knowledge_path),
+          knowledge_leaf = VALUES(knowledge_leaf),
+          knowledge_point_ids = VALUES(knowledge_point_ids),
+          knowledge_points_json = VALUES(knowledge_points_json),
+          content = VALUES(content),
+          content_format = VALUES(content_format),
+          image_urls_json = VALUES(image_urls_json),
+          raw_json = VALUES(raw_json)
+        """,
+        rows,
+    )
+    return len(rows)
+
+
 def _bulk_upsert_raw_submission_rows(cursor, import_job_id, source_file_id, submission_rows):
     if not source_file_id or not submission_rows:
         return {}
@@ -2057,8 +2200,11 @@ def _resolve_experiment_and_offering(cursor, exp_dir: Path, class_id=None):
     if not offering_row:
         return None
     _sync_assignment_offering_deadline(cursor, offering_row[0], problem_set_info)
+    cursor.execute("SELECT experiment_id FROM experiment WHERE name = %s", (experiment_name,))
+    experiment_row = cursor.fetchone()
     return {
         "pta_problem_set_id": problem_set_source_id,
+        "legacy_experiment_id": experiment_row[0] if experiment_row else None,
         "offering_id": offering_row[0],
         "class_id": offering_row[1],
         "teacher_id": offering_row[2],
@@ -2159,6 +2305,7 @@ def _sync_one_experiment(
         "raw_submission_rows": 0,
         "raw_transcript_rows": 0,
         "raw_answer_sheet_rows": 0,
+        "problem_detail_rows": 0,
         "attempts_upserted": 0,
         "students_resolved": 0,
         "official_roster_students": len(pta_group_context.get("active_student_nos", [])) if pta_group_context else None,
@@ -2223,7 +2370,11 @@ def _sync_one_experiment(
 
         export_dir = exp_dir / PTA_EXPORT_DIR
         files = {}
-        for relative_name, role in (("题目内容.txt", "PROBLEM_CONTENT"), ("提交记录.csv", "SUBMISSIONS")):
+        for relative_name, role in (
+            ("题目内容.txt", "PROBLEM_CONTENT"),
+            ("题目详情.json", "PROBLEM_DETAILS"),
+            ("提交记录.csv", "SUBMISSIONS"),
+        ):
             path = exp_dir / relative_name
             if path.exists():
                 files[role] = (path, _register_source_file(cursor, import_job_id, path, crawl_dir, role))
@@ -2241,6 +2392,7 @@ def _sync_one_experiment(
         stage_start = time.perf_counter()
         transcript_rows = _read_transcript_rows(files["PAPER_TRANSCRIPT"][0]) if "PAPER_TRANSCRIPT" in files else []
         submission_rows = _read_submission_rows(files["SUBMISSIONS"][0]) if "SUBMISSIONS" in files else []
+        problem_detail_rows = _read_problem_detail_rows(files["PROBLEM_DETAILS"][0]) if "PROBLEM_DETAILS" in files else []
         answer_sheet_rows = _read_answer_sheet_rows(files["ANSWER_SHEET"][0]) if "ANSWER_SHEET" in files else []
         scored_code_rows = _read_scored_code_rows(files["SCORED_CODE"][0]) if "SCORED_CODE" in files else []
         _log_sync_stage(
@@ -2248,6 +2400,7 @@ def _sync_one_experiment(
             experiment=exp_dir.name,
             transcript_rows=len(transcript_rows),
             submission_rows=len(submission_rows),
+            problem_detail_rows=len(problem_detail_rows),
             answer_sheet_rows=len(answer_sheet_rows),
             scored_code_rows=len(scored_code_rows),
             elapsed_ms=_elapsed_ms(stage_start),
@@ -2359,6 +2512,16 @@ def _sync_one_experiment(
         next_problem_order = 1
         unmapped_pta_users = set()
         problem_specs = {}
+        for row in problem_detail_rows:
+            pta_problem_id = str(row.get("problem_set_problem_id") or "").strip()
+            if pta_problem_id and pta_problem_id not in problem_order:
+                problem_order[pta_problem_id] = next_problem_order
+                next_problem_order += 1
+            if pta_problem_id:
+                problem_specs[pta_problem_id] = {
+                    "title": row.get("title") or f"PTA Problem {pta_problem_id}",
+                    "sort_order": problem_order[pta_problem_id],
+                }
         for row in sorted(scored_code_rows, key=lambda item: (item["pta_problem_id"], item["student_no"], item["relative_name"])):
             pta_problem_id = row["pta_problem_id"]
             if pta_problem_id and pta_problem_id not in problem_order:
@@ -2385,6 +2548,22 @@ def _sync_one_experiment(
         stage_start = time.perf_counter()
         _bulk_ensure_assignment_problems(cursor, resolved["offering_id"], problem_specs, problem_cache)
         _log_sync_stage("题目映射预加载完成", experiment=exp_dir.name, problems=len(problem_specs), elapsed_ms=_elapsed_ms(stage_start))
+
+        if problem_detail_rows:
+            stage_start = time.perf_counter()
+            report["problem_detail_rows"] = _bulk_upsert_pta_problem_details(
+                cursor,
+                resolved.get("legacy_experiment_id"),
+                exp_dir.name,
+                resolved.get("pta_problem_set_id"),
+                problem_detail_rows,
+            )
+            _log_sync_stage(
+                "题目详情同步完成",
+                experiment=exp_dir.name,
+                rows=report["problem_detail_rows"],
+                elapsed_ms=_elapsed_ms(stage_start),
+            )
 
         _log_sync_stage("开始同步评分代码", experiment=exp_dir.name, rows=len(scored_code_rows))
         stage_start = time.perf_counter()

@@ -78,6 +78,10 @@ DEFAULT_BROWSER_HOME = (RUNTIME_DIR / "browser").resolve()
 CRAWL_DIR = Path(os.getenv("PTA_CRAWL_DIR", str(SPIDER_DIR / "output"))).resolve()
 CAPTCHA_IMAGE_FILE = RUNTIME_DIR / "captcha_bg.jpg"
 
+# PTA 题面里的图片可能使用 ~/xxx 形式，入库前统一转成前端可直接渲染的完整 URL。
+IMAGE_MARKDOWN_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+HTML_IMAGE_RE = re.compile(r"<img\b[^>]*\bsrc=[\"']([^\"']+)[\"'][^>]*>", re.IGNORECASE)
+
 
 def _browser_home():
     configured = os.getenv("PTA_BROWSER_HOME")
@@ -1061,6 +1065,115 @@ class PTAClient:
         """Get detailed content of a single problem"""
         return self.api_get(f"/problem-sets/{ps_id}/preview/problems/{problem_id}")
 
+    @staticmethod
+    def _normalize_asset_url(url):
+        text = str(url or "").strip()
+        if not text:
+            return ""
+        if " " in text:
+            quoted_match = re.match(r'^([^\s]+)\s+["\'].*["\']$', text)
+            if quoted_match:
+                text = quoted_match.group(1)
+        if text.startswith(("http://", "https://", "data:")):
+            return text
+        if text.startswith("~/"):
+            return f"https://images.ptausercontent.com/{text[2:]}"
+        if text.startswith("/"):
+            return f"{BASE_URL}{text}"
+        return text
+
+    @classmethod
+    def _extract_image_urls(cls, content):
+        urls = []
+        seen = set()
+        for pattern in (IMAGE_MARKDOWN_RE, HTML_IMAGE_RE):
+            for match in pattern.finditer(content or ""):
+                url = cls._normalize_asset_url(match.group(1))
+                if url and url not in seen:
+                    seen.add(url)
+                    urls.append(url)
+        return urls
+
+    @classmethod
+    def _normalize_markdown_image_urls(cls, content):
+        def replace_image(match):
+            target = str(match.group(1) or "").strip()
+            if not target:
+                return match.group(0)
+            title = ""
+            url = target
+            title_match = re.match(r'^([^\s]+)(\s+["\'].*["\'])$', target)
+            if title_match:
+                url = title_match.group(1)
+                title = title_match.group(2)
+            normalized = cls._normalize_asset_url(url)
+            return match.group(0).replace(target, f"{normalized}{title}", 1)
+
+        return IMAGE_MARKDOWN_RE.sub(replace_image, content or "")
+
+    @classmethod
+    def _normalize_html_image_urls(cls, content):
+        def replace_src(match):
+            return f"{match.group(1)}{cls._normalize_asset_url(match.group(2))}{match.group(3)}"
+
+        return re.sub(
+            r'(<img\b[^>]*\bsrc=["\'])([^"\']+)(["\'][^>]*>)',
+            replace_src,
+            content or "",
+            flags=re.IGNORECASE,
+        )
+
+    @classmethod
+    def _problem_detail_record(cls, ps_id, problem, detail):
+        psp = (detail or {}).get("problemSetProblem") or {}
+        raw_problem = (detail or {}).get("problem") or {}
+        content_md = (
+            psp.get("content")
+            or psp.get("description")
+            or raw_problem.get("content")
+            or raw_problem.get("description")
+            or ""
+        )
+        content_html = (
+            psp.get("contentHtml")
+            or psp.get("htmlContent")
+            or psp.get("renderedContent")
+            or raw_problem.get("contentHtml")
+            or raw_problem.get("htmlContent")
+            or raw_problem.get("renderedContent")
+            or ""
+        )
+        content_md = cls._normalize_markdown_image_urls(content_md)
+        content_html = cls._normalize_html_image_urls(content_html)
+        image_urls = cls._extract_image_urls("\n".join([str(content_md or ""), str(content_html or "")]))
+        pta_global_problem_id = (
+            psp.get("problemId")
+            or psp.get("globalProblemId")
+            or raw_problem.get("id")
+            or raw_problem.get("problemId")
+        )
+        return {
+            "problem_set_id": str(ps_id or ""),
+            "problem_set_problem_id": str(psp.get("id") or problem.get("id") or ""),
+            "pta_global_problem_id": str(pta_global_problem_id or ""),
+            "problem_url": f"{BASE_URL}/problem-sets/{ps_id}/problems/{psp.get('id') or problem.get('id') or ''}",
+            "problem_label": str(psp.get("label") or problem.get("label") or ""),
+            "title": str(psp.get("title") or raw_problem.get("title") or problem.get("title") or ""),
+            "score": psp.get("score") or problem.get("score"),
+            "problem_type": str(psp.get("problemType") or problem.get("problemType") or ""),
+            "difficulty_level": psp.get("difficulty") or raw_problem.get("difficulty"),
+            "difficulty_label": str(psp.get("difficultyLabel") or raw_problem.get("difficultyLabel") or ""),
+            "problem_pool_index": psp.get("problemPoolIndex"),
+            "index_in_problem_pool": psp.get("indexInProblemPool"),
+            "knowledge_point_ids": psp.get("knowledgePointIds") or raw_problem.get("knowledgePointIds") or [],
+            "knowledge_points": psp.get("knowledgePoints") or raw_problem.get("knowledgePoints") or [],
+            "content_md": content_md,
+            "content_html": content_html,
+            "content_format": "markdown" if content_md else ("html" if content_html else "markdown"),
+            "image_urls": image_urls,
+            "raw_json": detail or {},
+        }
+
     def get_submissions(self, ps_id, page=0, limit=200):
         """Get submissions for a problem set"""
         return self.api_get(f"/problem-sets/{ps_id}/submissions", params={
@@ -1608,6 +1721,7 @@ class PTAClient:
             problems = self.get_problems(ps_id)
             print(f"  题目数量: {len(problems)}")
             if problems:
+                detail_records = []
                 with open(base_dir / "题目内容.txt", "w", encoding="utf-8") as f:
                     for p in problems:
                         pid = p.get("id", "")
@@ -1617,13 +1731,17 @@ class PTAClient:
                         if pid:
                             try:
                                 detail = self.get_problem_detail(ps_id, pid)
-                                psp = detail.get("problemSetProblem", {})
-                                content = psp.get("content", "") or psp.get("description", "")
+                                record = self._problem_detail_record(ps_id, p, detail)
+                                detail_records.append(record)
+                                content = record.get("content_md") or record.get("content_html") or ""
                                 f.write(f"{content}\n")
                             except Exception as e:
                                 f.write(f"(获取详情失败: {e})\n")
                             time.sleep(random.uniform(0.3, 0.8))
                         f.write(f"\n{'='*40}\n\n")
+                with open(base_dir / "题目详情.json", "w", encoding="utf-8") as f:
+                    json.dump(detail_records, f, ensure_ascii=False, indent=2)
+                print(f"  题目详情: {len(detail_records)} 条")
         except Exception as e:
             print(f"  获取题目列表失败: {e}")
 
