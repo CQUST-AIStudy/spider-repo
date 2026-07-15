@@ -20,6 +20,7 @@ import tempfile
 import threading
 import zipfile
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -964,7 +965,7 @@ class PTAClient:
             if total is not None and len(members) >= int(total):
                 break
             page += 1
-            time.sleep(0.3)
+            # api_post 内令牌桶限流器已统一控制请求频率，无需额外 sleep
 
         return {
             "pta_group_id": group_id,
@@ -1032,7 +1033,7 @@ class PTAClient:
             if len(sets) < 50 or len(result) >= data.get("total", 0):
                 break
             page += 1
-            time.sleep(random.uniform(0.5, 1))
+            # api_get 内令牌桶限流器已统一控制请求频率，无需额外 sleep
 
         print(f"Found {len(result)} problem sets by user group")
         return result
@@ -1219,7 +1220,7 @@ class PTAClient:
                 break
 
             page += 1
-            time.sleep(random.uniform(0.5, 1.0))
+            # api_get 内令牌桶限流器已统一控制请求频率，无需额外 sleep
 
         return all_subs
 
@@ -1516,15 +1517,20 @@ class PTAClient:
             {"groupId": str(group_id)},
             {},
         ]
+        # 一旦在某 filter 下匹配到目标导出任务，后续轮询只查该 filter，
+        # 避免每轮都跑 3 个 filter 候选（每次都是一次 api_get，消耗令牌桶配额）
+        effective_filter = None
+        seen = []
 
         while time.time() - start < timeout:
-            seen = []
-            for filter_obj in filter_candidates:
+            candidates = [effective_filter] if effective_filter is not None else filter_candidates
+            for filter_obj in candidates:
                 data = self.api_get("/exports", params={
                     "page": 0,
                     "limit": 20,
                     "filter": json.dumps(filter_obj, ensure_ascii=False),
                 })
+                found = False
                 for exp in data.get("exports", []):
                     if exp.get("type") != expected_type:
                         continue
@@ -1535,6 +1541,9 @@ class PTAClient:
                         continue
                     if expected_title and exp_title != expected_title:
                         continue
+                    # 匹配到目标导出任务，锁定该 filter 并结束本轮遍历
+                    found = True
+                    effective_filter = filter_obj
                     status = exp.get("status")
                     if status == "FAILED":
                         raise RuntimeError(f"PTA user-group answer export failed: {expected_title}")
@@ -1543,6 +1552,9 @@ class PTAClient:
                         if doc_url:
                             print("\n  用户组答卷导出完成，获取到下载链接")
                             return doc_url
+                    break
+                if found:
+                    break  # 已锁定 filter，下一轮只查它
             elapsed = int(time.time() - start)
             print(f"  等待用户组答卷导出完成... ({elapsed}s)", end="\r")
             time.sleep(3)
@@ -1716,28 +1728,40 @@ class PTAClient:
         """Crawl all data for a single problem set, save to ./爬取结果/"""
         base_dir = self._problem_set_dir(ps_name)
 
-        # 1. Crawl problem content
+        # 1. Crawl problem content (题目详情并发拉取，写文件保持原顺序)
         try:
             problems = self.get_problems(ps_id)
             print(f"  题目数量: {len(problems)}")
             if problems:
+                # 并发拉取题目详情；api_get 内令牌桶限流器保证请求频率安全
+                def _fetch_detail(p):
+                    pid = p.get("id", "")
+                    if not pid:
+                        return None
+                    try:
+                        return self.get_problem_detail(ps_id, pid)
+                    except Exception as e:
+                        return e
+
+                max_workers = min(8, max(1, len(problems)))
+                with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                    details = list(pool.map(_fetch_detail, problems))
+
                 detail_records = []
                 with open(base_dir / "题目内容.txt", "w", encoding="utf-8") as f:
-                    for p in problems:
-                        pid = p.get("id", "")
+                    for p, detail in zip(problems, details):
                         title = p.get("title", "")
                         label = p.get("label", "")
                         f.write(f"[{label}] {title}\n")
+                        pid = p.get("id", "")
                         if pid:
-                            try:
-                                detail = self.get_problem_detail(ps_id, pid)
+                            if isinstance(detail, Exception):
+                                f.write(f"(获取详情失败: {detail})\n")
+                            elif detail:
                                 record = self._problem_detail_record(ps_id, p, detail)
                                 detail_records.append(record)
                                 content = record.get("content_md") or record.get("content_html") or ""
                                 f.write(f"{content}\n")
-                            except Exception as e:
-                                f.write(f"(获取详情失败: {e})\n")
-                            time.sleep(random.uniform(0.3, 0.8))
                         f.write(f"\n{'='*40}\n\n")
                 with open(base_dir / "题目详情.json", "w", encoding="utf-8") as f:
                     json.dump(detail_records, f, ensure_ascii=False, indent=2)
