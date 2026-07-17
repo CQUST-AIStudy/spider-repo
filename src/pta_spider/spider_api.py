@@ -1,6 +1,10 @@
 ﻿"""
 PTA Spider API v2 - Data-type aware crawling with per-problem-set refresh policy.
 Open problem sets refresh daily; ended sets are skipped automatically unless forced or missing data.
+
+incremental（手动同步默认）与 full 模式均按实验维度更新：
+- 数据库无该班级数据时，全量爬取整个学期的题目集（内容 + 提交 + 导出）；
+- 数据库已有数据时，仅刷新未截止实验的提交记录与导出，已截止且数据库有数据的实验自动跳过。
 """
 import asyncio, uuid, os, sys, time, csv, shutil, hashlib
 import json as json_mod
@@ -685,7 +689,9 @@ def _run_crawl(task):
                         print(f"crawl {ps.get('name', '')} failed: {e}")
                         crawl_errors.append(f"{ps.get('name', '')}: {e}")
 
-        if mode in (CrawlMode.SUBMISSIONS, CrawlMode.FULL):
+        # incremental 同样走此分支：按实验更新已有未截止实验的提交记录
+        # （已截止且数据库已有数据的实验会被 _should_refresh_problem_set 跳过）
+        if mode in (CrawlMode.SUBMISSIONS, CrawlMode.FULL, CrawlMode.INCREMENTAL):
             if all_sets is None:
                 all_sets = _resolve_problem_sets(client, task)
             crawled = client.history.get_all_crawled()
@@ -715,7 +721,9 @@ def _run_crawl(task):
                     crawl_errors.append(f"{ps.get('name', '')} submissions: {e}")
             task.submissions_count = total_subs
 
-        if mode in (CrawlMode.REFRESH, CrawlMode.FULL):
+        # incremental 同样走此分支：按实验刷新已有未截止实验的导出数据
+        # （已截止且数据库已有数据的实验会被 _should_refresh_problem_set 跳过）
+        if mode in (CrawlMode.REFRESH, CrawlMode.FULL, CrawlMode.INCREMENTAL):
             if all_sets is None:
                 all_sets = _resolve_problem_sets(client, task)
             refreshed = 0
