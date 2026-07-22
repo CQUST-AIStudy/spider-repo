@@ -2,12 +2,16 @@
 性能优化单元测试：
 1. 题目详情并发拉取：输出顺序、内容、单题失败隔离、并发提速
 2. 用户组答卷导出 filter 锁定：锁定后 api_get 调用次数下降
+3. 自适应限流：429 降速、成功恢复
+4. 同题集导出并行：多类型 wall-clock 低于串行
+5. 题集并行 helper：错误隔离
 全部使用 mock，不依赖真实 PTA 登录与网络。
 """
 import sys
 import json
 import time
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -15,7 +19,7 @@ from unittest.mock import patch
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from pta_spider.spider import PTAClient
+from pta_spider.spider import PTAClient, AdaptiveTokenBucketRateLimiter
 
 
 def _make_detail(pid):
@@ -179,6 +183,93 @@ class GroupAnswerExportFilterLockTests(unittest.TestCase):
         # 第二轮: 只查 groupId = 1 次；总 3 次（而非每轮 3 次的 6 次）
         self.assertEqual(len(calls), 3, f"预期 3 次调用，实际 {len(calls)}: {calls}")
         self.assertEqual(calls[2], calls[1], "第 3 次应复用第二轮锁定的 filter")
+
+
+class AdaptiveRateLimiterTests(unittest.TestCase):
+    """自适应令牌桶"""
+
+    def test_rate_halves_on_429_and_recovers(self):
+        limiter = AdaptiveTokenBucketRateLimiter(rate=40, per=60, rate_min=10, rate_max=40)
+        self.assertAlmostEqual(limiter.current_rate(), 40.0, places=1)
+        limiter.on_rate_limit()
+        self.assertAlmostEqual(limiter.current_rate(), 20.0, places=1)
+        limiter.on_rate_limit()
+        self.assertAlmostEqual(limiter.current_rate(), 10.0, places=1)
+        # 不低于 rate_min
+        limiter.on_rate_limit()
+        self.assertAlmostEqual(limiter.current_rate(), 10.0, places=1)
+
+        # 连续成功后缓慢回升
+        for _ in range(20):
+            limiter.on_success()
+        self.assertGreater(limiter.current_rate(), 10.0)
+
+    def test_acquire_blocks_then_returns(self):
+        limiter = AdaptiveTokenBucketRateLimiter(rate=2, per=1, rate_min=1, rate_max=2)
+        # 先耗尽初始 token
+        limiter.acquire()
+        limiter.acquire()
+        start = time.time()
+        limiter.acquire()  # 应等待约 0.5s 才有下一个 token
+        elapsed = time.time() - start
+        self.assertGreaterEqual(elapsed, 0.3, f"无 token 时应阻塞，实际 {elapsed:.2f}s")
+        self.assertLess(elapsed, 1.5, f"精确等待不应过久，实际 {elapsed:.2f}s")
+
+
+class ExportParallelTests(unittest.TestCase):
+    """同题集多类型导出并行"""
+
+    def test_parallel_export_faster_than_serial(self):
+        client = PTAClient.__new__(PTAClient)
+        calls = []
+        lock = threading.Lock()
+
+        def slow_export(ps_id, ps_name, export_type, save_dir, max_retries=3):
+            with lock:
+                calls.append(export_type)
+            time.sleep(0.35)
+            return f"{save_dir}/{export_type}.xlsx"
+
+        configs = [
+            ("PAPER_TRANSCRIPT", "成绩单"),
+            ("SCORED_CODE", "得分代码"),
+        ]
+        with patch.object(client, "export_and_download", side_effect=slow_export), \
+             patch("pta_spider.spider.EXPORT_PARALLEL", True), \
+             patch("pta_spider.spider.EXPORT_RETRY_ROUNDS", 0):
+            start = time.time()
+            client._export_required_files("ps1", "实验1", Path(tempfile.mkdtemp()), configs)
+            elapsed = time.time() - start
+
+        self.assertEqual(sorted(calls), ["PAPER_TRANSCRIPT", "SCORED_CODE"])
+        # 串行约 0.7s，并行约 0.35s；放宽到 0.6s
+        self.assertLess(elapsed, 0.6, f"并行导出应明显快于串行，实际 {elapsed:.2f}s")
+
+
+class ProblemSetParallelHelperTests(unittest.TestCase):
+    """spider_api 题集并行 helper"""
+
+    def test_error_isolation_and_ok_results(self):
+        from pta_spider.spider_api import _map_problem_sets_parallel
+
+        items = [{"id": "1", "name": "A"}, {"id": "2", "name": "B"}, {"id": "3", "name": "C"}]
+
+        def worker(ps):
+            if ps["id"] == "2":
+                raise RuntimeError("fail-2")
+            time.sleep(0.2)
+            return ("ok", None, ps)
+
+        with patch("pta_spider.spider_api.PROBLEM_SET_MAX_WORKERS", 3):
+            start = time.time()
+            results = _map_problem_sets_parallel(items, worker, label="test")
+            elapsed = time.time() - start
+
+        statuses = {r[2]["id"]: r[0] for r in results}
+        self.assertEqual(statuses["1"], "ok")
+        self.assertEqual(statuses["2"], "error")
+        self.assertEqual(statuses["3"], "ok")
+        self.assertLess(elapsed, 0.5, f"3 路并行应约 0.2s，实际 {elapsed:.2f}s")
 
 
 if __name__ == "__main__":

@@ -20,7 +20,7 @@ import tempfile
 import threading
 import zipfile
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -238,29 +238,77 @@ def _resolve_chromedriver(browser_major):
     return fallback[0] if fallback else None
 
 
-class TokenBucketRateLimiter:
-    """Token bucket rate limiter for PTA API request throttling"""
+class AdaptiveTokenBucketRateLimiter:
+    """
+    Token bucket rate limiter with adaptive rate.
+    - acquire blocks until a token is available (precise wait, not fixed 0.5s spin)
+    - on_success slowly ramps current rate toward rate_max
+    - on_rate_limit (429) halves current rate down to rate_min
+    """
 
-    def __init__(self, rate=20, per=60):
-        """rate: tokens, per: time window(sec), default 20/min"""
-        self.rate = rate
-        self.per = per
-        self.tokens = rate
+    def __init__(self, rate=60, per=60, rate_min=10, rate_max=None):
+        self.rate_min = float(max(1, rate_min))
+        self.rate_max = float(rate_max if rate_max is not None else rate)
+        if self.rate_max < self.rate_min:
+            self.rate_max = self.rate_min
+        self.rate = float(max(self.rate_min, min(rate, self.rate_max)))
+        self.per = float(per) if per else 60.0
+        self.tokens = float(self.rate)
         self.last_refill = time.monotonic()
         self._lock = threading.Lock()
+        self._success_streak = 0
+
+    def _refill_unlocked(self, now=None):
+        now = time.monotonic() if now is None else now
+        elapsed = now - self.last_refill
+        if elapsed > 0 and self.rate > 0:
+            self.tokens = min(self.rate, self.tokens + elapsed * (self.rate / self.per))
+            self.last_refill = now
 
     def acquire(self):
-        """Acquire a token, block if none available"""
+        """Acquire a token, block if none available."""
         while True:
+            wait = 0.05
             with self._lock:
-                now = time.monotonic()
-                elapsed = now - self.last_refill
-                self.tokens = min(self.rate, self.tokens + elapsed * (self.rate / self.per))
-                self.last_refill = now
+                self._refill_unlocked()
                 if self.tokens >= 1:
                     self.tokens -= 1
                     return
-            time.sleep(0.5)
+                if self.rate > 0:
+                    need = 1.0 - self.tokens
+                    wait = need / (self.rate / self.per)
+                else:
+                    wait = 0.5
+            time.sleep(max(0.01, min(wait, 1.0)))
+
+    def on_success(self):
+        """Slowly recover rate after consecutive successes."""
+        with self._lock:
+            self._success_streak += 1
+            if self._success_streak >= 20 and self.rate < self.rate_max:
+                old = self.rate
+                self.rate = min(self.rate_max, self.rate * 1.05)
+                self._success_streak = 0
+                if self.rate - old > 0.5:
+                    print(f"  限流自适应: rate {old:.1f} -> {self.rate:.1f}/min (恢复)")
+
+    def on_rate_limit(self):
+        """Halve rate after 429 to ease pressure."""
+        with self._lock:
+            self._success_streak = 0
+            old = self.rate
+            self.rate = max(self.rate_min, self.rate * 0.5)
+            self.tokens = min(self.tokens, self.rate)
+            if abs(self.rate - old) > 0.01:
+                print(f"  限流自适应: rate {old:.1f} -> {self.rate:.1f}/min (429 降速)")
+
+    def current_rate(self):
+        with self._lock:
+            return self.rate
+
+
+# Backward-compatible alias
+TokenBucketRateLimiter = AdaptiveTokenBucketRateLimiter
 
 
 def _env_int(name, default, minimum=None, maximum=None):
@@ -279,14 +327,50 @@ def _env_int(name, default, minimum=None, maximum=None):
     return value
 
 
+def _env_float(name, default, minimum=None, maximum=None):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        value = float(str(raw).strip())
+    except ValueError:
+        print(f"Invalid float for {name}: {raw!r}; using {default}")
+        return default
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
 EXPORT_RETRY_ROUNDS = _env_int("PTA_EXPORT_RETRY_ROUNDS", 2, minimum=0, maximum=10)
 EXPORT_RETRY_DELAY_SECONDS = _env_int("PTA_EXPORT_RETRY_DELAY_SECONDS", 20, minimum=0, maximum=600)
 
+# Throughput / concurrency knobs (aggressive defaults; lower via env to roll back)
+API_RATE_LIMIT_PER_MINUTE = _env_int("PTA_API_RATE_LIMIT_PER_MINUTE", 60, minimum=1, maximum=180)
+API_RATE_LIMIT_MIN = _env_int("PTA_API_RATE_LIMIT_MIN", 10, minimum=1, maximum=180)
+DETAIL_MAX_WORKERS = _env_int("PTA_DETAIL_MAX_WORKERS", 12, minimum=1, maximum=32)
+PROBLEM_SET_MAX_WORKERS = _env_int("PTA_PROBLEM_SET_MAX_WORKERS", 3, minimum=1, maximum=8)
+EXPORT_POLL_INTERVAL_SECONDS = _env_float("PTA_EXPORT_POLL_INTERVAL_SECONDS", 1.0, minimum=0.2, maximum=10.0)
+EXPORT_CREATE_DELAY_SECONDS = _env_float("PTA_EXPORT_CREATE_DELAY_SECONDS", 0.5, minimum=0.0, maximum=30.0)
+EXPORT_BETWEEN_DELAY_SECONDS = _env_float("PTA_EXPORT_BETWEEN_DELAY_SECONDS", 0.5, minimum=0.0, maximum=30.0)
+EXPORT_PARALLEL = _env_flag("PTA_EXPORT_PARALLEL", True)
 
-# Global rate limiter instance
-_rate_limiter = TokenBucketRateLimiter(
-    rate=_env_int("PTA_API_RATE_LIMIT_PER_MINUTE", 20, minimum=1, maximum=120),
+
+def _export_poll_sleep(elapsed_seconds):
+    """Adaptive poll interval: dense early, slightly slower after 30s."""
+    base = EXPORT_POLL_INTERVAL_SECONDS
+    if elapsed_seconds > 30:
+        base = max(base, min(3.0, base * 2))
+    time.sleep(base)
+
+
+# Global rate limiter instance (adaptive)
+_rate_limiter = AdaptiveTokenBucketRateLimiter(
+    rate=API_RATE_LIMIT_PER_MINUTE,
     per=60,
+    rate_min=min(API_RATE_LIMIT_MIN, API_RATE_LIMIT_PER_MINUTE),
+    rate_max=API_RATE_LIMIT_PER_MINUTE,
 )
 
 
@@ -300,6 +384,7 @@ class CrawlHistory:
 
     def __init__(self, path=HISTORY_FILE):
         self.path = path
+        self._lock = threading.RLock()
         self.data = self._load()
 
     def _load(self):
@@ -316,42 +401,53 @@ class CrawlHistory:
         return {"crawled_sets": {}, "last_run": None}
 
     def save(self):
-        self.data["last_run"] = datetime.now().isoformat()
-        with open(self.path, "w", encoding="utf-8") as f:
-            json.dump(self.data, f, ensure_ascii=False, indent=2)
+        with self._lock:
+            self.data["last_run"] = datetime.now().isoformat()
+            with open(self.path, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, ensure_ascii=False, indent=2)
 
     def is_crawled(self, problem_set_id):
-        return problem_set_id in self.data["crawled_sets"]
+        with self._lock:
+            return problem_set_id in self.data["crawled_sets"]
 
     def mark_crawled(self, problem_set_id, name):
         """标记题目集内容已爬取（首次爬取，含题目内容+导出）"""
-        now = datetime.now().isoformat()
-        self.data["crawled_sets"][problem_set_id] = {
-            "name": name,
-            "crawled_at": now,
-            "content_crawled_at": now,
-            "export_refreshed_at": now,
-        }
-        self.save()
+        with self._lock:
+            now = datetime.now().isoformat()
+            self.data["crawled_sets"][problem_set_id] = {
+                "name": name,
+                "crawled_at": now,
+                "content_crawled_at": now,
+                "export_refreshed_at": now,
+            }
+            self.data["last_run"] = now
+            with open(self.path, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, ensure_ascii=False, indent=2)
 
     def mark_export_refreshed(self, problem_set_id):
         """标记导出数据已刷新（不重新爬取题目内容）"""
-        if problem_set_id in self.data["crawled_sets"]:
-            self.data["crawled_sets"][problem_set_id]["export_refreshed_at"] = datetime.now().isoformat()
-            self.save()
+        with self._lock:
+            if problem_set_id in self.data["crawled_sets"]:
+                self.data["crawled_sets"][problem_set_id]["export_refreshed_at"] = datetime.now().isoformat()
+                self.data["last_run"] = datetime.now().isoformat()
+                with open(self.path, "w", encoding="utf-8") as f:
+                    json.dump(self.data, f, ensure_ascii=False, indent=2)
 
     def get_new_sets(self, all_sets):
         """Filter out already-crawled sets from all sets"""
         new = []
-        for ps in all_sets:
-            ps_id = ps.get("id", "")
-            if not self.is_crawled(ps_id):
-                new.append(ps)
+        with self._lock:
+            crawled = self.data["crawled_sets"]
+            for ps in all_sets:
+                ps_id = ps.get("id", "")
+                if ps_id not in crawled:
+                    new.append(ps)
         return new
 
     def get_all_crawled(self):
         """返回所有已爬取的题目集 {id: info}"""
-        return self.data.get("crawled_sets", {})
+        with self._lock:
+            return dict(self.data.get("crawled_sets", {}))
 
 
 class PTAClient:
@@ -383,6 +479,8 @@ class PTAClient:
             "x-lollipop": "c69dd20235e34148d85ece4af34ed26f",
             "x-marshmallow": "",
         })
+        # Protect shared requests.Session under ThreadPool concurrency
+        self._session_lock = threading.RLock()
         self.driver = None
         self.history = CrawlHistory()
         self.crawl_dir.mkdir(parents=True, exist_ok=True)
@@ -688,24 +786,32 @@ class PTAClient:
     # ==================== API Data Crawling ====================
 
     def api_get(self, path, params=None):
-        """Unified GET with auto re-login, 429 backoff, token bucket rate limiting"""
+        """Unified GET with auto re-login, 429 backoff, adaptive token bucket rate limiting"""
         max_retries = 3
         for attempt in range(max_retries + 1):
             _rate_limiter.acquire()
-            resp = self.session.get(f"{API_BASE}{path}", params=params, timeout=30)
+            with self._session_lock:
+                resp = self.session.get(f"{API_BASE}{path}", params=params, timeout=30)
             if resp.status_code in (401, 403):
                 print("认证失效，重新登录...")
                 self.ensure_login()
-                resp = self.session.get(f"{API_BASE}{path}", params=params, timeout=30)
+                _rate_limiter.acquire()
+                with self._session_lock:
+                    resp = self.session.get(f"{API_BASE}{path}", params=params, timeout=30)
             if resp.status_code == 429:
+                _rate_limiter.on_rate_limit()
                 if attempt < max_retries:
-                    wait = 30 * (attempt + 1)
+                    retry_after = resp.headers.get("Retry-After")
+                    if retry_after and str(retry_after).isdigit():
+                        wait = max(1, int(retry_after))
+                    else:
+                        wait = min(90, 10 * (2 ** attempt))
                     print(f"  429 请求过于频繁，等待 {wait}s 后重试 ({attempt+1}/{max_retries})...")
                     time.sleep(wait)
                     continue
-                else:
-                    print("  429 重试次数已用尽")
+                print("  429 重试次数已用尽")
             resp.raise_for_status()
+            _rate_limiter.on_success()
             return resp.json()
         resp.raise_for_status()
         return resp.json()
@@ -1235,32 +1341,39 @@ class PTAClient:
     # ==================== Export (answer sheet/transcript/plagiarism) ====================
 
     def api_post(self, path, json_data=None):
-        """Unified POST with auto re-login, 429/403 backoff, token bucket rate limiting"""
+        """Unified POST with auto re-login, 429/403 backoff, adaptive token bucket rate limiting"""
         max_retries = 3
         for attempt in range(max_retries + 1):
             _rate_limiter.acquire()
-            resp = self.session.post(f"{API_BASE}{path}", json=json_data, timeout=30)
+            with self._session_lock:
+                resp = self.session.post(f"{API_BASE}{path}", json=json_data, timeout=30)
             if resp.status_code == 401:
                 print("认证失效，重新登录...")
                 self.ensure_login()
-                resp = self.session.post(f"{API_BASE}{path}", json=json_data, timeout=30)
+                _rate_limiter.acquire()
+                with self._session_lock:
+                    resp = self.session.post(f"{API_BASE}{path}", json=json_data, timeout=30)
             if resp.status_code == 429:
+                _rate_limiter.on_rate_limit()
                 if attempt < max_retries:
-                    wait = 30 * (attempt + 1)
+                    retry_after = resp.headers.get("Retry-After")
+                    if retry_after and str(retry_after).isdigit():
+                        wait = max(1, int(retry_after))
+                    else:
+                        wait = min(90, 10 * (2 ** attempt))
                     print(f"  429 请求过于频繁，等待 {wait}s 后重试 ({attempt+1}/{max_retries})...")
                     time.sleep(wait)
                     continue
-                else:
-                    print("  429 重试次数已用尽")
+                print("  429 重试次数已用尽")
             if resp.status_code == 403:
                 if attempt < max_retries:
-                    wait = 10 * (attempt + 1)
+                    wait = min(40, 8 * (attempt + 1))
                     print(f"  403 无权限，等待 {wait}s 后重试 ({attempt+1}/{max_retries})...")
                     time.sleep(wait)
                     continue
-                else:
-                    print("  403 重试次数已用尽")
+                print("  403 重试次数已用尽")
             resp.raise_for_status()
+            _rate_limiter.on_success()
             return resp
 
     @staticmethod
@@ -1375,9 +1488,9 @@ class PTAClient:
                     if doc_url:
                         print(f"\n  导出完成，获取到下载链接")
                         return doc_url
-            elapsed = int(time.time() - start)
-            print(f"  等待导出完成... ({elapsed}s)", end="\r")
-            time.sleep(3)
+            elapsed = time.time() - start
+            print(f"  等待导出完成... ({int(elapsed)}s)", end="\r")
+            _export_poll_sleep(elapsed)
 
         raise TimeoutError(f"PTA export timed out: {expected_title or export_type} ({timeout}s)")
 
@@ -1431,7 +1544,8 @@ class PTAClient:
                     time.sleep(wait)
 
                 export_marker = self.create_export(ps_id, ps_name, export_type)
-                time.sleep(3)  # Wait for task creation, avoid rate limit
+                if EXPORT_CREATE_DELAY_SECONDS > 0:
+                    time.sleep(EXPORT_CREATE_DELAY_SECONDS)
 
                 doc_url = self.wait_export_ready(ps_id, export_type, export_marker=export_marker)
                 if doc_url:
@@ -1555,9 +1669,9 @@ class PTAClient:
                     break
                 if found:
                     break  # 已锁定 filter，下一轮只查它
-            elapsed = int(time.time() - start)
-            print(f"  等待用户组答卷导出完成... ({elapsed}s)", end="\r")
-            time.sleep(3)
+            elapsed = time.time() - start
+            print(f"  等待用户组答卷导出完成... ({int(elapsed)}s)", end="\r")
+            _export_poll_sleep(elapsed)
 
         sample = ", ".join(str(x) for x in seen[:5])
         raise TimeoutError(f"PTA user-group answer export timed out: {expected_title}; seen: {sample}")
@@ -1571,7 +1685,8 @@ class PTAClient:
         save_dir.mkdir(parents=True, exist_ok=True)
 
         marker = self.create_group_answer_sheet_export(group_id, group_name)
-        time.sleep(3)
+        if EXPORT_CREATE_DELAY_SECONDS > 0:
+            time.sleep(EXPORT_CREATE_DELAY_SECONDS)
         doc_url = self.wait_group_answer_export_ready(group_id, marker)
         title = marker.get("_requested_title") or f"{group_name or group_id}-用户组答卷"
         save_path = save_dir / f"{title}.zip"
@@ -1631,19 +1746,35 @@ class PTAClient:
         for ps in new_sets:
             print(f"  - {ps.get('name', '未知')}")
 
-        # 4. crawl each new set; answer sheets are exported once at user-group level.
+        # 4. crawl each new set (optionally parallel); answer sheets once at user-group level.
         completed_sets = []
-        for ps in new_sets:
+        workers = min(PROBLEM_SET_MAX_WORKERS, max(1, len(new_sets)))
+
+        def _crawl_one(ps):
             ps_id = ps.get("id", "")
             ps_name = ps.get("name", "未知")
-            try:
-                print(f"\n--- 正在爬取: {ps_name} ---")
-                self._write_problem_set_info(ps_id, ps_name, ps)
-                self._crawl_one_problem_set(ps_id, ps_name, export_answer_sheet=False)
-                completed_sets.append(ps)
-                print(f"完成: {ps_name}")
-            except Exception as e:
-                print(f"爬取 {ps_name} 失败: {e}")
+            print(f"\n--- 正在爬取: {ps_name} ---")
+            self._write_problem_set_info(ps_id, ps_name, ps)
+            self._crawl_one_problem_set(ps_id, ps_name, export_answer_sheet=False)
+            print(f"完成: {ps_name}")
+            return ps
+
+        if workers <= 1:
+            for ps in new_sets:
+                try:
+                    completed_sets.append(_crawl_one(ps))
+                except Exception as e:
+                    print(f"爬取 {ps.get('name', '未知')} 失败: {e}")
+        else:
+            print(f"题集并行爬取: workers={workers}, sets={len(new_sets)}")
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {pool.submit(_crawl_one, ps): ps for ps in new_sets}
+                for fut in as_completed(futures):
+                    ps = futures[fut]
+                    try:
+                        completed_sets.append(fut.result())
+                    except Exception as e:
+                        print(f"爬取 {ps.get('name', '未知')} 失败: {e}")
 
         if completed_sets:
             try:
@@ -1682,6 +1813,7 @@ class PTAClient:
         pending = list(export_configs)
         attempts = defaultdict(list)
         max_round = EXPORT_RETRY_ROUNDS + 1
+        use_parallel = EXPORT_PARALLEL and len(pending) > 1
 
         for round_no in range(1, max_round + 1):
             if round_no > 1:
@@ -1691,21 +1823,50 @@ class PTAClient:
                     time.sleep(EXPORT_RETRY_DELAY_SECONDS)
 
             failed = []
-            for export_type, cn_name in pending:
-                try:
-                    self.export_and_download(ps_id, ps_name, export_type, str(export_dir))
-                    time.sleep(random.uniform(3, 5))
-                except Exception as exc:
-                    message = self._format_export_failure(cn_name, exc)
+            if use_parallel:
+                def _one(item):
+                    export_type, cn_name = item
+                    try:
+                        self.export_and_download(ps_id, ps_name, export_type, str(export_dir))
+                        return None
+                    except Exception as exc:
+                        return (item, self._format_export_failure(cn_name, exc), exc)
+
+                workers = min(4, len(pending))
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    results = list(pool.map(_one, pending))
+                for result in results:
+                    if result is None:
+                        continue
+                    item, message, exc = result
                     print(f"  {message}")
-                    attempts[(export_type, cn_name)].append(message)
-                    failed.append((export_type, cn_name))
+                    attempts[item].append(message)
+                    failed.append(item)
                     if (
                         isinstance(exc, requests.exceptions.HTTPError)
                         and exc.response is not None
                         and exc.response.status_code == 429
                     ):
-                        time.sleep(30)
+                        _rate_limiter.on_rate_limit()
+                        time.sleep(min(30, 10 * round_no))
+            else:
+                for export_type, cn_name in pending:
+                    try:
+                        self.export_and_download(ps_id, ps_name, export_type, str(export_dir))
+                        if EXPORT_BETWEEN_DELAY_SECONDS > 0:
+                            time.sleep(EXPORT_BETWEEN_DELAY_SECONDS)
+                    except Exception as exc:
+                        message = self._format_export_failure(cn_name, exc)
+                        print(f"  {message}")
+                        attempts[(export_type, cn_name)].append(message)
+                        failed.append((export_type, cn_name))
+                        if (
+                            isinstance(exc, requests.exceptions.HTTPError)
+                            and exc.response is not None
+                            and exc.response.status_code == 429
+                        ):
+                            _rate_limiter.on_rate_limit()
+                            time.sleep(min(30, 10 * round_no))
 
             if not failed:
                 if round_no > 1:
@@ -1743,7 +1904,7 @@ class PTAClient:
                     except Exception as e:
                         return e
 
-                max_workers = min(8, max(1, len(problems)))
+                max_workers = min(DETAIL_MAX_WORKERS, max(1, len(problems)))
                 with ThreadPoolExecutor(max_workers=max_workers) as pool:
                     details = list(pool.map(_fetch_detail, problems))
 
@@ -1800,7 +1961,8 @@ class PTAClient:
             export_dir,
             self._required_export_configs(export_answer_sheet, answer_sheet_index=0),
         )
-        time.sleep(random.uniform(0.5, 1))
+        if EXPORT_BETWEEN_DELAY_SECONDS > 0:
+            time.sleep(min(EXPORT_BETWEEN_DELAY_SECONDS, 1.0))
 
     def _refresh_one_problem_set(self, ps_id, ps_name, export_answer_sheet=False):
         """
@@ -1859,21 +2021,36 @@ class PTAClient:
         for ps in to_refresh:
             print(f"  - {ps.get('name', '未知')}")
 
-        refreshed = 0
         refreshed_sets = []
-        for ps in to_refresh:
+        workers = min(PROBLEM_SET_MAX_WORKERS, max(1, len(to_refresh)))
+
+        def _refresh_one(ps):
             ps_id = ps.get("id", "")
             ps_name = ps.get("name", "未知")
-            try:
-                print(f"\n--- 刷新导出: {ps_name} ---")
-                self._write_problem_set_info(ps_id, ps_name, ps)
-                self._refresh_one_problem_set(ps_id, ps_name, export_answer_sheet=False)
-                refreshed_sets.append(ps)
-                refreshed += 1
-                print(f"完成: {ps_name}")
-            except Exception as e:
-                print(f"刷新 {ps_name} 失败: {e}")
+            print(f"\n--- 刷新导出: {ps_name} ---")
+            self._write_problem_set_info(ps_id, ps_name, ps)
+            self._refresh_one_problem_set(ps_id, ps_name, export_answer_sheet=False)
+            print(f"完成: {ps_name}")
+            return ps
 
+        if workers <= 1:
+            for ps in to_refresh:
+                try:
+                    refreshed_sets.append(_refresh_one(ps))
+                except Exception as e:
+                    print(f"刷新 {ps.get('name', '未知')} 失败: {e}")
+        else:
+            print(f"题集并行刷新导出: workers={workers}, sets={len(to_refresh)}")
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {pool.submit(_refresh_one, ps): ps for ps in to_refresh}
+                for fut in as_completed(futures):
+                    ps = futures[fut]
+                    try:
+                        refreshed_sets.append(fut.result())
+                    except Exception as e:
+                        print(f"刷新 {ps.get('name', '未知')} 失败: {e}")
+
+        refreshed = len(refreshed_sets)
         if refreshed_sets:
             try:
                 self.export_group_answer_sheets(group_id=group_id, group_name=group_name)

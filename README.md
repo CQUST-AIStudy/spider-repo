@@ -134,6 +134,15 @@ SPIDER_PORT=8100
 SPIDER_CORS_ALLOW_ORIGINS=*
 COOLDOWN_SUBMISSIONS=86400
 COOLDOWN_EXPORTS=86400
+# 爬取吞吐（激进默认；遇 429 可自行下调）
+PTA_API_RATE_LIMIT_PER_MINUTE=60
+PTA_API_RATE_LIMIT_MIN=10
+PTA_DETAIL_MAX_WORKERS=12
+PTA_PROBLEM_SET_MAX_WORKERS=3
+PTA_EXPORT_POLL_INTERVAL_SECONDS=1.0
+PTA_EXPORT_CREATE_DELAY_SECONDS=0.5
+PTA_EXPORT_BETWEEN_DELAY_SECONDS=0.5
+PTA_EXPORT_PARALLEL=true
 DB_HOST=host.docker.internal
 DB_PORT=3306
 DB_NAME=ptadatabase
@@ -141,8 +150,27 @@ DB_USERNAME=root
 DB_PASSWORD=
 ```
 
+## 爬取速度说明
+
+默认已开启较激进的吞吐配置：
+
+- **自适应 API 限流**：稳态目标 60 次/分钟；遇到 429 自动降半到 `PTA_API_RATE_LIMIT_MIN`，连续成功后再缓慢回升。
+- **题集并行**：同一任务内最多 `PTA_PROBLEM_SET_MAX_WORKERS` 个题目集并行处理内容/提交/导出。
+- **导出并行**：同题集内成绩单与得分代码可并行（`PTA_EXPORT_PARALLEL=true`），轮询间隔可配置。
+
+若频繁 429/403 或触发 PTA 风控，建议回退示例：
+
+```env
+PTA_API_RATE_LIMIT_PER_MINUTE=20
+PTA_PROBLEM_SET_MAX_WORKERS=1
+PTA_EXPORT_PARALLEL=false
+PTA_EXPORT_POLL_INTERVAL_SECONDS=3
+PTA_EXPORT_CREATE_DELAY_SECONDS=3
+```
+
 ## 注意事项
 
 - `.env`、`runtime/`、`output/` 都不应提交到 Git。
 - 云服务器部署时，`DB_HOST` 和 `JAVA_BACKEND_URL` 不要写 `127.0.0.1`，除非数据库和后端就在同一个容器里。单服务 compose 访问宿主机可用 `host.docker.internal`；统一根目录 compose 内部服务互访使用服务名，例如 `backend`。
 - PTA 登录有验证码和风控，首次部署建议先跑通 cookie 导入，再做定时爬取。
+- 任务队列仍为单 worker（不同教学班任务串行），避免同账号多任务抢限流。

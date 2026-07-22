@@ -8,6 +8,8 @@ incremental（手动同步默认）与 full 模式均按实验维度更新：
 """
 import asyncio, uuid, os, sys, time, csv, shutil, hashlib
 import json as json_mod
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from datetime import datetime
 from enum import Enum
@@ -25,7 +27,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import re
 
-from .spider import PTAClient, CrawlHistory, RUNTIME_DIR
+from .spider import PTAClient, CrawlHistory, RUNTIME_DIR, PROBLEM_SET_MAX_WORKERS
 from . import sync_to_db as legacy_sync
 from .sync_to_unified_db import class_id_exists, resolve_class_id_for_roster, run_configured_sync
 
@@ -54,6 +56,7 @@ class CooldownManager:
     STATE_FILE = RUNTIME_DIR / "cooldown_state.json"
 
     def __init__(self):
+        self._lock = threading.RLock()
         self._state = self._load()
 
     def _load(self):
@@ -74,21 +77,23 @@ class CooldownManager:
         return self.check_key(self._key(keyword, data_type), cooldown_sec)
 
     def check_key(self, key, cooldown_sec):
-        last_ts = self._state.get(key)
-        if last_ts is None:
-            return True, 0, ""
-        elapsed = time.time() - last_ts
-        if elapsed >= cooldown_sec:
-            return True, 0, datetime.fromtimestamp(last_ts).strftime("%m-%d %H:%M")
-        remaining = int(cooldown_sec - elapsed)
-        return False, remaining, datetime.fromtimestamp(last_ts).strftime("%m-%d %H:%M")
+        with self._lock:
+            last_ts = self._state.get(key)
+            if last_ts is None:
+                return True, 0, ""
+            elapsed = time.time() - last_ts
+            if elapsed >= cooldown_sec:
+                return True, 0, datetime.fromtimestamp(last_ts).strftime("%m-%d %H:%M")
+            remaining = int(cooldown_sec - elapsed)
+            return False, remaining, datetime.fromtimestamp(last_ts).strftime("%m-%d %H:%M")
 
     def mark(self, keyword, data_type):
         self.mark_key(self._key(keyword, data_type))
 
     def mark_key(self, key):
-        self._state[key] = time.time()
-        self._save()
+        with self._lock:
+            self._state[key] = time.time()
+            self._save()
 
     @staticmethod
     def _key(keyword, data_type):
@@ -603,6 +608,38 @@ def _resolve_problem_sets(client, task):
         raise RuntimeError(f"bound PTA problem set is not authorized for this user group: {target}")
     return filtered
 
+
+def _map_problem_sets_parallel(items, worker_fn, label="problem-set"):
+    """
+    Run worker_fn(ps) over problem sets with bounded concurrency.
+    worker_fn should return a tuple starting with status ("ok"/"skip"/...) or raise.
+    On exception returns ("error", str(exc), ps).
+    """
+    if not items:
+        return []
+    workers = min(PROBLEM_SET_MAX_WORKERS, max(1, len(items)))
+    if workers <= 1:
+        results = []
+        for ps in items:
+            try:
+                results.append(worker_fn(ps))
+            except Exception as exc:
+                results.append(("error", str(exc), ps))
+        return results
+
+    print(f"[parallel] {label}: workers={workers}, items={len(items)}")
+    results = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(worker_fn, ps): ps for ps in items}
+        for fut in as_completed(futures):
+            ps = futures[fut]
+            try:
+                results.append(fut.result())
+            except Exception as exc:
+                results.append(("error", str(exc), ps))
+    return results
+
+
 async def _worker():
     q = _get_queue()
     while True:
@@ -659,35 +696,49 @@ def _run_crawl(task):
         needs_group_answer_export = False
         completed_content_sets = []
 
+        phase_t0 = time.time()
+
         if mode in (CrawlMode.INCREMENTAL, CrawlMode.FULL):
             all_sets = _resolve_problem_sets(client, task)
             if all_sets:
                 new_sets = client.get_sets_requiring_content(all_sets)
                 task.new_sets_count = len(new_sets)
-                for ps in new_sets:
-                    try:
-                        if (
-                            not task.force
-                            and _is_problem_set_closed(ps)
-                            and _database_has_experiment_data(ps, task.class_id)
-                        ):
-                            reason = (
-                                f"{_problem_set_name(ps)}: deadline passed and database data exists; "
-                                "skip content crawl"
-                            )
-                            task.skipped_cooldown.append(reason)
-                            client.history.mark_crawled(ps["id"], ps.get("name", ""))
-                            continue
-                        client._write_problem_set_info(ps["id"], ps.get("name", ""), ps)
-                        client._crawl_one_problem_set(ps["id"], ps.get("name", ""), export_answer_sheet=False)
+                content_t0 = time.time()
+
+                def _content_one(ps):
+                    if (
+                        not task.force
+                        and _is_problem_set_closed(ps)
+                        and _database_has_experiment_data(ps, task.class_id)
+                    ):
+                        reason = (
+                            f"{_problem_set_name(ps)}: deadline passed and database data exists; "
+                            "skip content crawl"
+                        )
+                        return ("skip", reason, ps)
+                    client._write_problem_set_info(ps["id"], ps.get("name", ""), ps)
+                    client._crawl_one_problem_set(ps["id"], ps.get("name", ""), export_answer_sheet=False)
+                    return ("ok", None, ps)
+
+                content_results = _map_problem_sets_parallel(
+                    new_sets, _content_one, label="content"
+                )
+                for status, payload, ps in content_results:
+                    if status == "skip":
+                        task.skipped_cooldown.append(payload)
+                        client.history.mark_crawled(ps["id"], ps.get("name", ""))
+                    elif status == "ok":
                         completed_content_sets.append(ps)
                         content_crawled_ids.add(ps.get("id", ""))
                         needs_group_answer_export = True
                         _mark_problem_set_refreshed(ps, "submissions")
                         _mark_problem_set_refreshed(ps, "exports")
-                    except Exception as e:
-                        print(f"crawl {ps.get('name', '')} failed: {e}")
-                        crawl_errors.append(f"{ps.get('name', '')}: {e}")
+                    else:
+                        # status == "error"
+                        print(f"crawl {ps.get('name', '')} failed: {payload}")
+                        crawl_errors.append(f"{ps.get('name', '')}: {payload}")
+                print(f"[timing] content phase: {time.time() - content_t0:.1f}s "
+                      f"({len(completed_content_sets)}/{len(new_sets)} ok)")
 
         # incremental 同样走此分支：按实验更新已有未截止实验的提交记录
         # （已截止且数据库已有数据的实验会被 _should_refresh_problem_set 跳过）
@@ -696,6 +747,7 @@ def _run_crawl(task):
                 all_sets = _resolve_problem_sets(client, task)
             crawled = client.history.get_all_crawled()
             total_subs = 0
+            sub_candidates = []
             for ps in (all_sets or []):
                 ps_id = ps.get("id", "")
                 if ps_id in content_crawled_ids:
@@ -708,28 +760,41 @@ def _run_crawl(task):
                 if not ok:
                     task.skipped_cooldown.append(reason)
                     continue
-                try:
-                    client._write_problem_set_info(ps["id"], ps.get("name", ""), ps)
-                    subs = client.get_all_submissions(ps["id"])
-                    if subs:
-                        _write_submissions_csv(client, ps, subs)
-                        total_subs += len(subs)
+                sub_candidates.append(ps)
+
+            sub_t0 = time.time()
+
+            def _submissions_one(ps):
+                client._write_problem_set_info(ps["id"], ps.get("name", ""), ps)
+                subs = client.get_all_submissions(ps["id"])
+                count = 0
+                if subs:
+                    _write_submissions_csv(client, ps, subs)
+                    count = len(subs)
+                return ("ok", count, ps)
+
+            sub_results = _map_problem_sets_parallel(
+                sub_candidates, _submissions_one, label="submissions"
+            )
+            for status, payload, ps in sub_results:
+                if status == "ok":
+                    total_subs += int(payload or 0)
                     _mark_problem_set_refreshed(ps, "submissions")
-                    time.sleep(1)
-                except Exception as e:
-                    print(f"pull submissions failed {ps.get('name', '')}: {e}")
-                    crawl_errors.append(f"{ps.get('name', '')} submissions: {e}")
+                else:
+                    print(f"pull submissions failed {ps.get('name', '')}: {payload}")
+                    crawl_errors.append(f"{ps.get('name', '')} submissions: {payload}")
             task.submissions_count = total_subs
+            print(f"[timing] submissions phase: {time.time() - sub_t0:.1f}s "
+                  f"({len(sub_candidates)} sets, {total_subs} rows)")
 
         # incremental 同样走此分支：按实验刷新已有未截止实验的导出数据
         # （已截止且数据库已有数据的实验会被 _should_refresh_problem_set 跳过）
         if mode in (CrawlMode.REFRESH, CrawlMode.FULL, CrawlMode.INCREMENTAL):
             if all_sets is None:
                 all_sets = _resolve_problem_sets(client, task)
-            refreshed = 0
+            export_candidates = []
             for ps in (all_sets or []):
                 ps_id = ps.get("id", "")
-                ps_name = ps.get("name", "")
                 if ps_id in content_crawled_ids:
                     continue
                 if not client.history.is_crawled(ps_id):
@@ -740,17 +805,36 @@ def _run_crawl(task):
                 if not ok:
                     task.skipped_cooldown.append(reason)
                     continue
-                try:
-                    client._write_problem_set_info(ps_id, ps_name, ps)
-                    client._refresh_one_problem_set(ps_id, ps_name, export_answer_sheet=False)
-                    client.history.mark_export_refreshed(ps_id)
+                export_candidates.append(ps)
+
+            export_t0 = time.time()
+
+            def _exports_one(ps):
+                ps_id = ps.get("id", "")
+                ps_name = ps.get("name", "")
+                client._write_problem_set_info(ps_id, ps_name, ps)
+                client._refresh_one_problem_set(ps_id, ps_name, export_answer_sheet=False)
+                return ("ok", None, ps)
+
+            export_results = _map_problem_sets_parallel(
+                export_candidates, _exports_one, label="exports"
+            )
+            refreshed = 0
+            for status, payload, ps in export_results:
+                if status == "ok":
+                    client.history.mark_export_refreshed(ps.get("id", ""))
                     _mark_problem_set_refreshed(ps, "exports")
                     needs_group_answer_export = True
                     refreshed += 1
-                except Exception as e:
-                    print(f"refresh exports failed {ps_name}: {e}")
-                    crawl_errors.append(f"{ps_name} exports: {e}")
+                else:
+                    ps_name = ps.get("name", "")
+                    print(f"refresh exports failed {ps_name}: {payload}")
+                    crawl_errors.append(f"{ps_name} exports: {payload}")
             task.refreshed_count = refreshed
+            print(f"[timing] exports phase: {time.time() - export_t0:.1f}s "
+                  f"({refreshed}/{len(export_candidates)} ok)")
+
+        print(f"[timing] crawl phases total: {time.time() - phase_t0:.1f}s")
 
         if needs_group_answer_export and not crawl_errors:
             try:
