@@ -1,4 +1,8 @@
-FROM python:3.11-slim-bookworm
+ARG PYTHON_BASE_IMAGE=python:3.11-slim-bookworm
+FROM ${PYTHON_BASE_IMAGE}
+
+ARG DEBIAN_MIRROR=mirrors.aliyun.com
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -12,11 +16,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PTA_BROWSER_HOME=/app/runtime/browser \
     SE_CACHE_PATH=/app/runtime/.selenium \
     PTA_CHROME_BINARY=/usr/bin/chromium \
-    PTA_CHROMEDRIVER_PATH=/usr/bin/chromedriver
+    PTA_CHROMEDRIVER_PATH=/usr/bin/chromedriver \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=60
 
 WORKDIR /app
 
-RUN apt-get update \
+RUN find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
+        -exec sed -i -E "s#https?://deb.debian.org#http://${DEBIAN_MIRROR}#g" {} + \
+    && apt-get -o Acquire::Retries=3 update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
@@ -43,7 +51,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install \
+        --no-cache-dir \
+        --index-url "${PIP_INDEX_URL}" \
+        --timeout 60 \
+        --retries 3 \
+        -r requirements.txt
 
 COPY src ./src
 COPY scripts ./scripts

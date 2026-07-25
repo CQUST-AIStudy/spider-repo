@@ -71,11 +71,13 @@ curl -X POST http://127.0.0.1:8100/crawl \
 
 ## Docker 部署
 
-Dockerfile 会在镜像构建阶段从 Debian 官方源安装 Linux 版 Chromium 与版本匹配的 ChromeDriver，避免依赖 Google 下载源：
+Dockerfile 会在镜像构建阶段从 Debian 镜像源安装 Linux 版 Chromium 与版本匹配的 ChromeDriver，避免依赖 Google 下载源。默认使用国内镜像：
 
 - Chromium: `/usr/bin/chromium`
 - ChromeDriver: `/usr/bin/chromedriver`
 - 默认 headless: `PTA_HEADLESS=true`
+- Debian APT: `mirrors.aliyun.com`
+- Python PyPI: `pypi.tuna.tsinghua.edu.cn`
 
 云服务器上直接构建并启动：
 
@@ -85,6 +87,27 @@ cp .env.example .env
 vim .env
 docker compose up -d --build
 docker compose logs -f pta-spider
+```
+
+镜像源只影响构建阶段，可以在 `.env` 中覆盖：
+
+```env
+PYTHON_BASE_IMAGE=python:3.11-slim-bookworm
+DEBIAN_MIRROR=mirrors.aliyun.com
+PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+如果服务器无法访问 Docker Hub，可将 `PYTHON_BASE_IMAGE` 指向可用的国内基础镜像代理，例如：
+
+```env
+PYTHON_BASE_IMAGE=docker.m.daocloud.io/library/python:3.11-slim-bookworm
+```
+
+切换镜像源后建议重新构建：
+
+```bash
+docker compose build --no-cache --progress=plain pta-spider
+docker compose up -d --force-recreate pta-spider
 ```
 
 检查浏览器版本：
@@ -110,11 +133,11 @@ docker compose down
 
 云服务器通常没有图形界面，所以容器默认使用 headless Chrome。长期爬取建议这样处理：
 
-1. 让云服务器能够访问 Debian 官方 apt 源，直接在服务器上 `docker compose up -d --build` 构建镜像。
+1. 让云服务器能够访问配置的 Debian 镜像源和 PyPI 镜像，直接在服务器上 `docker compose up -d --build` 构建镜像。
 2. 不要把本机 Windows Chrome 复制进容器；Windows 版 Chrome 不能在 Linux 云服务器容器里运行。
 3. cookie 会保存在 `runtime/`，`docker-compose.yml` 已把宿主机 `./runtime` 挂载到容器内 `/app/runtime`，容器重建后 cookie 不会丢。
 4. 如果自动登录遇到滑块验证码失败，在前端或接口写入手动 cookie。接口是 `POST /cookie/update`，请求体传浏览器导出的 cookie JSON 数组。
-5. 如果服务器无法访问 Debian 官方 apt 源，优先配置服务器出网、代理或可用镜像源，再重新构建镜像。
+5. 如果服务器无法访问配置的镜像源，可在 `.env` 中切换 `DEBIAN_MIRROR`、`PIP_INDEX_URL` 或 `PYTHON_BASE_IMAGE`，再重新构建镜像。
 
 ## 常用环境变量
 
