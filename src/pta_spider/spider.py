@@ -1676,6 +1676,55 @@ class PTAClient:
         sample = ", ".join(str(x) for x in seen[:5])
         raise TimeoutError(f"PTA user-group answer export timed out: {expected_title}; seen: {sample}")
 
+    def export_group_answer_sheets_with_retry(
+        self,
+        group_id: str | None = None,
+        group_name: str | None = None,
+        crawl_dir: Path | None = None,
+    ) -> object:
+        """Create a fresh group-answer export for every retry attempt.
+
+        PTA returns a short-lived COS URL for the export. A failed download must
+        therefore create a new export task instead of retrying the stale URL.
+        """
+        retryable_statuses = {404, 408, 429, 500, 502, 503, 504}
+        attempts = max(1, EXPORT_RETRY_ROUNDS + 1)
+        last_error: Exception | None = None
+
+        for attempt in range(1, attempts + 1):
+            if attempt > 1 and EXPORT_RETRY_DELAY_SECONDS > 0:
+                delay = EXPORT_RETRY_DELAY_SECONDS
+                print(
+                    f"  用户组答卷导出将在 {delay}s 后重新创建任务 "
+                    f"({attempt}/{attempts})"
+                )
+                time.sleep(delay)
+
+            try:
+                # This call creates a new PTA export task and obtains a new
+                # signed COS URL on every attempt.
+                return self.export_group_answer_sheets(
+                    group_id=group_id,
+                    group_name=group_name,
+                    crawl_dir=crawl_dir,
+                )
+            except Exception as exc:
+                last_error = exc
+                response = getattr(exc, "response", None)
+                status_code = getattr(response, "status_code", None)
+                if status_code is None:
+                    match = re.search(r"\b(\d{3})\b", str(exc))
+                    status_code = int(match.group(1)) if match else None
+                retryable = status_code in retryable_statuses
+                if not retryable or attempt >= attempts:
+                    raise
+                print(
+                    f"  用户组答卷导出第 {attempt} 次失败 "
+                    f"(HTTP {status_code or 'unknown'}): {exc}"
+                )
+
+        raise last_error or RuntimeError("group answer export failed")
+
     def export_group_answer_sheets(self, group_id=None, group_name=None, crawl_dir=None):
         group_id, group_name = self._resolve_user_group_id(group_id, group_name)
         if not group_id:
@@ -1778,7 +1827,7 @@ class PTAClient:
 
         if completed_sets:
             try:
-                self.export_group_answer_sheets(group_id=group_id, group_name=group_name)
+                self.export_group_answer_sheets_with_retry(group_id=group_id, group_name=group_name)
                 for ps in completed_sets:
                     self.history.mark_crawled(ps.get("id", ""), ps.get("name", ""))
             except Exception as e:
@@ -2053,7 +2102,7 @@ class PTAClient:
         refreshed = len(refreshed_sets)
         if refreshed_sets:
             try:
-                self.export_group_answer_sheets(group_id=group_id, group_name=group_name)
+                self.export_group_answer_sheets_with_retry(group_id=group_id, group_name=group_name)
                 for ps in refreshed_sets:
                     self.history.mark_export_refreshed(ps.get("id", ""))
             except Exception as e:

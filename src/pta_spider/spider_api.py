@@ -455,6 +455,7 @@ class TaskInfo:
         self.started_at = None
         self.finished_at = None
         self.error = None
+        self.warnings = []
         self.new_sets_count = 0
         self.refreshed_count = 0
         self.submissions_count = 0
@@ -476,6 +477,7 @@ class TaskInfo:
             "headless": self.headless,
             "created_at": self.created_at, "started_at": self.started_at,
             "finished_at": self.finished_at, "error": self.error,
+            "warnings": self.warnings,
             "new_sets_count": self.new_sets_count,
             "refreshed_count": self.refreshed_count,
             "submissions_count": self.submissions_count,
@@ -650,6 +652,41 @@ async def _worker():
             await loop.run_in_executor(None, _run_crawl, task)
         q.task_done()
         _cleanup_old_tasks()
+
+
+def _summarize_group_answer_error(exc: Exception) -> str:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    detail = re.sub(r"https?://\S+", "<signed-url>", str(exc)).strip()
+    if len(detail) > 300:
+        detail = detail[:297] + "..."
+    if status_code and not re.search(r"\b\d{3}\b", detail):
+        return f"HTTP {status_code}: {detail}"
+    return detail or (f"HTTP {status_code}" if status_code else "unknown error")
+
+
+def _export_group_answer_or_warn(
+    client: PTAClient,
+    task: TaskInfo,
+    crawl_dir: Path,
+) -> str | None:
+    """Export group answers without blocking core data sync by default."""
+    try:
+        client.export_group_answer_sheets_with_retry(
+            group_id=task.group_id,
+            group_name=task.group_name,
+            crawl_dir=crawl_dir,
+        )
+        return None
+    except Exception as exc:
+        detail = _summarize_group_answer_error(exc)
+        message = f"group answer export: {detail}"
+        if _env_bool("PTA_GROUP_ANSWER_EXPORT_REQUIRED", False):
+            print(f"{message} (required; task will fail)")
+            raise
+        warning = "用户组答卷导出失败，已继续同步成绩单和得分代码：" + detail
+        print(f"{message} (warning; continuing core sync)")
+        return warning
 
 
 def _run_crawl(task):
@@ -838,19 +875,21 @@ def _run_crawl(task):
 
         if needs_group_answer_export and not crawl_errors:
             try:
-                client.export_group_answer_sheets(
-                    group_id=task.group_id,
-                    group_name=task.group_name,
-                    crawl_dir=task_crawl_dir,
+                warning = _export_group_answer_or_warn(
+                    client, task, task_crawl_dir
                 )
-                for ps in completed_content_sets:
-                    client.history.mark_crawled(ps.get("id", ""), ps.get("name", ""))
-            except Exception as e:
-                print(f"group answer export failed: {e}")
-                crawl_errors.append(f"group answer export: {e}")
+                if warning:
+                    task.warnings.append(warning)
+            except Exception as exc:
+                crawl_errors.append(
+                    "group answer export: " + _summarize_group_answer_error(exc)
+                )
 
         if crawl_errors:
             raise RuntimeError("; ".join(crawl_errors[:5]))
+
+        for ps in completed_content_sets:
+            client.history.mark_crawled(ps.get("id", ""), ps.get("name", ""))
 
         if not task_crawl_dir or not any(p.is_dir() for p in task_crawl_dir.iterdir()):
             raise RuntimeError("no PTA data was downloaded for this task")

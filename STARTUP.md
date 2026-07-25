@@ -51,3 +51,16 @@ curl http://127.0.0.1:8100/health
 - 如果服务器网络访问 Debian 源失败，优先配置服务器出网、代理或可用镜像源，再重新 `docker compose build`。
 - `docker-compose.yml` 已把 `./runtime` 挂载到容器内 `/app/runtime`，cookie、手动 cookie 和 Selenium 运行缓存会保留，容器重建后不会丢。
 - 如果 PTA 自动登录遇到滑块验证码失败，在前端或接口写入手动 cookie：`POST /cookie/update`，请求体传浏览器导出的 cookie JSON 数组。
+- 用户组答卷导出遇到 COS `404` 时会重新创建导出任务并重试；默认重试仍失败会记录警告并继续同步成绩单、提交记录和得分代码。若必须要求答题卡完整，可设置 `PTA_GROUP_ANSWER_EXPORT_REQUIRED=true`。
+
+## 更新容器并验收
+
+代码更新后只替换爬虫容器即可，以下命令不会删除已挂载的 `runtime` 和 `output` 数据：
+
+```bash
+docker compose build pta-spider
+docker compose up -d --force-recreate pta-spider
+docker compose logs -f pta-spider
+```
+
+确认健康检查正常后，在教师端选择对应班级并开启“强制同步”执行一次任务。完成后任务应显示“完成（部分数据缺失）”或“完成”；若答题卡导出仍失败，警告中会明确说明，成绩单、提交记录和得分代码仍应继续入库。
