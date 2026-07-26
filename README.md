@@ -158,17 +158,19 @@ SPIDER_CORS_ALLOW_ORIGINS=*
 COOLDOWN_SUBMISSIONS=86400
 COOLDOWN_EXPORTS=86400
 # 爬取吞吐（激进默认；遇 429 可自行下调）
-PTA_API_RATE_LIMIT_PER_MINUTE=60
-PTA_API_RATE_LIMIT_MIN=10
-PTA_DETAIL_MAX_WORKERS=12
-PTA_PROBLEM_SET_MAX_WORKERS=3
+PTA_API_RATE_LIMIT_PER_MINUTE=30
+PTA_API_RATE_LIMIT_MIN=8
+PTA_DETAIL_MAX_WORKERS=4
+PTA_PROBLEM_SET_MAX_WORKERS=2
 PTA_EXPORT_POLL_INTERVAL_SECONDS=1.0
 PTA_EXPORT_CREATE_DELAY_SECONDS=0.5
 PTA_EXPORT_BETWEEN_DELAY_SECONDS=0.5
 PTA_EXPORT_PARALLEL=true
 PTA_EXPORT_RETRY_ROUNDS=2
 PTA_EXPORT_RETRY_DELAY_SECONDS=20
-PTA_GROUP_ANSWER_EXPORT_REQUIRED=false
+PTA_GROUP_ANSWER_EXPORT_REQUIRED=true
+PTA_CALLBACK_RETRY_INTERVAL_SECONDS=30
+PTA_IMPORT_JOB_STALE_HOURS=6
 DB_HOST=host.docker.internal
 DB_PORT=3306
 DB_NAME=ptadatabase
@@ -180,7 +182,7 @@ DB_PASSWORD=
 
 默认已开启较激进的吞吐配置：
 
-- **自适应 API 限流**：稳态目标 60 次/分钟；遇到 429 自动降半到 `PTA_API_RATE_LIMIT_MIN`，连续成功后再缓慢回升。
+- **自适应 API 限流**：稳态目标 30 次/分钟；遇到 429 自动降半到 `PTA_API_RATE_LIMIT_MIN`，连续成功后再缓慢回升。
 - **题集并行**：同一任务内最多 `PTA_PROBLEM_SET_MAX_WORKERS` 个题目集并行处理内容/提交/导出。
 - **导出并行**：同题集内成绩单与得分代码可并行（`PTA_EXPORT_PARALLEL=true`），轮询间隔可配置。
 
@@ -196,9 +198,11 @@ PTA_EXPORT_CREATE_DELAY_SECONDS=3
 
 用户组答卷导出说明：
 
+- 题目与提交仅采集 PTA `PROGRAMMING` 编程题；代码填空、选择、判断、填空和主观题不进入爬取结果或数据库。
 - 用户组答卷下载使用独立的 PTA 导出任务和临时 COS URL；下载遇到 404、429 或 5xx 时会重新创建导出任务并重试。
-- 默认 `PTA_GROUP_ANSWER_EXPORT_REQUIRED=false`。重试仍失败时，服务会记录警告并继续同步成绩单、提交记录和得分代码；答题卡相关证据可能缺失。
-- 如果业务要求答题卡必须完整导出，可设置 `PTA_GROUP_ANSWER_EXPORT_REQUIRED=true`，此时重试失败会使整个同步任务失败。
+- 有提交记录时默认要求答题卡完整导出；重试仍失败会使任务失败，避免数据库在证据缺失时仍显示同步成功。无提交记录时只记录警告。
+- 如需临时只同步成绩单、提交记录和得分代码，可设置 `PTA_GROUP_ANSWER_EXPORT_REQUIRED=false`。
+- 后端回调失败会写入 `runtime/backend_callback_outbox.json` 并后台补发；新同步还会自动关闭超过 `PTA_IMPORT_JOB_STALE_HOURS` 的遗留 `RUNNING` 导入任务。
 
 ## 注意事项
 

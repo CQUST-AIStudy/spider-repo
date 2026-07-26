@@ -29,12 +29,23 @@ import re
 
 from .spider import PTAClient, CrawlHistory, RUNTIME_DIR, PROBLEM_SET_MAX_WORKERS
 from . import sync_to_db as legacy_sync
-from .sync_to_unified_db import class_id_exists, resolve_class_id_for_roster, run_configured_sync
+from .sync_to_unified_db import (
+    _problem_content_is_valid,
+    class_id_exists,
+    resolve_class_id_for_roster,
+    run_configured_sync,
+    validate_class_id_for_roster,
+)
 
 app = FastAPI(title="PTA Spider API", version="2.0.0")
 JAVA_BACKEND_URL = os.getenv("JAVA_BACKEND_URL", "http://127.0.0.1:8081")
 COOLDOWN_SUBMISSIONS = int(os.getenv("COOLDOWN_SUBMISSIONS", str(24 * 3600)))
 COOLDOWN_EXPORTS = int(os.getenv("COOLDOWN_EXPORTS", str(24 * 3600)))
+CALLBACK_OUTBOX_FILE = RUNTIME_DIR / "backend_callback_outbox.json"
+CALLBACK_RETRY_INTERVAL_SECONDS = max(
+    5, int(os.getenv("PTA_CALLBACK_RETRY_INTERVAL_SECONDS", "30"))
+)
+_callback_outbox_lock = threading.RLock()
 _cors_origins_raw = os.getenv("SPIDER_CORS_ALLOW_ORIGINS", "*").strip()
 if _cors_origins_raw == "*":
     _cors_origins = ["*"]
@@ -229,6 +240,45 @@ def _database_has_experiment_data(problem_set, class_id=None):
     try:
         conn = legacy_sync.get_db()
         with conn.cursor() as cursor:
+            def offering_has_complete_problem_details(offering_id):
+                cursor.execute(
+                    """
+                    SELECT
+                      COALESCE(NULLIF(TRIM(apd.content), ''), ap.statement_md) AS content,
+                      apd.image_urls_json
+                    FROM assignment_problem ap
+                    JOIN assignment_offering ao ON ao.id = ap.offering_id
+                    LEFT JOIN pta_problem_detail apd
+                      ON apd.problem_set_id = ao.pta_problem_set_id
+                     AND apd.problem_set_problem_id = ap.source_problem_id
+                    WHERE ap.offering_id = %s
+                      AND ap.status = 'ACTIVE'
+                    """,
+                    (offering_id,),
+                )
+                rows = cursor.fetchall()
+                if not rows:
+                    return False
+                for content, image_urls_json in rows:
+                    image_urls = []
+                    if image_urls_json:
+                        try:
+                            image_urls = (
+                                json_mod.loads(image_urls_json)
+                                if isinstance(image_urls_json, str)
+                                else image_urls_json
+                            )
+                        except Exception:
+                            image_urls = []
+                    if not _problem_content_is_valid(
+                        {
+                            "content": content,
+                            "image_urls": image_urls,
+                        }
+                    ):
+                        return False
+                return True
+
             source_keys = _pta_offering_source_keys(problem_set, class_id)
             placeholders = ", ".join(["%s"] * len(source_keys))
             params = ["PTA", *source_keys]
@@ -248,14 +298,8 @@ def _database_has_experiment_data(problem_set, class_id=None):
                 tuple(params),
             )
             offering_row = cursor.fetchone()
-            if offering_row:
-                cursor.execute(
-                    "SELECT COUNT(*) FROM student_problem_attempt WHERE offering_id = %s",
-                    (offering_row[0],),
-                )
-                attempt_row = cursor.fetchone()
-                if attempt_row and int(attempt_row[0] or 0) > 0:
-                    return True
+            if offering_row and offering_has_complete_problem_details(offering_row[0]):
+                return True
 
             cursor.execute("SELECT experiment_id FROM experiment WHERE name = %s LIMIT 1", (name,))
             row = cursor.fetchone()
@@ -285,30 +329,7 @@ def _database_has_experiment_data(problem_set, class_id=None):
                     )
                     offering_row = cursor.fetchone()
                     if offering_row:
-                        cursor.execute(
-                            "SELECT COUNT(*) FROM student_problem_attempt WHERE offering_id = %s",
-                            (offering_row[0],),
-                        )
-                        attempt_row = cursor.fetchone()
-                        has_data = bool(attempt_row and int(attempt_row[0] or 0) > 0)
-                except Exception:
-                    pass
-
-            if not has_data and class_id is not None:
-                try:
-                    cursor.execute(
-                        """
-                        SELECT COUNT(*)
-                        FROM import_job
-                        WHERE source_system = 'PTA'
-                          AND class_id = %s
-                          AND status = 'SUCCEEDED'
-                          AND JSON_UNQUOTE(JSON_EXTRACT(summary_json, '$.experiment')) = %s
-                        """,
-                        (class_id, name),
-                    )
-                    import_row = cursor.fetchone()
-                    has_data = bool(import_row and int(import_row[0] or 0) > 0)
+                        has_data = offering_has_complete_problem_details(offering_row[0])
                 except Exception:
                     pass
     except Exception as exc:
@@ -510,9 +531,51 @@ def _keyword_in_queue(keyword, mode, class_id=None, group_id=None, problem_set_i
             return t
     return None
 
-def _notify_java(class_id, status, task_id=None):
+def _load_callback_outbox():
+    with _callback_outbox_lock:
+        if not CALLBACK_OUTBOX_FILE.exists():
+            return []
+        try:
+            with open(CALLBACK_OUTBOX_FILE, "r", encoding="utf-8") as f:
+                payload = json_mod.load(f)
+            return payload if isinstance(payload, list) else []
+        except Exception as exc:
+            print(f"  callback outbox load failed: {exc}")
+            return []
+
+
+def _save_callback_outbox(items):
+    with _callback_outbox_lock:
+        CALLBACK_OUTBOX_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temp_file = CALLBACK_OUTBOX_FILE.with_suffix(".tmp")
+        with open(temp_file, "w", encoding="utf-8") as f:
+            json_mod.dump(items, f, ensure_ascii=False, indent=2)
+        temp_file.replace(CALLBACK_OUTBOX_FILE)
+
+
+def _enqueue_java_callback(class_id, status, task_id=None):
+    item = {
+        "class_id": class_id,
+        "status": status,
+        "task_id": task_id,
+        "updated_at": datetime.now().isoformat(),
+    }
+    with _callback_outbox_lock:
+        items = _load_callback_outbox()
+        key = (class_id, task_id)
+        items = [
+            existing
+            for existing in items
+            if (existing.get("class_id"), existing.get("task_id")) != key
+        ]
+        items.append(item)
+        _save_callback_outbox(items)
+    print(f"  callback queued for retry: class_id={class_id}, status={status}")
+
+
+def _send_java_callback(class_id, status, task_id=None):
     if class_id is None:
-        return
+        return True
     try:
         payload = {"status": status}
         if task_id:
@@ -524,18 +587,78 @@ def _notify_java(class_id, status, task_id=None):
             )
             resp.raise_for_status()
             print(f"callback ok: class_id={class_id}, status={status}, code={resp.status_code}")
+            return True
     except Exception as e:
         print(f"  callback failed: {e}")
+        return False
+
+
+def _notify_java(class_id, status, task_id=None):
+    if not _send_java_callback(class_id, status, task_id):
+        _enqueue_java_callback(class_id, status, task_id)
+        return False
+    return True
+
+
+def _drain_callback_outbox():
+    with _callback_outbox_lock:
+        items = _load_callback_outbox()
+        if not items:
+            return 0
+        remaining = []
+        delivered = 0
+        for item in items:
+            if _send_java_callback(
+                item.get("class_id"), item.get("status"), item.get("task_id")
+            ):
+                delivered += 1
+            else:
+                remaining.append(item)
+        _save_callback_outbox(remaining)
+        return delivered
+
+
+async def _callback_retry_worker():
+    while True:
+        try:
+            await asyncio.to_thread(_drain_callback_outbox)
+        except Exception as exc:
+            print(f"  callback retry worker failed: {exc}")
+        await asyncio.sleep(CALLBACK_RETRY_INTERVAL_SECONDS)
 
 
 def _write_submissions_csv(client, problem_set, submissions):
     base_dir = client._problem_set_dir(problem_set.get("name", ""))
+    client.write_submission_crawl_status(problem_set.get("id", ""), base_dir)
+    status = getattr(client, "_submission_crawl_status", {}).get(
+        str(problem_set.get("id", "")),
+        {},
+    )
+    if status.get("complete") is not True:
+        raise RuntimeError(
+            f"submission crawl is incomplete for {problem_set.get('name', '')}: "
+            f"{len(status.get('incomplete_user_ids') or [])} user(s) hit the PTA limit"
+        )
     with open(base_dir / "提交记录.csv", "w", encoding="utf-8", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["用户ID", "题目ID", "状态", "分数", "编译器", "用时", "内存", "提交时间"])
+        w.writerow(
+            [
+                "提交ID",
+                "用户ID",
+                "题目ID",
+                "题型",
+                "状态",
+                "分数",
+                "编译器",
+                "用时",
+                "内存",
+                "提交时间",
+            ]
+        )
         for s in submissions:
             w.writerow([
-                s.get("userId", ""), s.get("problemSetProblemId", ""),
+                s.get("id", ""), s.get("userId", ""),
+                s.get("problemSetProblemId", ""), s.get("problemType", ""),
                 s.get("status", ""), s.get("score", ""), s.get("compiler", ""),
                 s.get("time", ""), s.get("memory", ""), s.get("submitAt", "")
             ])
@@ -670,7 +793,7 @@ def _export_group_answer_or_warn(
     task: TaskInfo,
     crawl_dir: Path,
 ) -> str | None:
-    """Export group answers without blocking core data sync by default."""
+    """Export group answers and require them when the crawl found submissions."""
     try:
         client.export_group_answer_sheets_with_retry(
             group_id=task.group_id,
@@ -681,7 +804,8 @@ def _export_group_answer_or_warn(
     except Exception as exc:
         detail = _summarize_group_answer_error(exc)
         message = f"group answer export: {detail}"
-        if _env_bool("PTA_GROUP_ANSWER_EXPORT_REQUIRED", False):
+        required_by_default = int(getattr(task, "submissions_count", 0) or 0) > 0
+        if _env_bool("PTA_GROUP_ANSWER_EXPORT_REQUIRED", required_by_default):
             print(f"{message} (required; task will fail)")
             raise
         warning = "用户组答卷导出失败，已继续同步成绩单和得分代码：" + detail
@@ -725,6 +849,8 @@ def _run_crawl(task):
                 )
         elif not class_id_exists(task.class_id):
             raise RuntimeError(f"teaching_class not found for class_id={task.class_id}")
+        else:
+            validate_class_id_for_roster(task.class_id, roster_payload)
 
         mode = task.mode
         all_sets = None
@@ -732,13 +858,14 @@ def _run_crawl(task):
         crawl_errors = []
         needs_group_answer_export = False
         completed_content_sets = []
+        touched_problem_set_names = set()
 
         phase_t0 = time.time()
 
         if mode in (CrawlMode.INCREMENTAL, CrawlMode.FULL):
             all_sets = _resolve_problem_sets(client, task)
             if all_sets:
-                new_sets = client.get_sets_requiring_content(all_sets)
+                new_sets = all_sets if task.force else client.get_sets_requiring_content(all_sets)
                 task.new_sets_count = len(new_sets)
                 content_t0 = time.time()
 
@@ -754,8 +881,12 @@ def _run_crawl(task):
                         )
                         return ("skip", reason, ps)
                     client._write_problem_set_info(ps["id"], ps.get("name", ""), ps)
-                    client._crawl_one_problem_set(ps["id"], ps.get("name", ""), export_answer_sheet=False)
-                    return ("ok", None, ps)
+                    crawl_summary = client._crawl_one_problem_set(
+                        ps["id"],
+                        ps.get("name", ""),
+                        export_answer_sheet=False,
+                    )
+                    return ("ok", crawl_summary, ps)
 
                 content_results = _map_problem_sets_parallel(
                     new_sets, _content_one, label="content"
@@ -766,7 +897,9 @@ def _run_crawl(task):
                         client.history.mark_crawled(ps["id"], ps.get("name", ""))
                     elif status == "ok":
                         completed_content_sets.append(ps)
+                        touched_problem_set_names.add(_problem_set_name(ps))
                         content_crawled_ids.add(ps.get("id", ""))
+                        task.submissions_count += int((payload or {}).get("submission_count") or 0)
                         needs_group_answer_export = True
                         _mark_problem_set_refreshed(ps, "submissions")
                         _mark_problem_set_refreshed(ps, "exports")
@@ -808,6 +941,11 @@ def _run_crawl(task):
                 if subs:
                     _write_submissions_csv(client, ps, subs)
                     count = len(subs)
+                else:
+                    client.write_submission_crawl_status(
+                        ps["id"],
+                        client._problem_set_dir(ps.get("name", "")),
+                    )
                 return ("ok", count, ps)
 
             sub_results = _map_problem_sets_parallel(
@@ -816,11 +954,12 @@ def _run_crawl(task):
             for status, payload, ps in sub_results:
                 if status == "ok":
                     total_subs += int(payload or 0)
+                    touched_problem_set_names.add(_problem_set_name(ps))
                     _mark_problem_set_refreshed(ps, "submissions")
                 else:
                     print(f"pull submissions failed {ps.get('name', '')}: {payload}")
                     crawl_errors.append(f"{ps.get('name', '')} submissions: {payload}")
-            task.submissions_count = total_subs
+            task.submissions_count += total_subs
             print(f"[timing] submissions phase: {time.time() - sub_t0:.1f}s "
                   f"({len(sub_candidates)} sets, {total_subs} rows)")
 
@@ -859,6 +998,7 @@ def _run_crawl(task):
             refreshed = 0
             for status, payload, ps in export_results:
                 if status == "ok":
+                    touched_problem_set_names.add(_problem_set_name(ps))
                     client.history.mark_export_refreshed(ps.get("id", ""))
                     _mark_problem_set_refreshed(ps, "exports")
                     needs_group_answer_export = True
@@ -894,10 +1034,18 @@ def _run_crawl(task):
         if not task_crawl_dir or not any(p.is_dir() for p in task_crawl_dir.iterdir()):
             raise RuntimeError("no PTA data was downloaded for this task")
 
-        print("syncing to database...")
-        report = run_configured_sync(crawl_dir=task_crawl_dir, strict=True, class_id=task.class_id)
-        if not report.get("ok"):
-            raise RuntimeError(report.get("error") or "database sync failed")
+        if touched_problem_set_names:
+            print("syncing to database...")
+            report = run_configured_sync(
+                crawl_dir=task_crawl_dir,
+                strict=True,
+                class_id=task.class_id,
+                experiment_names=sorted(touched_problem_set_names),
+            )
+            if not report.get("ok"):
+                raise RuntimeError(report.get("error") or "database sync failed")
+        else:
+            print("no refreshed problem sets; database synchronization skipped")
 
         task.status = TaskStatus.SUCCESS
         task.finished_at = datetime.now().isoformat()
@@ -919,6 +1067,7 @@ async def startup():
     global _worker_started
     if not _worker_started:
         asyncio.create_task(_worker())
+        asyncio.create_task(_callback_retry_worker())
         _worker_started = True
 
 @app.get("/health")

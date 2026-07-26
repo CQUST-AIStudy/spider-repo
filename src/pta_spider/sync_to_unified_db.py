@@ -1,7 +1,9 @@
 import csv
 import hashlib
+import html
 import json
 import os
+import re
 import time
 import traceback
 import zipfile
@@ -21,6 +23,18 @@ PTA_EXPORT_DIR = "导出"
 PTA_SOURCE_SYSTEM = "PTA"
 LEGACY_SOURCE_SYSTEM = "LEGACY_TAP"
 PTA_USER_GROUP_ROSTER_FILE = "_pta_user_group_roster.json"
+PROBLEM_CRAWL_STATUS_FILE = "problem_crawl_status.json"
+SUBMISSION_CRAWL_STATUS_FILE = "submission_crawl_status.json"
+SUPPORTED_PROBLEM_TYPES = {"PROGRAMMING"}
+EXPERIMENT_SOURCE_ROLES = (
+    "PROBLEM_SET_INFO",
+    "PROBLEM_CONTENT",
+    "PROBLEM_DETAILS",
+    "SUBMISSIONS",
+    "PAPER_TRANSCRIPT",
+    "ANSWER_SHEET",
+    "SCORED_CODE",
+)
 
 
 def _log_sync_stage(message: str, **fields):
@@ -87,6 +101,36 @@ def _read_problem_set_info(exp_dir: Path):
     return {}
 
 
+def _discover_experiment_source_paths(exp_dir: Path):
+    """Return the source files that are actually present for one experiment."""
+    files = {}
+    for relative_name, role in (
+        ("题目集信息.json", "PROBLEM_SET_INFO"),
+        ("problem_set_info.json", "PROBLEM_SET_INFO"),
+        ("题目内容.txt", "PROBLEM_CONTENT"),
+        ("题目详情.json", "PROBLEM_DETAILS"),
+        ("提交记录.csv", "SUBMISSIONS"),
+    ):
+        path = exp_dir / relative_name
+        if path.exists() and role not in files:
+            files[role] = path
+
+    export_dir = exp_dir / PTA_EXPORT_DIR
+    if export_dir.exists():
+        for pattern, role in (
+            ("*PAPER_TRANSCRIPT*.xlsx", "PAPER_TRANSCRIPT"),
+            ("*ANSWER_SHEET*.zip", "ANSWER_SHEET"),
+            ("*SCORED_CODE*.zip", "SCORED_CODE"),
+        ):
+            matched = sorted(export_dir.glob(pattern))
+            if matched:
+                files[role] = max(
+                    matched,
+                    key=lambda path: (path.stat().st_mtime_ns, path.name),
+                )
+    return files
+
+
 def _read_problem_detail_rows(json_path: Path):
     if not json_path or not json_path.exists():
         return []
@@ -100,6 +144,173 @@ def _read_problem_detail_rows(json_path: Path):
     if not isinstance(data, list):
         return []
     return [item for item in data if isinstance(item, dict)]
+
+
+def _read_json_object(path: Path, label: str):
+    if not path.exists():
+        raise RuntimeError(f"{label} is missing: {path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"{label} is not valid JSON: {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise RuntimeError(f"{label} must be a JSON object: {path}")
+    return data
+
+
+def _visible_problem_content_text(content):
+    if not isinstance(content, str):
+        return ""
+    text = html.unescape(content).replace("\ufeff", "").replace("\u200b", "")
+    text = re.sub(
+        r"<(?:script|style)\b[^>]*>.*?</(?:script|style)>",
+        " ",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"!\[[^\]]*\]\([^)]+\)", " image ", text)
+    text = re.sub(r"[\s#>*_`~=\-]+", "", text)
+    return text.strip().lower()
+
+
+def _problem_content_is_valid(row):
+    content = row.get("content_md") or row.get("content_html") or row.get("content") or ""
+    if not str(content).strip():
+        return False
+    if (row.get("image_urls") or row.get("imageUrls")) and not _visible_problem_content_text(content):
+        return True
+    visible = _visible_problem_content_text(content)
+    if not visible:
+        return False
+    placeholders = (
+        "这是一个编程题模板",
+        "这是一个程序设计题模板",
+        "这是一个代码填空题模板",
+        "请在这里写题目描述",
+        "请在此处填写题目描述",
+        "thisisaprogrammingproblemtemplate",
+        "pleasewritetheproblemdescriptionhere",
+    )
+    return not any(visible.startswith(item.replace(" ", "").lower()) for item in placeholders)
+
+
+def _normalize_submission_problem_id(problem_id, problem_type):
+    problem_id = str(problem_id or "").strip()
+    problem_type = str(problem_type or "").strip().upper()
+    if problem_id == "0" and problem_type in {
+        "MULTIPLE_CHOICE",
+        "SINGLE_CHOICE",
+        "MULTI_CHOICE",
+    }:
+        return f"{problem_type}:0"
+    return problem_id
+
+
+def _validate_experiment_snapshot(
+    exp_dir: Path,
+    source_paths,
+    problem_detail_rows,
+    submission_rows,
+    expected_group_member_count=None,
+):
+    allow_unverified = _flag("PTA_ALLOW_LEGACY_UNVERIFIED_IMPORT", False)
+    problem_set_info = _read_problem_set_info(exp_dir)
+    expected_problem_set_id = str(
+        _first_value(problem_set_info, "id", "problemSetId", "problem_set_id") or ""
+    ).strip()
+    if source_paths and not expected_problem_set_id:
+        raise RuntimeError(f"stable problem-set metadata is required: {exp_dir}")
+
+    if "PROBLEM_DETAILS" in source_paths:
+        status_path = exp_dir / PROBLEM_CRAWL_STATUS_FILE
+        if status_path.exists():
+            status = _read_json_object(status_path, "problem crawl status")
+            status_problem_set_id = str(status.get("problem_set_id") or "").strip()
+            if status_problem_set_id and status_problem_set_id != expected_problem_set_id:
+                raise RuntimeError(
+                    f"problem crawl status belongs to {status_problem_set_id}, "
+                    f"expected {expected_problem_set_id}"
+                )
+            if status.get("complete") is not True:
+                raise RuntimeError(f"problem crawl is incomplete: {status_path}")
+            if status.get("failed_problem_ids") or status.get("invalid_content_problem_ids"):
+                raise RuntimeError(f"problem crawl contains failed problem details: {status_path}")
+            detail_count = _safe_int(status.get("detail_problem_count"))
+            if detail_count is not None and detail_count != len(problem_detail_rows):
+                raise RuntimeError(
+                    f"problem detail count mismatch for {exp_dir.name}: "
+                    f"status={detail_count}, file={len(problem_detail_rows)}"
+                )
+        elif not allow_unverified:
+            raise RuntimeError(f"problem crawl status is required: {status_path}")
+
+        seen_problem_ids = set()
+        for row in problem_detail_rows:
+            problem_id = str(row.get("problem_set_problem_id") or row.get("id") or "").strip()
+            if not problem_id:
+                raise RuntimeError(f"problem detail without problem_set_problem_id: {exp_dir.name}")
+            if problem_id in seen_problem_ids:
+                raise RuntimeError(f"duplicate problem detail id {problem_id}: {exp_dir.name}")
+            seen_problem_ids.add(problem_id)
+            row_problem_set_id = str(row.get("problem_set_id") or "").strip()
+            if row_problem_set_id != expected_problem_set_id:
+                raise RuntimeError(
+                    f"problem detail {problem_id} belongs to problem set "
+                    f"{row_problem_set_id or '<missing>'}, expected {expected_problem_set_id}"
+                )
+            if not _problem_content_is_valid(row):
+                raise RuntimeError(f"problem detail {problem_id} has empty/template content")
+
+    if "SUBMISSIONS" in source_paths:
+        status_path = exp_dir / SUBMISSION_CRAWL_STATUS_FILE
+        if status_path.exists():
+            status = _read_json_object(status_path, "submission crawl status")
+            status_problem_set_id = str(status.get("problem_set_id") or "").strip()
+            if status_problem_set_id and status_problem_set_id != expected_problem_set_id:
+                raise RuntimeError(
+                    f"submission crawl status belongs to {status_problem_set_id}, "
+                    f"expected {expected_problem_set_id}"
+                )
+            if status.get("complete") is not True or status.get("incomplete_user_ids"):
+                raise RuntimeError(f"submission crawl is incomplete: {status_path}")
+            if status.get("scope") != "PTA_USER_GROUP_MEMBERS":
+                raise RuntimeError(
+                    f"submission crawl is not user-group scoped: {status_path}"
+                )
+            queried_user_count = _safe_int(status.get("queried_user_count"))
+            if (
+                expected_group_member_count is not None
+                and queried_user_count != expected_group_member_count
+            ):
+                raise RuntimeError(
+                    f"submission crawl member count mismatch for {exp_dir.name}: "
+                    f"queried={queried_user_count}, roster={expected_group_member_count}"
+                )
+            status_rows = _safe_int(status.get("rows"))
+            if status_rows is not None and status_rows != len(submission_rows):
+                raise RuntimeError(
+                    f"submission row count mismatch for {exp_dir.name}: "
+                    f"status={status_rows}, file={len(submission_rows)}"
+                )
+        elif not allow_unverified:
+            raise RuntimeError(f"submission crawl status is required: {status_path}")
+        submission_ids = []
+        for row in submission_rows:
+            submission_id = str(row.get("pta_submission_id") or "").strip()
+            if not submission_id:
+                raise RuntimeError(
+                    f"submission row {row.get('row_no')} has no PTA submission ID; "
+                    "re-crawl with the current crawler before importing"
+                )
+            if not str(row.get("problem_type") or "").strip():
+                raise RuntimeError(
+                    f"submission {submission_id} has no problem type; "
+                    "re-crawl with the current crawler before importing"
+                )
+            submission_ids.append(submission_id)
+        if len(set(submission_ids)) != len(submission_ids):
+            raise RuntimeError(f"duplicate PTA submission IDs in {exp_dir.name}")
 
 
 def _safe_int(value, default=None):
@@ -175,12 +386,6 @@ def _parse_pta_datetime(raw_text):
     return None
 
 
-def _fallback_submitted_at(row: dict) -> datetime:
-    row_no = int(row.get("row_no") or 0)
-    # Use a stable in-range timestamp when PTA export time is missing or malformed.
-    return datetime(2000, 1, 1) + timedelta(seconds=row_no)
-
-
 def _accepted_status(status_text) -> bool:
     if not status_text:
         return False
@@ -241,6 +446,9 @@ def _legacy_offering_source_keys(legacy_experiment_id: int, class_id=None):
 
 
 def _attempt_source_key(offering_id: int, row: dict, student_no: str = "") -> str:
+    submission_id = str(row.get("pta_submission_id") or "").strip()
+    if submission_id:
+        return _source_key("PTA_SUBMISSION", str(offering_id), submission_id)
     submitted_marker = (row.get("submitted_at_text") or "").strip()
     if submitted_marker:
         parsed = _parse_pta_datetime(submitted_marker)
@@ -265,11 +473,22 @@ def _get_crawl_dir(crawl_dir=None) -> Path:
     return Path(legacy_sync.CRAWL_DIR).resolve()
 
 
-def _iter_experiment_dirs(crawl_dir: Path):
+def _iter_experiment_dirs(crawl_dir: Path, experiment_names=None):
     if not crawl_dir.exists():
         return []
+    allowed_names = (
+        {str(name) for name in experiment_names if str(name)}
+        if experiment_names is not None
+        else None
+    )
     return sorted(
-        [d for d in crawl_dir.iterdir() if d.is_dir() and not d.name.startswith("_")],
+        [
+            d
+            for d in crawl_dir.iterdir()
+            if d.is_dir()
+            and not d.name.startswith("_")
+            and (allowed_names is None or d.name in allowed_names)
+        ],
         key=lambda p: p.name,
     )
 
@@ -278,14 +497,43 @@ def _load_pta_user_group_roster(crawl_dir: Path):
     path = crawl_dir / PTA_USER_GROUP_ROSTER_FILE
     if not path.exists():
         return None
-    with path.open("r", encoding="utf-8") as f:
-        data = json.load(f)
-    if not isinstance(data, dict):
-        return None
+    data = _read_json_object(path, "PTA user-group roster")
     group = data.get("group") or {}
     members = data.get("members") or []
     if not group.get("pta_group_id") or not isinstance(members, list):
-        return None
+        raise RuntimeError(f"invalid PTA user-group roster structure: {path}")
+    if not members:
+        raise RuntimeError(f"PTA user-group roster is empty: {path}")
+    member_count = _safe_int(data.get("member_count"))
+    reported_total = _safe_int(data.get("reported_total"))
+    if member_count is not None and member_count != len(members):
+        raise RuntimeError(
+            f"PTA user-group roster count mismatch: member_count={member_count}, "
+            f"members={len(members)}"
+        )
+    if reported_total is not None and reported_total != len(members):
+        raise RuntimeError(
+            f"PTA user-group roster is incomplete: reported_total={reported_total}, "
+            f"members={len(members)}"
+        )
+    student_nos = []
+    pta_user_ids = []
+    for member in members:
+        if not isinstance(member, dict) or not _is_valid_student_identity(
+            member.get("student_no"), member.get("student_name")
+        ):
+            raise RuntimeError(f"PTA user-group roster contains an invalid member: {path}")
+        student_nos.append(str(member.get("student_no")).strip())
+        pta_user_id = str(member.get("pta_user_id") or "").strip()
+        if not pta_user_id:
+            raise RuntimeError(
+                f"PTA user-group member {member.get('student_no')} has no pta_user_id"
+            )
+        pta_user_ids.append(pta_user_id)
+    if len(set(student_nos)) != len(student_nos):
+        raise RuntimeError(f"PTA user-group roster contains duplicate student numbers: {path}")
+    if len(set(pta_user_ids)) != len(pta_user_ids):
+        raise RuntimeError(f"PTA user-group roster contains duplicate PTA user IDs: {path}")
     return data
 
 
@@ -316,6 +564,7 @@ def _resolve_class_id_from_roster(cursor, roster_payload):
             FROM teaching_class
             """
         )
+        matches = []
         for class_id, class_name, pta_keyword, stored_group_name in cursor.fetchall():
             candidates = [
                 _normalize_text(stored_group_name),
@@ -323,7 +572,13 @@ def _resolve_class_id_from_roster(cursor, roster_payload):
                 _normalize_text(class_name),
             ]
             if normalized_group_name in candidates:
-                return class_id
+                matches.append(class_id)
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise RuntimeError(
+                f"ambiguous teaching classes for PTA user group {pta_group_name!r}: {matches}"
+            )
     return None
 
 
@@ -344,6 +599,16 @@ def class_id_exists(class_id) -> bool:
     try:
         with conn.cursor() as cursor:
             return _get_class_by_id(cursor, class_id) is not None
+    finally:
+        conn.close()
+
+
+def validate_class_id_for_roster(class_id, roster_payload):
+    """Reject an explicit class id when its configured PTA group differs."""
+    conn = legacy_sync.get_db()
+    try:
+        with conn.cursor() as cursor:
+            _validate_class_group_binding(cursor, class_id, roster_payload)
     finally:
         conn.close()
 
@@ -375,6 +640,52 @@ def _get_class_by_id(cursor, class_id):
     }
 
 
+def _validate_class_group_binding(cursor, class_id, roster_payload):
+    if not roster_payload:
+        return
+    group = roster_payload.get("group") or {}
+    roster_group_id = str(group.get("pta_group_id") or "").strip()
+    roster_group_name = str(group.get("pta_group_name") or "").strip()
+    cursor.execute(
+        """
+        SELECT pta_group_id, pta_group_name, pta_keyword
+        FROM teaching_class
+        WHERE id = %s
+        LIMIT 1
+        """,
+        (class_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        raise RuntimeError(f"teaching_class {class_id} was not found")
+
+    configured_group_id = str(row[0] or "").strip()
+    configured_group_name = str(row[1] or row[2] or "").strip()
+    if not configured_group_id and not configured_group_name:
+        raise RuntimeError(
+            f"teaching_class {class_id} has no PTA user-group binding; "
+            "configure the class before importing"
+        )
+    if configured_group_id:
+        if not roster_group_id:
+            raise RuntimeError(
+                f"PTA roster has no stable group id for teaching_class {class_id}"
+            )
+        if configured_group_id != roster_group_id:
+            raise RuntimeError(
+                "PTA user-group id does not match teaching_class binding: "
+                f"class_id={class_id}, configured={configured_group_id!r}, "
+                f"roster={roster_group_id!r}"
+            )
+        return
+    if _normalize_text(configured_group_name) != _normalize_text(roster_group_name):
+        raise RuntimeError(
+            "PTA user-group name does not match teaching_class binding: "
+            f"class_id={class_id}, configured={configured_group_name!r}, "
+            f"roster={roster_group_name!r}"
+        )
+
+
 def _find_best_matching_class(cursor, experiment_name: str, class_id=None):
     explicit_class = _get_class_by_id(cursor, class_id)
     if explicit_class:
@@ -393,6 +704,7 @@ def _find_best_matching_class(cursor, experiment_name: str, class_id=None):
     )
     best = None
     best_score = None
+    tied_class_ids = []
     for class_id, teacher_id, class_name, pta_keyword in cursor.fetchall():
         candidates = []
         for raw in (pta_keyword, class_name):
@@ -417,6 +729,14 @@ def _find_best_matching_class(cursor, experiment_name: str, class_id=None):
                 "pta_keyword": pta_keyword,
             }
             best_score = score
+            tied_class_ids = [class_id]
+        elif score == best_score:
+            tied_class_ids.append(class_id)
+    if best is not None and len(tied_class_ids) > 1:
+        raise RuntimeError(
+            f"ambiguous teaching classes for experiment {experiment_name!r}: "
+            f"{tied_class_ids}"
+        )
     return best
 
 
@@ -598,8 +918,13 @@ def _read_submission_rows(csv_path: Path):
             result.append(
                 {
                     "row_no": row_no,
+                    "pta_submission_id": (row.get("提交ID") or "").strip(),
                     "pta_user_id": (row.get("用户ID") or "").strip(),
-                    "pta_problem_id": (row.get("题目ID") or "").strip(),
+                    "problem_type": (row.get("题型") or "").strip(),
+                    "pta_problem_id": _normalize_submission_problem_id(
+                        row.get("题目ID"),
+                        row.get("题型"),
+                    ),
                     "judge_status": (row.get("状态") or "").strip(),
                     "score_text": (row.get("分数") or "").strip(),
                     "compiler": (row.get("编译器") or "").strip(),
@@ -713,10 +1038,6 @@ def _ensure_student_profile(cursor, student_no: str, student_name: str):
     row = cursor.fetchone()
     student_profile_id = row[0]
     user_id = row[1]
-
-    # Auto-create tap_user account for PTA-imported students without login credentials
-    if user_id is None:
-        _ensure_tap_user_and_bind(cursor, student_profile_id, student_no, student_name)
 
     return student_profile_id
 
@@ -984,6 +1305,69 @@ def _participant_roster_scope(pta_group_context, student_no: str):
     return "GUEST_PARTICIPANT"
 
 
+def _filter_rows_to_pta_user_group(
+    pta_group_context,
+    transcript_rows,
+    submission_rows,
+    answer_sheet_rows,
+    scored_code_rows,
+):
+    """Apply an authoritative PTA user-group whitelist before any DB writes."""
+    if not pta_group_context:
+        return (
+            transcript_rows,
+            submission_rows,
+            answer_sheet_rows,
+            scored_code_rows,
+            {
+                "transcript": 0,
+                "submissions": 0,
+                "answer_sheet": 0,
+                "scored_code": 0,
+            },
+        )
+
+    active_student_nos = {
+        str(value or "").strip()
+        for value in pta_group_context.get("active_student_nos", set())
+        if str(value or "").strip()
+    }
+    active_pta_user_ids = {
+        str(value or "").strip()
+        for value in pta_group_context.get("pta_user_to_student_no", {})
+        if str(value or "").strip()
+    }
+
+    def student_rows(rows):
+        return [
+            row
+            for row in rows
+            if str(row.get("student_no") or "").strip() in active_student_nos
+        ]
+
+    filtered_transcript = student_rows(transcript_rows)
+    filtered_submissions = [
+        row
+        for row in submission_rows
+        if str(row.get("pta_user_id") or "").strip() in active_pta_user_ids
+    ]
+    filtered_answers = student_rows(answer_sheet_rows)
+    filtered_scored = student_rows(scored_code_rows)
+    removed = {
+        "transcript": len(transcript_rows) - len(filtered_transcript),
+        "submissions": len(submission_rows) - len(filtered_submissions),
+        "answer_sheet": len(answer_sheet_rows) - len(filtered_answers),
+        "scored_code": len(scored_code_rows) - len(filtered_scored),
+    }
+    return (
+        filtered_transcript,
+        filtered_submissions,
+        filtered_answers,
+        filtered_scored,
+        removed,
+    )
+
+
 def _ensure_import_job(cursor, class_id, summary=None):
     cursor.execute(
         """
@@ -993,6 +1377,29 @@ def _ensure_import_job(cursor, class_id, summary=None):
         (PTA_SOURCE_SYSTEM, "UNIFIED_SYNC", class_id, json.dumps(summary or {}, ensure_ascii=False)),
     )
     return cursor.lastrowid
+
+
+def _fail_stale_import_jobs(cursor, class_id):
+    timeout_hours = max(
+        1, int(os.getenv("PTA_IMPORT_JOB_STALE_HOURS", "6"))
+    )
+    cursor.execute(
+        f"""
+        UPDATE import_job
+        SET status = 'FAILED',
+            finished_at = CURRENT_TIMESTAMP(3),
+            error_message = COALESCE(
+                error_message,
+                'Recovered stale RUNNING PTA import job before a new sync'
+            )
+        WHERE source_system = %s
+          AND class_id = %s
+          AND status = 'RUNNING'
+          AND started_at < DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL {timeout_hours} HOUR)
+        """,
+        (PTA_SOURCE_SYSTEM, class_id),
+    )
+    return cursor.rowcount
 
 
 def _update_import_job(cursor, job_id: int, status: str, summary=None, error_message=None):
@@ -1266,6 +1673,8 @@ def _bulk_ensure_assignment_problems(cursor, offering_id: int, problem_specs, ca
             continue
         specs[pta_problem_id] = {
             "title": (spec or {}).get("title") or f"PTA Problem {pta_problem_id}",
+            "statement_md": (spec or {}).get("statement_md") or None,
+            "max_score": _safe_float((spec or {}).get("max_score"), None),
             "sort_order": int((spec or {}).get("sort_order") or 0),
         }
     if not specs:
@@ -1277,6 +1686,8 @@ def _bulk_ensure_assignment_problems(cursor, offering_id: int, problem_specs, ca
             pta_problem_id,
             pta_problem_id,
             spec["title"],
+            spec["statement_md"],
+            spec["max_score"],
             spec["sort_order"],
         )
         for pta_problem_id, spec in sorted(specs.items(), key=lambda item: item[1]["sort_order"])
@@ -1284,11 +1695,13 @@ def _bulk_ensure_assignment_problems(cursor, offering_id: int, problem_specs, ca
     cursor.executemany(
         """
         INSERT INTO assignment_problem
-          (offering_id, problem_no, source_problem_id, title, sort_order, status)
+          (offering_id, problem_no, source_problem_id, title, statement_md, max_score, sort_order, status)
         VALUES
-          (%s, %s, %s, %s, %s, 'ACTIVE')
+          (%s, %s, %s, %s, %s, %s, %s, 'ACTIVE')
         ON DUPLICATE KEY UPDATE
           title = VALUES(title),
+          statement_md = COALESCE(VALUES(statement_md), assignment_problem.statement_md),
+          max_score = COALESCE(VALUES(max_score), assignment_problem.max_score),
           sort_order = VALUES(sort_order),
           status = 'ACTIVE'
         """,
@@ -1311,10 +1724,24 @@ def _bulk_ensure_assignment_problems(cursor, offering_id: int, problem_specs, ca
     return cache
 
 
-def _bulk_upsert_pta_problem_details(cursor, legacy_experiment_id, experiment_name, problem_set_id, detail_rows):
-    if not legacy_experiment_id or not detail_rows:
+def _bulk_upsert_pta_problem_details(
+    cursor,
+    legacy_experiment_id,
+    experiment_name,
+    problem_set_id,
+    detail_rows,
+):
+    if not detail_rows:
         return 0
     if not _table_exists(cursor, "pta_problem_detail"):
+        return 0
+    supports_unified_details = _column_is_nullable(cursor, "pta_problem_detail", "experiment_id")
+    if not supports_unified_details and not legacy_experiment_id:
+        _log_sync_stage(
+            "skip legacy PTA detail copy",
+            experiment=experiment_name,
+            reason="pta_problem_detail unified-key migration is missing",
+        )
         return 0
 
     rows = []
@@ -1335,7 +1762,7 @@ def _bulk_upsert_pta_problem_details(cursor, legacy_experiment_id, experiment_na
             (
                 legacy_experiment_id,
                 experiment_name,
-                str(item.get("problem_set_id") or problem_set_id or ""),
+                str(problem_set_id or item.get("problem_set_id") or ""),
                 problem_set_problem_id,
                 str(item.get("pta_global_problem_id") or "") or None,
                 str(item.get("problem_url") or "") or None,
@@ -1360,8 +1787,7 @@ def _bulk_upsert_pta_problem_details(cursor, legacy_experiment_id, experiment_na
     if not rows:
         return 0
 
-    cursor.executemany(
-        """
+    sql = """
         INSERT INTO pta_problem_detail (
           experiment_id, experiment_name, problem_set_id,
           problem_set_problem_id, pta_global_problem_id, problem_url,
@@ -1388,7 +1814,7 @@ def _bulk_upsert_pta_problem_details(cursor, legacy_experiment_id, experiment_na
           pta_global_problem_id = VALUES(pta_global_problem_id),
           problem_url = VALUES(problem_url),
           problem_label = VALUES(problem_label),
-          title = VALUES(title),
+          title = COALESCE(NULLIF(VALUES(title), ''), pta_problem_detail.title),
           score = VALUES(score),
           problem_type = VALUES(problem_type),
           difficulty_level = VALUES(difficulty_level),
@@ -1399,13 +1825,12 @@ def _bulk_upsert_pta_problem_details(cursor, legacy_experiment_id, experiment_na
           knowledge_leaf = VALUES(knowledge_leaf),
           knowledge_point_ids = VALUES(knowledge_point_ids),
           knowledge_points_json = VALUES(knowledge_points_json),
-          content = VALUES(content),
+          content = COALESCE(NULLIF(VALUES(content), ''), pta_problem_detail.content),
           content_format = VALUES(content_format),
           image_urls_json = VALUES(image_urls_json),
           raw_json = VALUES(raw_json)
-        """,
-        rows,
-    )
+    """
+    cursor.executemany(sql, rows)
     return len(rows)
 
 
@@ -1600,6 +2025,21 @@ def _table_has_column(cursor, table_name: str, column_name: str):
     return bool(cursor.fetchone()[0])
 
 
+def _column_is_nullable(cursor, table_name: str, column_name: str):
+    cursor.execute(
+        """
+        SELECT is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = DATABASE()
+          AND table_name = %s
+          AND column_name = %s
+        """,
+        (table_name, column_name),
+    )
+    row = cursor.fetchone()
+    return bool(row and str(row[0]).upper() == "YES")
+
+
 def _table_exists(cursor, table_name: str):
     cursor.execute(
         """
@@ -1677,6 +2117,8 @@ def _prune_orphan_problem_states(cursor, offering_id: int):
          AND spa.student_id = sps.student_id
         WHERE sps.offering_id = %s
           AND spa.id IS NULL
+          AND sps.latest_code_artifact_id IS NULL
+          AND sps.latest_answer_sheet_artifact_id IS NULL
         """,
         (offering_id,),
     )
@@ -1700,19 +2142,25 @@ def _recalc_problem_state(cursor, offering_id: int):
           latest.judge_status AS latest_status,
           best.score AS best_score,
           agg.attempt_count,
-          agg.accepted_at
+          CASE
+            WHEN YEAR(agg.accepted_at) >= 1970 THEN agg.accepted_at
+            ELSE NULL
+          END AS accepted_at
         FROM (
           SELECT
             offering_id,
             problem_id,
             student_id,
             COUNT(*) AS attempt_count,
-            MIN(CASE
-              WHEN UPPER(COALESCE(judge_status, '')) IN ('AC', 'ACCEPTED', 'CORRECT', 'PASS', 'PASSED')
+            FROM_UNIXTIME(MIN(CASE
+              WHEN YEAR(submitted_at) >= 1970
+               AND (
+                 UPPER(COALESCE(judge_status, '')) IN ('AC', 'ACCEPTED', 'CORRECT', 'PASS', 'PASSED')
                 OR COALESCE(judge_status, '') IN ('答案正确')
-              THEN submitted_at
+               )
+              THEN UNIX_TIMESTAMP(submitted_at)
               ELSE NULL
-            END) AS accepted_at
+            END)) AS accepted_at
           FROM student_problem_attempt
           WHERE offering_id = %s
           GROUP BY offering_id, problem_id, student_id
@@ -1771,11 +2219,16 @@ def _recalc_student_assignment(
     student_no_to_id,
     answer_sheet_rows=None,
     scored_code_rows=None,
+    available_roles=None,
 ):
     has_evidence_columns = _table_has_column(cursor, "student_assignment", "completion_evidence")
     answer_sheet_rows = answer_sheet_rows or []
     scored_code_rows = scored_code_rows or []
     transcript_rows = transcript_rows or []
+    if available_roles is None:
+        available_roles = {"PAPER_TRANSCRIPT", "ANSWER_SHEET", "SCORED_CODE"}
+    else:
+        available_roles = set(available_roles)
 
     transcript_by_student_id = {}
     for row in transcript_rows:
@@ -1824,6 +2277,25 @@ def _recalc_student_assignment(
             """,
             transcript_values,
         )
+    if "PAPER_TRANSCRIPT" not in available_roles:
+        transcript_presence_predicate = (
+            "transcript_row_present = TRUE"
+            if has_evidence_columns
+            else "latest_total_score IS NOT NULL"
+        )
+        cursor.execute(
+            f"""
+            INSERT INTO tmp_pta_transcript_sync (student_id, total_score, ranking)
+            SELECT student_id, latest_total_score, ranking
+            FROM student_assignment
+            WHERE offering_id = %s
+              AND {transcript_presence_predicate}
+            ON DUPLICATE KEY UPDATE
+              total_score = VALUES(total_score),
+              ranking = VALUES(ranking)
+            """,
+            (offering_id,),
+        )
 
     cursor.execute("DROP TEMPORARY TABLE IF EXISTS tmp_pta_evidence_sync")
     cursor.execute(
@@ -1854,6 +2326,32 @@ def _recalc_student_assignment(
                 for student_id in evidence_student_ids
             ],
         )
+    if has_evidence_columns and "ANSWER_SHEET" not in available_roles:
+        cursor.execute(
+            """
+            INSERT INTO tmp_pta_evidence_sync (student_id, answer_sheet_count, scored_code_count)
+            SELECT student_id, answer_sheet_count, 0
+            FROM student_assignment
+            WHERE offering_id = %s
+              AND answer_sheet_count > 0
+            ON DUPLICATE KEY UPDATE
+              answer_sheet_count = VALUES(answer_sheet_count)
+            """,
+            (offering_id,),
+        )
+    if has_evidence_columns and "SCORED_CODE" not in available_roles:
+        cursor.execute(
+            """
+            INSERT INTO tmp_pta_evidence_sync (student_id, answer_sheet_count, scored_code_count)
+            SELECT student_id, 0, scored_code_count
+            FROM student_assignment
+            WHERE offering_id = %s
+              AND scored_code_count > 0
+            ON DUPLICATE KEY UPDATE
+              scored_code_count = VALUES(scored_code_count)
+            """,
+            (offering_id,),
+        )
 
     evidence_problem_count_expr = """
         CASE
@@ -1883,8 +2381,8 @@ def _recalc_student_assignment(
             student_id,
             COUNT(DISTINCT problem_id) AS submitted_problem_count,
             COUNT(*) AS submission_attempt_count,
-            MIN(submitted_at) AS first_submit_at,
-            MAX(submitted_at) AS last_submit_at
+            MIN(CASE WHEN YEAR(submitted_at) >= 1970 THEN submitted_at END) AS first_submit_at,
+            MAX(CASE WHEN YEAR(submitted_at) >= 1970 THEN submitted_at END) AS last_submit_at
           FROM student_problem_attempt
           WHERE offering_id = %s
           GROUP BY offering_id, student_id
@@ -2184,39 +2682,130 @@ def _resolve_experiment_and_offering(cursor, exp_dir: Path, class_id=None):
     )
     offering_row = cursor.fetchone()
     if not offering_row:
+        named_row = _resolve_named_pta_offering(
+            cursor,
+            experiment_name,
+            class_id,
+            problem_set_source_id,
+        )
+        if named_row:
+            if _is_stable_problem_set_source_id(problem_set_source_id):
+                offering_row = _migrate_legacy_offering_to_pta(
+                    cursor,
+                    named_row,
+                    experiment_name,
+                    problem_set_source_id,
+                    problem_set_info,
+                )
+            else:
+                offering_row = named_row
+    if not offering_row:
         legacy_row = _resolve_legacy_offering(cursor, experiment_name, class_id)
         if legacy_row:
-            offering_row = _migrate_legacy_offering_to_pta(
-                cursor,
-                legacy_row,
-                experiment_name,
-                problem_set_source_id,
-                problem_set_info,
-            )
+            if _is_stable_problem_set_source_id(problem_set_source_id):
+                offering_row = _migrate_legacy_offering_to_pta(
+                    cursor,
+                    legacy_row,
+                    experiment_name,
+                    problem_set_source_id,
+                    problem_set_info,
+                )
+            else:
+                offering_row = legacy_row
     if not offering_row:
+        if not _is_stable_problem_set_source_id(problem_set_source_id):
+            return None
         ensured = _ensure_assignment_offering(cursor, experiment_name, class_id, problem_set_info)
         if ensured:
             offering_row = (ensured["offering_id"], ensured["class_id"], ensured["teacher_id"])
     if not offering_row:
         return None
     _sync_assignment_offering_deadline(cursor, offering_row[0], problem_set_info)
-    cursor.execute("SELECT experiment_id FROM experiment WHERE name = %s", (experiment_name,))
-    experiment_row = cursor.fetchone()
+    legacy_experiment_id = _find_legacy_experiment_id(cursor, experiment_name)
     return {
         "pta_problem_set_id": problem_set_source_id,
-        "legacy_experiment_id": experiment_row[0] if experiment_row else None,
+        "legacy_experiment_id": legacy_experiment_id,
         "offering_id": offering_row[0],
         "class_id": offering_row[1],
         "teacher_id": offering_row[2],
     }
 
 
-def _resolve_legacy_offering(cursor, experiment_name: str, class_id=None):
-    cursor.execute("SELECT experiment_id FROM experiment WHERE name = %s", (experiment_name,))
-    experiment_row = cursor.fetchone()
-    if not experiment_row:
+def _is_stable_problem_set_source_id(problem_set_source_id):
+    value = str(problem_set_source_id or "").strip()
+    return bool(value and not value.startswith("NAME-"))
+
+
+def _resolve_named_pta_offering(
+    cursor,
+    experiment_name: str,
+    class_id=None,
+    problem_set_source_id=None,
+):
+    """Resolve an exact-title PTA offering, refusing ambiguous matches."""
+    cursor.execute(
+        """
+        SELECT ao.id, ao.class_id, ao.teacher_id, ao.pta_problem_set_id, ao.source_offering_key
+        FROM assignment_offering ao
+        LEFT JOIN assignment_template at ON at.id = ao.template_id
+        WHERE ao.source_system = %s
+          AND (ao.title_override = %s OR (ao.title_override IS NULL AND at.title = %s))
+          AND (%s IS NULL OR ao.class_id = %s)
+        ORDER BY ao.id
+        """,
+        (PTA_SOURCE_SYSTEM, experiment_name, experiment_name, class_id, class_id),
+    )
+    rows = cursor.fetchall()
+    if not rows:
         return None
-    source_keys = _legacy_offering_source_keys(experiment_row[0], class_id)
+    if len(rows) == 1:
+        row = rows[0]
+        existing_problem_set_id = str(row[3] or "").strip()
+        if (
+            _is_stable_problem_set_source_id(problem_set_source_id)
+            and _is_stable_problem_set_source_id(existing_problem_set_id)
+            and existing_problem_set_id != str(problem_set_source_id)
+        ):
+            raise RuntimeError(
+                f"PTA offering {row[0]} already belongs to problem set "
+                f"{existing_problem_set_id}, not {problem_set_source_id}"
+            )
+        return row[:3]
+
+    if _is_stable_problem_set_source_id(problem_set_source_id):
+        canonical = [
+            row
+            for row in rows
+            if str(row[3] or "") == str(problem_set_source_id)
+            or str(row[4] or "")
+            in _offering_source_keys(str(problem_set_source_id), row[1])
+        ]
+        if len(canonical) == 1:
+            return canonical[0][:3]
+
+    raise RuntimeError(
+        f"Ambiguous PTA offerings for exact title {experiment_name!r}"
+        f" (class_id={class_id!r}, matches={len(rows)}); refusing to guess"
+    )
+
+
+def _find_legacy_experiment_id(cursor, experiment_name: str):
+    try:
+        cursor.execute("SELECT experiment_id FROM experiment WHERE name = %s", (experiment_name,))
+    except Exception as exc:
+        message = str(exc).lower()
+        if "doesn't exist" in message or "does not exist" in message or "unknown table" in message:
+            return None
+        raise
+    row = cursor.fetchone()
+    return row[0] if row else None
+
+
+def _resolve_legacy_offering(cursor, experiment_name: str, class_id=None):
+    legacy_experiment_id = _find_legacy_experiment_id(cursor, experiment_name)
+    if not legacy_experiment_id:
+        return None
+    source_keys = _legacy_offering_source_keys(legacy_experiment_id, class_id)
     placeholders = ", ".join(["%s"] * len(source_keys))
     params = [LEGACY_SOURCE_SYSTEM, *source_keys, class_id, class_id]
     cursor.execute(
@@ -2280,6 +2869,41 @@ def _sync_one_experiment(
     pta_group_context=None,
 ):
     cursor = conn.cursor()
+    source_paths = _discover_experiment_source_paths(exp_dir)
+    problem_detail_rows = (
+        _read_problem_detail_rows(source_paths["PROBLEM_DETAILS"])
+        if "PROBLEM_DETAILS" in source_paths
+        else []
+    )
+    problem_detail_rows = [
+        row
+        for row in problem_detail_rows
+        if not str(row.get("problem_type") or "").strip()
+        or str(row.get("problem_type") or "").strip().upper()
+        in SUPPORTED_PROBLEM_TYPES
+    ]
+    submission_rows = (
+        _read_submission_rows(source_paths["SUBMISSIONS"])
+        if "SUBMISSIONS" in source_paths
+        else []
+    )
+    submission_rows = [
+        row
+        for row in submission_rows
+        if str(row.get("problem_type") or "").strip().upper()
+        in SUPPORTED_PROBLEM_TYPES
+    ]
+    _validate_experiment_snapshot(
+        exp_dir,
+        source_paths,
+        problem_detail_rows,
+        submission_rows,
+        expected_group_member_count=(
+            len(pta_group_context.get("active_student_nos", []))
+            if pta_group_context
+            else None
+        ),
+    )
     _log_sync_stage("开始同步实验", experiment=exp_dir.name, class_id=class_id)
     resolved = _resolve_experiment_and_offering(cursor, exp_dir, class_id)
     if not resolved:
@@ -2310,91 +2934,60 @@ def _sync_one_experiment(
         "students_resolved": 0,
         "official_roster_students": len(pta_group_context.get("active_student_nos", [])) if pta_group_context else None,
         "unmapped_submission_rows": 0,
+        "invalid_submission_time_rows": 0,
+        "ignored_unsupported_submission_rows": 0,
+        "filtered_out_non_group_rows": {
+            "transcript": 0,
+            "submissions": 0,
+            "answer_sheet": 0,
+            "scored_code": 0,
+        },
         "stale_attempts_pruned": 0,
         "stale_problem_states_pruned": 0,
+        "available_source_roles": sorted(source_paths),
+        "missing_source_roles": sorted(set(EXPERIMENT_SOURCE_ROLES) - set(source_paths)),
+        "sync_mode": "FULL"
+        if set(EXPERIMENT_SOURCE_ROLES).issubset(source_paths)
+        else "PARTIAL",
     }
 
     try:
-        cursor.execute(
-            """
-            UPDATE student_problem_state
-            SET latest_attempt_id = NULL,
-                best_attempt_id = NULL,
-                updated_at = CURRENT_TIMESTAMP(3)
-            WHERE offering_id = %s
-              AND (latest_attempt_id IS NOT NULL OR best_attempt_id IS NOT NULL)
-            """,
-            (resolved["offering_id"],),
-        )
-        if _table_has_column(cursor, "student_assignment", "completion_evidence"):
-            cursor.execute(
-                """
-                UPDATE student_assignment
-                SET submission_status = 'NOT_STARTED',
-                    first_submit_at = NULL,
-                    last_submit_at = NULL,
-                    accepted_problem_count = 0,
-                    submitted_problem_count = 0,
-                    best_total_score = NULL,
-                    latest_total_score = NULL,
-                    ranking = NULL,
-                    transcript_row_present = FALSE,
-                    answer_sheet_count = 0,
-                    scored_code_count = 0,
-                    submission_attempt_count = 0,
-                    completion_evidence = 'NONE',
-                    latest_sync_at = CURRENT_TIMESTAMP(3),
-                    updated_at = CURRENT_TIMESTAMP(3)
-                WHERE offering_id = %s
-                """,
-                (resolved["offering_id"],),
-            )
-        else:
-            cursor.execute(
-                """
-                UPDATE student_assignment
-                SET submission_status = 'NOT_STARTED',
-                    first_submit_at = NULL,
-                    last_submit_at = NULL,
-                    accepted_problem_count = 0,
-                    submitted_problem_count = 0,
-                    best_total_score = NULL,
-                    latest_total_score = NULL,
-                    ranking = NULL,
-                    latest_sync_at = CURRENT_TIMESTAMP(3),
-                    updated_at = CURRENT_TIMESTAMP(3)
-                WHERE offering_id = %s
-                """,
-                (resolved["offering_id"],),
-            )
-
-        export_dir = exp_dir / PTA_EXPORT_DIR
         files = {}
-        for relative_name, role in (
-            ("题目内容.txt", "PROBLEM_CONTENT"),
-            ("题目详情.json", "PROBLEM_DETAILS"),
-            ("提交记录.csv", "SUBMISSIONS"),
-        ):
-            path = exp_dir / relative_name
-            if path.exists():
-                files[role] = (path, _register_source_file(cursor, import_job_id, path, crawl_dir, role))
-        if export_dir.exists():
-            for pattern, role in (
-                ("*PAPER_TRANSCRIPT*.xlsx", "PAPER_TRANSCRIPT"),
-                ("*ANSWER_SHEET*.zip", "ANSWER_SHEET"),
-                ("*SCORED_CODE*.zip", "SCORED_CODE"),
-            ):
-                matched = sorted(export_dir.glob(pattern))
-                if matched:
-                    files[role] = (matched[0], _register_source_file(cursor, import_job_id, matched[0], crawl_dir, role))
+        for role, path in source_paths.items():
+            files[role] = (path, _register_source_file(cursor, import_job_id, path, crawl_dir, role))
 
         _log_sync_stage("开始读取同步源文件", experiment=exp_dir.name, files=",".join(sorted(files.keys())) or "none")
         stage_start = time.perf_counter()
         transcript_rows = _read_transcript_rows(files["PAPER_TRANSCRIPT"][0]) if "PAPER_TRANSCRIPT" in files else []
-        submission_rows = _read_submission_rows(files["SUBMISSIONS"][0]) if "SUBMISSIONS" in files else []
-        problem_detail_rows = _read_problem_detail_rows(files["PROBLEM_DETAILS"][0]) if "PROBLEM_DETAILS" in files else []
         answer_sheet_rows = _read_answer_sheet_rows(files["ANSWER_SHEET"][0]) if "ANSWER_SHEET" in files else []
         scored_code_rows = _read_scored_code_rows(files["SCORED_CODE"][0]) if "SCORED_CODE" in files else []
+        if "PAPER_TRANSCRIPT" in files and pta_group_context and not transcript_rows:
+            raise RuntimeError(
+                f"paper transcript parsed zero roster rows for {exp_dir.name}; "
+                "refusing to clear existing scores"
+            )
+        (
+            transcript_rows,
+            submission_rows,
+            answer_sheet_rows,
+            scored_code_rows,
+            report["filtered_out_non_group_rows"],
+        ) = _filter_rows_to_pta_user_group(
+            pta_group_context,
+            transcript_rows,
+            submission_rows,
+            answer_sheet_rows,
+            scored_code_rows,
+        )
+        attempt_submission_rows = [
+            row
+            for row in submission_rows
+            if str(row.get("problem_type") or "").strip().upper()
+            in SUPPORTED_PROBLEM_TYPES
+        ]
+        report["ignored_unsupported_submission_rows"] = (
+            len(submission_rows) - len(attempt_submission_rows)
+        )
         _log_sync_stage(
             "同步源文件读取完成",
             experiment=exp_dir.name,
@@ -2403,6 +2996,9 @@ def _sync_one_experiment(
             problem_detail_rows=len(problem_detail_rows),
             answer_sheet_rows=len(answer_sheet_rows),
             scored_code_rows=len(scored_code_rows),
+            filtered_out_non_group_rows=json.dumps(
+                report["filtered_out_non_group_rows"], ensure_ascii=False
+            ),
             elapsed_ms=_elapsed_ms(stage_start),
         )
 
@@ -2515,11 +3111,20 @@ def _sync_one_experiment(
         for row in problem_detail_rows:
             pta_problem_id = str(row.get("problem_set_problem_id") or "").strip()
             if pta_problem_id and pta_problem_id not in problem_order:
-                problem_order[pta_problem_id] = next_problem_order
-                next_problem_order += 1
+                label_order = _safe_int(row.get("problem_label"))
+                metadata_order = (
+                    label_order
+                    or _safe_int(row.get("problem_pool_index"))
+                    or _safe_int(row.get("index_in_problem_pool"))
+                    or next_problem_order
+                )
+                problem_order[pta_problem_id] = metadata_order
+                next_problem_order = max(next_problem_order, metadata_order + 1)
             if pta_problem_id:
                 problem_specs[pta_problem_id] = {
                     "title": row.get("title") or f"PTA Problem {pta_problem_id}",
+                    "statement_md": row.get("content_md") or row.get("content_html") or row.get("content"),
+                    "max_score": row.get("score"),
                     "sort_order": problem_order[pta_problem_id],
                 }
         for row in sorted(scored_code_rows, key=lambda item: (item["pta_problem_id"], item["student_no"], item["relative_name"])):
@@ -2528,11 +3133,14 @@ def _sync_one_experiment(
                 problem_order[pta_problem_id] = next_problem_order
                 next_problem_order += 1
             if pta_problem_id:
-                problem_specs[pta_problem_id] = {
-                    "title": row["problem_title"],
-                    "sort_order": problem_order[pta_problem_id],
-                }
-        for row in submission_rows:
+                problem_specs.setdefault(
+                    pta_problem_id,
+                    {
+                        "title": row["problem_title"],
+                        "sort_order": problem_order[pta_problem_id],
+                    },
+                )
+        for row in attempt_submission_rows:
             pta_problem_id = row["pta_problem_id"]
             if pta_problem_id and pta_problem_id not in problem_order:
                 problem_order[pta_problem_id] = next_problem_order
@@ -2618,7 +3226,7 @@ def _sync_one_experiment(
             _log_sync_stage("提交记录原始行批量写入完成", experiment=exp_dir.name, rows=len(raw_submission_ids), elapsed_ms=_elapsed_ms(substage_start))
         attempt_rows = []
         submission_participants = {}
-        for row in submission_rows:
+        for row in attempt_submission_rows:
             problem_id = problem_cache.get(row["pta_problem_id"])
             student_no = pta_user_map.get(row["pta_user_id"])
             student_name = student_name_map.get(student_no, student_no) if student_no else ""
@@ -2646,6 +3254,10 @@ def _sync_one_experiment(
             submission_participants[student_id] = _participant_roster_scope(pta_group_context, student_no)
 
             source_attempt_key = _attempt_source_key(resolved["offering_id"], row, student_no)
+            submitted_at = _parse_pta_datetime(row["submitted_at_text"])
+            if submitted_at is None:
+                report["invalid_submission_time_rows"] += 1
+                continue
             attempt_rows.append(
                 (
                     resolved["offering_id"],
@@ -2654,7 +3266,7 @@ def _sync_one_experiment(
                     row["pta_user_id"] or None,
                     PTA_SOURCE_SYSTEM,
                     source_attempt_key,
-                    _parse_pta_datetime(row["submitted_at_text"]) or _fallback_submitted_at(row),
+                    submitted_at,
                     row["judge_status"] or None,
                     _safe_float(row["score_text"], None),
                     row["compiler"] or None,
@@ -2662,6 +3274,16 @@ def _sync_one_experiment(
                     int(_safe_float(row["memory_text"], 0) / 1024) if row["memory_text"] else None,
                     raw_submission_ids.get(int(row["row_no"])),
                 )
+            )
+        if report["unmapped_submission_rows"]:
+            raise RuntimeError(
+                f"{report['unmapped_submission_rows']} submission row(s) could not be "
+                f"mapped to the authoritative user-group roster for {exp_dir.name}"
+            )
+        if report["invalid_submission_time_rows"]:
+            raise RuntimeError(
+                f"{report['invalid_submission_time_rows']} submission row(s) have invalid "
+                f"timestamps for {exp_dir.name}"
             )
         _bulk_ensure_assignment_participants(cursor, resolved["offering_id"], submission_participants)
         substage_start = time.perf_counter()
@@ -2674,6 +3296,7 @@ def _sync_one_experiment(
             rows=report["raw_submission_rows"],
             attempts_upserted=report["attempts_upserted"],
             unmapped_submission_rows=report["unmapped_submission_rows"],
+            invalid_submission_time_rows=report["invalid_submission_time_rows"],
             elapsed_ms=_elapsed_ms(stage_start),
         )
         if "SUBMISSIONS" in files:
@@ -2872,6 +3495,7 @@ def _sync_one_experiment(
             student_no_to_id,
             answer_sheet_rows,
             scored_code_rows,
+            available_roles=set(files),
         )
         _log_sync_stage("学生作业状态批量刷新完成", experiment=exp_dir.name, elapsed_ms=_elapsed_ms(substage_start))
         _log_sync_stage(
@@ -2896,7 +3520,7 @@ def _sync_one_experiment(
         raise
 
 
-def sync_all(crawl_dir=None, strict=True, class_id=None):
+def sync_all(crawl_dir=None, strict=True, class_id=None, experiment_names=None):
     crawl_dir = _get_crawl_dir(crawl_dir)
     _log_sync_stage("开始统一库同步", crawl_dir=crawl_dir, class_id=class_id)
     roster_payload = _load_pta_user_group_roster(crawl_dir)
@@ -2909,7 +3533,7 @@ def sync_all(crawl_dir=None, strict=True, class_id=None):
     }
     conn = legacy_sync.get_db()
     try:
-        exp_dirs = _iter_experiment_dirs(crawl_dir)
+        exp_dirs = _iter_experiment_dirs(crawl_dir, experiment_names=experiment_names)
         _log_sync_stage("实验目录扫描完成", crawl_dir=crawl_dir, experiments=len(exp_dirs))
         if not exp_dirs:
             message = f"No experiment data found in crawl directory: {crawl_dir}"
@@ -2941,6 +3565,28 @@ def sync_all(crawl_dir=None, strict=True, class_id=None):
                 if strict:
                     raise RuntimeError(message)
                 return report
+            if roster_payload:
+                _validate_class_group_binding(cursor, class_id, roster_payload)
+            report["stale_import_jobs_recovered"] = _fail_stale_import_jobs(
+                cursor, class_id
+            )
+        conn.commit()
+        if report["stale_import_jobs_recovered"]:
+            _log_sync_stage(
+                "已恢复遗留导入任务",
+                class_id=class_id,
+                jobs=report["stale_import_jobs_recovered"],
+            )
+        require_roster = _flag("PTA_REQUIRE_USER_GROUP_ROSTER", True)
+        if require_roster and not roster_payload:
+            message = (
+                f"Unified PTA sync requires authoritative user-group roster: "
+                f"{crawl_dir / PTA_USER_GROUP_ROSTER_FILE}"
+            )
+            report["error"] = message
+            if strict:
+                raise RuntimeError(message)
+            return report
         pta_group_context = None
         if roster_payload:
             with conn.cursor() as cursor:
@@ -2958,7 +3604,11 @@ def sync_all(crawl_dir=None, strict=True, class_id=None):
                     pta_group_id=pta_group_context["pta_group_id"],
                     member_count=len(pta_group_context["active_student_nos"]),
                 )
-        pta_user_map, student_name_map = _build_student_maps_from_crawl(crawl_dir, pta_group_context)
+        pta_user_map, student_name_map = _build_student_maps_from_crawl(
+            crawl_dir,
+            pta_group_context,
+            experiment_names=experiment_names,
+        )
         report["pta_user_mappings"] = len(pta_user_map)
         report["student_name_mappings"] = len(student_name_map)
         _log_sync_stage(
@@ -3003,7 +3653,7 @@ def sync_all(crawl_dir=None, strict=True, class_id=None):
         conn.close()
 
 
-def run_configured_sync(crawl_dir=None, strict=True, class_id=None):
+def run_configured_sync(crawl_dir=None, strict=True, class_id=None, experiment_names=None):
     use_unified = _flag("ACADEMIC_UNIFIED_IMPORT_ENABLED", True)
     _log_sync_stage("同步配置加载完成", unified_enabled=use_unified, class_id=class_id)
     result = {
@@ -3013,12 +3663,17 @@ def run_configured_sync(crawl_dir=None, strict=True, class_id=None):
     }
     if use_unified:
         _log_sync_stage("开始执行统一库导入器", crawl_dir=crawl_dir, class_id=class_id)
-        result["unified"] = sync_all(crawl_dir=crawl_dir, strict=strict, class_id=class_id)
+        result["unified"] = sync_all(
+            crawl_dir=crawl_dir,
+            strict=strict,
+            class_id=class_id,
+            experiment_names=experiment_names,
+        )
     if use_unified:
         result["ok"] = bool(result.get("unified", {}).get("ok"))
     else:
-        result["ok"] = True
-        result["message"] = "Unified importer disabled"
+        result["ok"] = False
+        result["error"] = "Unified importer is disabled; no database synchronization was performed"
     _log_sync_stage("同步配置执行完成", ok=result["ok"], unified_enabled=use_unified)
     return result
 
@@ -3033,29 +3688,42 @@ def _experiment_export_files(exp_dir: Path):
         ("*ANSWER_SHEET*.zip", "ANSWER_SHEET"),
         ("*SCORED_CODE*.zip", "SCORED_CODE"),
     ):
-        matched = sorted(export_dir.glob(pattern))
-        if matched:
-            files[role] = matched[0]
+            matched = sorted(export_dir.glob(pattern))
+            if matched:
+                files[role] = max(
+                    matched,
+                    key=lambda path: (path.stat().st_mtime_ns, path.name),
+                )
     return files
 
 
-def _build_student_maps_from_crawl(crawl_dir: Path, pta_group_context=None):
+def _build_student_maps_from_crawl(
+    crawl_dir: Path,
+    pta_group_context=None,
+    experiment_names=None,
+):
     pta_user_map = {}
     student_name_map = {}
     if pta_group_context:
         pta_user_map.update(pta_group_context.get("pta_user_to_student_no", {}))
         student_name_map.update(pta_group_context.get("student_no_to_name", {}))
 
-    for exp_dir in _iter_experiment_dirs(crawl_dir):
+    for exp_dir in _iter_experiment_dirs(crawl_dir, experiment_names=experiment_names):
         files = _experiment_export_files(exp_dir)
         if "PAPER_TRANSCRIPT" in files:
             for row in _read_transcript_rows(files["PAPER_TRANSCRIPT"]):
+                if not _is_official_roster_student(pta_group_context, row["student_no"]):
+                    continue
                 student_name_map[row["student_no"]] = row["student_name"]
         if "ANSWER_SHEET" in files:
             for row in _read_answer_sheet_rows(files["ANSWER_SHEET"]):
+                if not _is_official_roster_student(pta_group_context, row["student_no"]):
+                    continue
                 student_name_map[row["student_no"]] = row["student_name"]
         if "SCORED_CODE" in files:
             for row in _read_scored_code_rows(files["SCORED_CODE"]):
+                if not _is_official_roster_student(pta_group_context, row["student_no"]):
+                    continue
                 if row.get("pta_user_id") and row.get("student_no"):
                     pta_user_map.setdefault(row["pta_user_id"], row["student_no"])
     return pta_user_map, student_name_map

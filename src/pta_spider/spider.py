@@ -14,6 +14,7 @@ import time
 import random
 import pickle
 import glob
+import html
 import shutil
 import subprocess
 import tempfile
@@ -82,6 +83,21 @@ CAPTCHA_IMAGE_FILE = RUNTIME_DIR / "captcha_bg.jpg"
 # PTA 题面里的图片可能使用 ~/xxx 形式，入库前统一转成前端可直接渲染的完整 URL。
 IMAGE_MARKDOWN_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 HTML_IMAGE_RE = re.compile(r"<img\b[^>]*\bsrc=[\"']([^\"']+)[\"'][^>]*>", re.IGNORECASE)
+PLACEHOLDER_PROBLEM_CONTENT_PREFIXES = (
+    "这是一个编程题模板",
+    "请在这里写题目描述",
+    "this is a programming problem template",
+    "please write the problem description here",
+)
+PLACEHOLDER_PROBLEM_CONTENT_PATTERNS = (
+    re.compile(r"^(?:这是|这是一道?)?一个?(?:编程题|程序设计题|代码填空题|函数题)?模板"),
+    re.compile(r"^(?:请)?在(?:这里|此处)(?:填写|编写|输入|添加)(?:题目)?(?:描述|内容)"),
+    re.compile(r"^(?:this is )?(?:a )?(?:programming )?problem template"),
+    re.compile(
+        r"^(?:please )?(?:write|enter|add|fill in) "
+        r"(?:the )?problem (?:description|statement)(?: here)?"
+    ),
+)
 
 
 def _browser_home():
@@ -345,16 +361,27 @@ def _env_float(name, default, minimum=None, maximum=None):
 
 EXPORT_RETRY_ROUNDS = _env_int("PTA_EXPORT_RETRY_ROUNDS", 2, minimum=0, maximum=10)
 EXPORT_RETRY_DELAY_SECONDS = _env_int("PTA_EXPORT_RETRY_DELAY_SECONDS", 20, minimum=0, maximum=600)
+EXPORT_DOWNLOAD_RETRIES = _env_int("PTA_EXPORT_DOWNLOAD_RETRIES", 4, minimum=1, maximum=10)
+EXPORT_DOWNLOAD_RETRY_DELAY_SECONDS = _env_float(
+    "PTA_EXPORT_DOWNLOAD_RETRY_DELAY_SECONDS", 5.0, minimum=0.0, maximum=120.0
+)
 
-# Throughput / concurrency knobs (aggressive defaults; lower via env to roll back)
-API_RATE_LIMIT_PER_MINUTE = _env_int("PTA_API_RATE_LIMIT_PER_MINUTE", 60, minimum=1, maximum=180)
-API_RATE_LIMIT_MIN = _env_int("PTA_API_RATE_LIMIT_MIN", 10, minimum=1, maximum=180)
-DETAIL_MAX_WORKERS = _env_int("PTA_DETAIL_MAX_WORKERS", 12, minimum=1, maximum=32)
-PROBLEM_SET_MAX_WORKERS = _env_int("PTA_PROBLEM_SET_MAX_WORKERS", 3, minimum=1, maximum=8)
+# Throughput / concurrency knobs. Defaults favor stable PTA production crawls.
+API_RATE_LIMIT_PER_MINUTE = _env_int("PTA_API_RATE_LIMIT_PER_MINUTE", 30, minimum=1, maximum=180)
+API_RATE_LIMIT_MIN = _env_int("PTA_API_RATE_LIMIT_MIN", 8, minimum=1, maximum=180)
+DETAIL_MAX_WORKERS = _env_int("PTA_DETAIL_MAX_WORKERS", 4, minimum=1, maximum=32)
+PROBLEM_SET_MAX_WORKERS = _env_int("PTA_PROBLEM_SET_MAX_WORKERS", 2, minimum=1, maximum=8)
 EXPORT_POLL_INTERVAL_SECONDS = _env_float("PTA_EXPORT_POLL_INTERVAL_SECONDS", 1.0, minimum=0.2, maximum=10.0)
 EXPORT_CREATE_DELAY_SECONDS = _env_float("PTA_EXPORT_CREATE_DELAY_SECONDS", 0.5, minimum=0.0, maximum=30.0)
 EXPORT_BETWEEN_DELAY_SECONDS = _env_float("PTA_EXPORT_BETWEEN_DELAY_SECONDS", 0.5, minimum=0.0, maximum=30.0)
+EXPORT_READY_TIMEOUT_SECONDS = _env_int(
+    "PTA_EXPORT_READY_TIMEOUT_SECONDS", 900, minimum=60, maximum=3600
+)
+GROUP_EXPORT_READY_TIMEOUT_SECONDS = _env_int(
+    "PTA_GROUP_EXPORT_READY_TIMEOUT_SECONDS", 900, minimum=60, maximum=3600
+)
 EXPORT_PARALLEL = _env_flag("PTA_EXPORT_PARALLEL", True)
+CRAWL_PROBLEM_TYPES = ("PROGRAMMING",)
 
 
 def _export_poll_sleep(elapsed_seconds):
@@ -786,18 +813,30 @@ class PTAClient:
     # ==================== API Data Crawling ====================
 
     def api_get(self, path, params=None):
-        """Unified GET with auto re-login, 429 backoff, adaptive token bucket rate limiting"""
+        """Unified GET with bounded retries for auth, throttling, and transient failures."""
         max_retries = 3
+        auth_retried = False
         for attempt in range(max_retries + 1):
             _rate_limiter.acquire()
-            with self._session_lock:
-                resp = self.session.get(f"{API_BASE}{path}", params=params, timeout=30)
-            if resp.status_code in (401, 403):
-                print("认证失效，重新登录...")
-                self.ensure_login()
-                _rate_limiter.acquire()
+            try:
                 with self._session_lock:
                     resp = self.session.get(f"{API_BASE}{path}", params=params, timeout=30)
+            except requests.exceptions.RequestException as exc:
+                if attempt >= max_retries:
+                    raise
+                wait = min(30, 2 ** attempt) + random.uniform(0, 0.5)
+                print(
+                    f"  PTA network error, retrying in {wait:.1f}s "
+                    f"({attempt + 1}/{max_retries}): {exc}"
+                )
+                time.sleep(wait)
+                continue
+            if resp.status_code in (401, 403):
+                if not auth_retried:
+                    auth_retried = True
+                    print("认证失效，重新登录...")
+                    self.ensure_login()
+                    continue
             if resp.status_code == 429:
                 _rate_limiter.on_rate_limit()
                 if attempt < max_retries:
@@ -810,6 +849,14 @@ class PTAClient:
                     time.sleep(wait)
                     continue
                 print("  429 重试次数已用尽")
+            if resp.status_code in (408, 425, 500, 502, 503, 504) and attempt < max_retries:
+                wait = min(30, 2 ** attempt) + random.uniform(0, 0.5)
+                print(
+                    f"  PTA HTTP {resp.status_code}, retrying in {wait:.1f}s "
+                    f"({attempt + 1}/{max_retries})"
+                )
+                time.sleep(wait)
+                continue
             resp.raise_for_status()
             _rate_limiter.on_success()
             return resp.json()
@@ -1100,6 +1147,16 @@ class PTAClient:
             "member_count": len(roster["members"]),
             "reported_total": roster.get("total"),
         }
+        # Keep the authoritative user-group scope on this client. Submission
+        # crawling uses it to query one roster member at a time, which both
+        # excludes shared-problem-set outsiders and avoids the global 200-row
+        # snapshot limit.
+        self._active_group_user_ids = sorted({
+            str(member.get("pta_user_id") or "").strip()
+            for member in roster["members"]
+            if str(member.get("pta_user_id") or "").strip()
+        })
+        self._active_group_id = str(group_id)
         out_path = crawl_dir / "_pta_user_group_roster.json"
         with out_path.open("w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -1159,14 +1216,51 @@ class PTAClient:
         """Get single problem set detail"""
         return self.api_get(f"/problem-sets/{ps_id}")
 
-    def get_problems(self, ps_id):
-        """Get all problems in a problem set"""
-        data = self.api_get(f"/problem-sets/{ps_id}/preview/problems", params={
-            "problem_type": "PROGRAMMING",
-            "page": 0,
-            "limit": 500,
-        })
-        return data.get("problemSetProblems", [])
+    def get_problems(self, ps_id, problem_type="PROGRAMMING", limit=200):
+        """Get every preview-visible problem of one PTA type, with pagination."""
+        all_problems = []
+        seen_ids = set()
+        page = 0
+        max_pages = 100
+
+        while page < max_pages:
+            data = self.api_get(
+                f"/problem-sets/{ps_id}/preview/problems",
+                params={
+                    "problem_type": problem_type,
+                    "page": page,
+                    "limit": limit,
+                },
+            )
+            page_problems = data.get("problemSetProblems", [])
+            if not page_problems:
+                break
+
+            new_count = 0
+            for problem in page_problems:
+                problem_id = str(problem.get("id") or "").strip()
+                dedup_key = problem_id or json.dumps(problem, sort_keys=True, ensure_ascii=False)
+                if dedup_key in seen_ids:
+                    continue
+                seen_ids.add(dedup_key)
+                all_problems.append(problem)
+                new_count += 1
+
+            total = data.get("total")
+            if new_count == 0:
+                break
+            if total is not None and len(all_problems) >= int(total):
+                break
+            if len(page_problems) < limit:
+                break
+            page += 1
+
+        if page >= max_pages:
+            raise RuntimeError(
+                f"problem pagination exceeded safety cap for problem set {ps_id}, "
+                f"type {problem_type}"
+            )
+        return all_problems
 
     def get_problem_detail(self, ps_id, problem_id):
         """Get detailed content of a single problem"""
@@ -1230,26 +1324,105 @@ class PTAClient:
             flags=re.IGNORECASE,
         )
 
+    @staticmethod
+    def _visible_problem_content_text(content):
+        if not isinstance(content, str):
+            return ""
+        normalized = html.unescape(content)
+        normalized = normalized.replace("\ufeff", "").replace("\u200b", "")
+        normalized = re.sub(
+            r"<(?:script|style)\b[^>]*>.*?</(?:script|style)>",
+            " ",
+            normalized,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        normalized = re.sub(r"<!--.*?-->", " ", normalized, flags=re.DOTALL)
+        normalized = re.sub(r"<[^>]+>", " ", normalized)
+        normalized = re.sub(r"!\[[^\]]*]\([^)]+\)", " ", normalized)
+        normalized = re.sub(r"[#>*_`~\[\]{}]+", " ", normalized)
+        normalized = re.sub(r"\s+", " ", normalized).strip().lower()
+        return normalized
+
+    @classmethod
+    def _is_placeholder_problem_content(cls, content):
+        normalized = cls._visible_problem_content_text(content)
+        return any(
+            normalized.startswith(prefix)
+            for prefix in PLACEHOLDER_PROBLEM_CONTENT_PREFIXES
+        ) or any(pattern.search(normalized) for pattern in PLACEHOLDER_PROBLEM_CONTENT_PATTERNS)
+
+    @classmethod
+    def _has_meaningful_problem_content(cls, content):
+        if not isinstance(content, str) or not content.strip():
+            return False
+        if cls._is_placeholder_problem_content(content):
+            return False
+        if cls._visible_problem_content_text(content):
+            return True
+        return bool(
+            IMAGE_MARKDOWN_RE.search(content)
+            or HTML_IMAGE_RE.search(content)
+        )
+
+    @classmethod
+    def _select_content_candidate(cls, mappings, field_names):
+        first_non_empty = ""
+        for mapping in mappings:
+            mapping = mapping or {}
+            for field_name in field_names:
+                candidate = mapping.get(field_name)
+                if not isinstance(candidate, str):
+                    continue
+                text = candidate.strip()
+                if not text:
+                    continue
+                if not first_non_empty:
+                    first_non_empty = text
+                if cls._has_meaningful_problem_content(text):
+                    return text
+        return first_non_empty
+
+    @classmethod
+    def _select_problem_markdown(cls, psp, raw_problem):
+        return cls._select_content_candidate(
+            (psp, raw_problem),
+            (
+                "content",
+                "description",
+                "statement",
+                "problemDescription",
+                "contentMarkdown",
+                "markdownContent",
+            ),
+        )
+
+    @classmethod
+    def _select_problem_html(cls, psp, raw_problem):
+        return cls._select_content_candidate(
+            (psp, raw_problem),
+            ("contentHtml", "htmlContent", "renderedContent"),
+        )
+
+    @classmethod
+    def _problem_record_has_valid_content(cls, record):
+        return cls._has_meaningful_problem_content(
+            (record or {}).get("content_md")
+        ) or cls._has_meaningful_problem_content(
+            (record or {}).get("content_html")
+        )
+
     @classmethod
     def _problem_detail_record(cls, ps_id, problem, detail):
         psp = (detail or {}).get("problemSetProblem") or {}
         raw_problem = (detail or {}).get("problem") or {}
-        content_md = (
-            psp.get("content")
-            or psp.get("description")
-            or raw_problem.get("content")
-            or raw_problem.get("description")
-            or ""
-        )
-        content_html = (
-            psp.get("contentHtml")
-            or psp.get("htmlContent")
-            or psp.get("renderedContent")
-            or raw_problem.get("contentHtml")
-            or raw_problem.get("htmlContent")
-            or raw_problem.get("renderedContent")
-            or ""
-        )
+        score = psp.get("score")
+        if score is None:
+            score = problem.get("score")
+        difficulty_level = psp.get("difficulty")
+        if difficulty_level is None:
+            difficulty_level = raw_problem.get("difficulty")
+        content_md = cls._select_problem_markdown(psp, raw_problem)
+        content_html = cls._select_problem_html(psp, raw_problem)
         content_md = cls._normalize_markdown_image_urls(content_md)
         content_html = cls._normalize_html_image_urls(content_html)
         image_urls = cls._extract_image_urls("\n".join([str(content_md or ""), str(content_html or "")]))
@@ -1266,9 +1439,17 @@ class PTAClient:
             "problem_url": f"{BASE_URL}/problem-sets/{ps_id}/problems/{psp.get('id') or problem.get('id') or ''}",
             "problem_label": str(psp.get("label") or problem.get("label") or ""),
             "title": str(psp.get("title") or raw_problem.get("title") or problem.get("title") or ""),
-            "score": psp.get("score") or problem.get("score"),
-            "problem_type": str(psp.get("problemType") or problem.get("problemType") or ""),
-            "difficulty_level": psp.get("difficulty") or raw_problem.get("difficulty"),
+            "score": score,
+            "problem_type": str(
+                psp.get("problemType")
+                or psp.get("type")
+                or raw_problem.get("problemType")
+                or raw_problem.get("type")
+                or problem.get("problemType")
+                or problem.get("type")
+                or ""
+            ),
+            "difficulty_level": difficulty_level,
             "difficulty_label": str(psp.get("difficultyLabel") or raw_problem.get("difficultyLabel") or ""),
             "problem_pool_index": psp.get("problemPoolIndex"),
             "index_in_problem_pool": psp.get("indexInProblemPool"),
@@ -1281,27 +1462,49 @@ class PTAClient:
             "raw_json": detail or {},
         }
 
-    def get_submissions(self, ps_id, page=0, limit=200):
+    def get_submissions(self, ps_id, page=0, limit=200, filter_obj=None):
         """Get submissions for a problem set"""
-        return self.api_get(f"/problem-sets/{ps_id}/submissions", params={
-            "page": page, "limit": limit,
-        })
+        params = {"page": page, "limit": limit}
+        if filter_obj is not None:
+            params["filter"] = json.dumps(filter_obj, ensure_ascii=False)
+        return self.api_get(f"/problem-sets/{ps_id}/submissions", params=params)
 
-    def get_all_submissions(self, ps_id):
+    @staticmethod
+    def _submission_dedup_key(sub):
+        submission_id = str(sub.get("id") or "").strip()
+        if submission_id:
+            return ("id", submission_id)
+        return (
+            "fields",
+            str(sub.get("submitAt") or ""),
+            str(sub.get("userId") or ""),
+            str(sub.get("problemSetProblemId") or ""),
+            str(sub.get("status") or ""),
+            str(sub.get("score") or ""),
+        )
+
+    def _get_all_submissions_for_filter(self, ps_id, filter_obj=None):
         """
-        Paginate to get all submissions.
-        Does not rely on 'total' field (PTA may truncate it). Instead keeps paging until:
-        1. Empty response, or
-        2. All records on page are duplicates (API looping), or
-        3. Safety cap reached (prevent infinite loop)
+        Fetch one submission query and detect PTA's repeated-page behavior.
+
+        PTA currently ignores page/offset pagination on this endpoint. A query
+        that fills the 200-row server cap and repeats on page 1 is explicitly
+        marked incomplete instead of silently reported as complete.
         """
         all_subs = []
-        seen_ids = set()  # Dedup by submission key
+        seen_ids = set()
         page = 0
-        max_pages = 500  # Safety cap: 500 pages x 200 = 100k records
+        max_pages = 500
+        repeated_page = False
+        hit_server_cap = False
 
         while page < max_pages:
-            data = self.get_submissions(ps_id, page=page)
+            data = self.get_submissions(
+                ps_id,
+                page=page,
+                limit=200,
+                filter_obj=filter_obj,
+            )
             subs = data.get("submissions", [])
             if not subs:
                 break
@@ -1309,26 +1512,112 @@ class PTAClient:
             # Dedup: if all records on this page are seen, API is looping
             new_count = 0
             for sub in subs:
-                # Use submitAt + userId + problemSetProblemId as unique key
-                sub_key = (sub.get("submitAt", ""), sub.get("userId", ""),
-                           sub.get("problemSetProblemId", ""))
+                sub_key = self._submission_dedup_key(sub)
                 if sub_key not in seen_ids:
                     seen_ids.add(sub_key)
                     all_subs.append(sub)
                     new_count += 1
 
             if new_count == 0:
-                # All duplicates on this page, stop
+                repeated_page = True
                 break
 
-            # Fewer than limit results means last page
             if len(subs) < 200:
                 break
 
+            hit_server_cap = True
             page += 1
-            # api_get 内令牌桶限流器已统一控制请求频率，无需额外 sleep
 
-        return all_subs
+        return all_subs, {
+            "rows": len(all_subs),
+            "filter": filter_obj or {},
+            "hit_server_cap": hit_server_cap,
+            "repeated_page": repeated_page,
+            "complete": not (hit_server_cap and repeated_page),
+        }
+
+    def get_all_submissions(self, ps_id, pta_user_ids=None):
+        """Fetch only PROGRAMMING submissions in the authoritative group scope."""
+        if pta_user_ids is None:
+            pta_user_ids = getattr(self, "_active_group_user_ids", None)
+
+        status = {
+            "problem_set_id": str(ps_id),
+            "scope": "PROBLEM_SET_SNAPSHOT",
+            "complete": True,
+            "rows": 0,
+            "queried_user_count": 0,
+            "incomplete_user_ids": [],
+        }
+        if pta_user_ids:
+            merged = []
+            seen = set()
+            incomplete_user_ids = []
+            user_ids = sorted({
+                str(value or "").strip()
+                for value in pta_user_ids
+                if str(value or "").strip()
+            })
+            for user_id in user_ids:
+                rows, query_status = self._get_all_submissions_for_filter(
+                    ps_id,
+                    {"userId": user_id, "problemType": "PROGRAMMING"},
+                )
+                if not query_status["complete"]:
+                    incomplete_user_ids.append(user_id)
+                for sub in rows:
+                    key = self._submission_dedup_key(sub)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    merged.append(sub)
+            status.update({
+                "scope": "PTA_USER_GROUP_MEMBERS",
+                "complete": not incomplete_user_ids,
+                "rows": len(merged),
+                "queried_user_count": len(user_ids),
+                "incomplete_user_ids": incomplete_user_ids,
+            })
+            submissions = merged
+        else:
+            submissions, query_status = self._get_all_submissions_for_filter(
+                ps_id,
+                {"problemType": "PROGRAMMING"},
+            )
+            status.update({
+                "complete": query_status["complete"],
+                "rows": len(submissions),
+                "global_query": query_status,
+            })
+
+        # Enforce the requested scope locally as well, in case PTA ignores an
+        # unsupported filter shape and returns mixed problem types.
+        submissions = [
+            submission
+            for submission in submissions
+            if str(submission.get("problemType") or "").strip().upper()
+            == "PROGRAMMING"
+        ]
+        status["problem_type"] = "PROGRAMMING"
+        status["rows"] = len(submissions)
+        if not hasattr(self, "_submission_crawl_status"):
+            self._submission_crawl_status = {}
+        self._submission_crawl_status[str(ps_id)] = status
+        if not status["complete"]:
+            print(
+                f"  警告: 提交记录仍受 PTA 200 条上限影响: "
+                f"{ps_id} ({len(status['incomplete_user_ids'])} 个学生)"
+            )
+        return submissions
+
+    def write_submission_crawl_status(self, ps_id, base_dir):
+        status = getattr(self, "_submission_crawl_status", {}).get(str(ps_id))
+        if status is None:
+            return
+        with (Path(base_dir) / "submission_crawl_status.json").open(
+            "w", encoding="utf-8"
+        ) as f:
+            json.dump(status, f, ensure_ascii=False, indent=2)
 
     def get_rankings(self, ps_id):
         """Get rankings"""
@@ -1455,11 +1744,18 @@ class PTAClient:
         result["_requested_type"] = export_type
         return result
 
-    def wait_export_ready(self, ps_id, export_type="ANSWER_SHEET", timeout=180, export_marker=None):
+    def wait_export_ready(
+        self,
+        ps_id,
+        export_type="ANSWER_SHEET",
+        timeout=None,
+        export_marker=None,
+    ):
         """
         轮询等待导出任务完成，返回 docUrl 下载链接。
         status: WAITING → READY 表示完成
         """
+        timeout = timeout or EXPORT_READY_TIMEOUT_SECONDS
         filter_param = json.dumps({"problemSetId": ps_id})
         start = time.time()
         expected_id = self._export_id_from_payload(export_marker or {})
@@ -1495,15 +1791,38 @@ class PTAClient:
         raise TimeoutError(f"PTA export timed out: {expected_title or export_type} ({timeout}s)")
 
     def download_export(self, download_url, save_path):
-        """Download export file (COS signed URL)"""
-        # Try download without cookie first
-        resp = requests.get(download_url, stream=True, timeout=120)
-        if resp.status_code == 403:
-            # COS signature may need referer
-            resp = requests.get(
-                download_url, stream=True, timeout=120,
-                headers={"Referer": "https://pintia.cn/"}
+        """Download an export, tolerating READY-before-object-visible races."""
+        resp = None
+        for attempt in range(1, EXPORT_DOWNLOAD_RETRIES + 1):
+            # Try download without cookie first. COS signed URLs do not need the
+            # PTA session and forwarding it can cause signature/header issues.
+            resp = requests.get(download_url, stream=True, timeout=120)
+            if resp.status_code == 403:
+                # Some COS responses require PTA as the referrer.
+                resp.close()
+                resp = requests.get(
+                    download_url,
+                    stream=True,
+                    timeout=120,
+                    headers={"Referer": "https://pintia.cn/"},
+                )
+            if resp.status_code not in {404, 408, 429, 500, 502, 503, 504}:
+                break
+            if attempt >= EXPORT_DOWNLOAD_RETRIES:
+                break
+            status_code = resp.status_code
+            resp.close()
+            delay = EXPORT_DOWNLOAD_RETRY_DELAY_SECONDS * attempt
+            print(
+                f"  导出文件暂不可用 (HTTP {status_code})，"
+                f"{delay:g}s 后重试同一下载地址 "
+                f"({attempt + 1}/{EXPORT_DOWNLOAD_RETRIES})"
             )
+            if delay > 0:
+                time.sleep(delay)
+
+        if resp is None:
+            raise RuntimeError("PTA export download returned no response")
         resp.raise_for_status()
         os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
         expected_bytes = resp.headers.get("Content-Length")
@@ -1621,7 +1940,8 @@ class PTAClient:
                     raise
         raise RuntimeError(f"failed to create PTA user-group answer export; tried: {'; '.join(errors)}")
 
-    def wait_group_answer_export_ready(self, group_id, export_marker, timeout=300):
+    def wait_group_answer_export_ready(self, group_id, export_marker, timeout=None):
+        timeout = timeout or GROUP_EXPORT_READY_TIMEOUT_SECONDS
         start = time.time()
         expected_id = self._export_id_from_payload(export_marker or {})
         expected_title = (export_marker or {}).get("_requested_title")
@@ -1687,7 +2007,10 @@ class PTAClient:
         PTA returns a short-lived COS URL for the export. A failed download must
         therefore create a new export task instead of retrying the stale URL.
         """
-        retryable_statuses = {404, 408, 429, 500, 502, 503, 504}
+        # A group export can temporarily return 400 while PTA is still
+        # releasing a previous task for the same group. Unlike ordinary API
+        # validation errors, recreating this export after a delay is safe.
+        retryable_statuses = {400, 404, 408, 429, 500, 502, 503, 504}
         attempts = max(1, EXPORT_RETRY_ROUNDS + 1)
         last_error: Exception | None = None
 
@@ -1712,15 +2035,18 @@ class PTAClient:
                 last_error = exc
                 response = getattr(exc, "response", None)
                 status_code = getattr(response, "status_code", None)
-                if status_code is None:
-                    match = re.search(r"\b(\d{3})\b", str(exc))
-                    status_code = int(match.group(1)) if match else None
-                retryable = status_code in retryable_statuses
+                status_codes = (
+                    {int(value) for value in re.findall(r"\b(\d{3})\b", str(exc))}
+                    if status_code is None
+                    else {int(status_code)}
+                )
+                retryable_codes = sorted(status_codes & retryable_statuses)
+                retryable = bool(retryable_codes)
                 if not retryable or attempt >= attempts:
                     raise
                 print(
                     f"  用户组答卷导出第 {attempt} 次失败 "
-                    f"(HTTP {status_code or 'unknown'}): {exc}"
+                    f"(HTTP {','.join(map(str, retryable_codes)) or 'unknown'}): {exc}"
                 )
 
         raise last_error or RuntimeError("group answer export failed")
@@ -1890,6 +2216,11 @@ class PTAClient:
                     item, message, exc = result
                     print(f"  {message}")
                     attempts[item].append(message)
+                    # A timed-out task is still queued on PTA. Creating another
+                    # task cannot accelerate it and only leaves duplicate export
+                    # records, so let the caller resume/check it later.
+                    if isinstance(exc, TimeoutError):
+                        raise exc
                     failed.append(item)
                     if (
                         isinstance(exc, requests.exceptions.HTTPError)
@@ -1908,6 +2239,8 @@ class PTAClient:
                         message = self._format_export_failure(cn_name, exc)
                         print(f"  {message}")
                         attempts[(export_type, cn_name)].append(message)
+                        if isinstance(exc, TimeoutError):
+                            raise
                         failed.append((export_type, cn_name))
                         if (
                             isinstance(exc, requests.exceptions.HTTPError)
@@ -1940,57 +2273,133 @@ class PTAClient:
 
         # 1. Crawl problem content (题目详情并发拉取，写文件保持原顺序)
         try:
-            problems = self.get_problems(ps_id)
+            problems = []
+            seen_problem_ids = set()
+            for problem_type in CRAWL_PROBLEM_TYPES:
+                for problem in self.get_problems(
+                    ps_id,
+                    problem_type=problem_type,
+                ):
+                    problem = dict(problem)
+                    problem.setdefault("problemType", problem_type)
+                    problem_id = str(problem.get("id") or "").strip()
+                    dedup_key = problem_id or json.dumps(
+                        problem,
+                        sort_keys=True,
+                        ensure_ascii=False,
+                    )
+                    if dedup_key in seen_problem_ids:
+                        continue
+                    seen_problem_ids.add(dedup_key)
+                    problems.append(problem)
             print(f"  题目数量: {len(problems)}")
-            if problems:
-                # 并发拉取题目详情；api_get 内令牌桶限流器保证请求频率安全
-                def _fetch_detail(p):
-                    pid = p.get("id", "")
-                    if not pid:
-                        return None
-                    try:
-                        return self.get_problem_detail(ps_id, pid)
-                    except Exception as e:
-                        return e
+            # 并发拉取题目详情；api_get 内令牌桶限流器保证请求频率安全
+            def _fetch_detail(p):
+                pid = p.get("id", "")
+                if not pid:
+                    return ValueError("problem id is missing")
+                try:
+                    return self.get_problem_detail(ps_id, pid)
+                except Exception as e:
+                    return e
 
+            details = []
+            if problems:
                 max_workers = min(DETAIL_MAX_WORKERS, max(1, len(problems)))
                 with ThreadPoolExecutor(max_workers=max_workers) as pool:
                     details = list(pool.map(_fetch_detail, problems))
 
-                detail_records = []
-                with open(base_dir / "题目内容.txt", "w", encoding="utf-8") as f:
-                    for p, detail in zip(problems, details):
-                        title = p.get("title", "")
-                        label = p.get("label", "")
-                        f.write(f"[{label}] {title}\n")
-                        pid = p.get("id", "")
-                        if pid:
-                            if isinstance(detail, Exception):
-                                f.write(f"(获取详情失败: {detail})\n")
-                            elif detail:
-                                record = self._problem_detail_record(ps_id, p, detail)
-                                detail_records.append(record)
-                                content = record.get("content_md") or record.get("content_html") or ""
-                                f.write(f"{content}\n")
-                        f.write(f"\n{'='*40}\n\n")
-                with open(base_dir / "题目详情.json", "w", encoding="utf-8") as f:
-                    json.dump(detail_records, f, ensure_ascii=False, indent=2)
-                print(f"  题目详情: {len(detail_records)} 条")
+            detail_records = []
+            failed_problem_ids = []
+            invalid_content_problem_ids = []
+            with open(base_dir / "题目内容.txt", "w", encoding="utf-8") as f:
+                for p, detail in zip(problems, details):
+                    title = p.get("title", "")
+                    label = p.get("label", "")
+                    f.write(f"[{label}] {title}\n")
+                    pid = str(p.get("id") or "").strip()
+                    if isinstance(detail, Exception):
+                        failed_problem_ids.append(pid or "<missing-id>")
+                        f.write(f"(获取详情失败: {detail})\n")
+                    elif detail:
+                        record = self._problem_detail_record(ps_id, p, detail)
+                        detail_records.append(record)
+                        content = record.get("content_md") or record.get("content_html") or ""
+                        if not self._problem_record_has_valid_content(record):
+                            failed_problem_ids.append(pid or "<missing-id>")
+                            invalid_content_problem_ids.append(pid or "<missing-id>")
+                            f.write("(problem content is empty or only a placeholder)\n")
+                        else:
+                            f.write(f"{content}\n")
+                    else:
+                        failed_problem_ids.append(pid or "<missing-id>")
+                        f.write("(获取详情失败: empty response)\n")
+                    f.write(f"\n{'='*40}\n\n")
+            with open(base_dir / "题目详情.json", "w", encoding="utf-8") as f:
+                json.dump(detail_records, f, ensure_ascii=False, indent=2)
+            with open(base_dir / "problem_crawl_status.json", "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "problem_set_id": str(ps_id),
+                        "problem_type_filter": list(CRAWL_PROBLEM_TYPES),
+                        "listed_problem_count": len(problems),
+                        "detail_problem_count": len(detail_records),
+                        "failed_problem_ids": failed_problem_ids,
+                        "invalid_content_problem_ids": invalid_content_problem_ids,
+                        "complete": not failed_problem_ids,
+                    },
+                    f,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            print(f"  题目详情: {len(detail_records)} 条")
+            if failed_problem_ids:
+                raise RuntimeError(
+                    f"{len(failed_problem_ids)} problem detail(s) failed: "
+                    f"{', '.join(failed_problem_ids[:10])}"
+                )
         except Exception as e:
             print(f"  获取题目列表失败: {e}")
+            raise
 
         # 2. Crawl submissions
         try:
             submissions = self.get_all_submissions(ps_id)
+            self.write_submission_crawl_status(ps_id, base_dir)
+            submission_status = getattr(self, "_submission_crawl_status", {}).get(
+                str(ps_id),
+                {},
+            )
+            if submission_status and submission_status.get("complete") is not True:
+                raise RuntimeError(
+                    f"submission crawl is incomplete for problem set {ps_id}: "
+                    f"{len(submission_status.get('incomplete_user_ids') or [])} "
+                    f"user(s) still hit the PTA 200-row limit"
+                )
             if submissions:
                 import csv
                 with open(base_dir / "提交记录.csv", "w", encoding="utf-8", newline="") as f:
                     writer = csv.writer(f)
-                    writer.writerow(["用户ID", "题目ID", "状态", "分数", "编译器", "用时", "内存", "提交时间"])
+                    writer.writerow(
+                        [
+                            "提交ID",
+                            "用户ID",
+                            "题目ID",
+                            "题型",
+                            "状态",
+                            "分数",
+                            "编译器",
+                            "用时",
+                            "内存",
+                            "提交时间",
+                        ]
+                    )
                     for sub in submissions:
                         writer.writerow([
+                            sub.get("id", ""),
                             sub.get("userId", ""),
                             sub.get("problemSetProblemId", ""),
+                            sub.get("problemType", ""),
                             sub.get("status", ""),
                             sub.get("score", ""),
                             sub.get("compiler", ""),
@@ -2001,6 +2410,95 @@ class PTAClient:
                 print(f"  提交记录: {len(submissions)} 条")
         except Exception as e:
             print(f"  获取提交记录失败: {e}")
+            raise
+
+        # A preview may expose only one draw from a randomized problem pool.
+        # Submission rows reveal additional problem-set-problem ids, so fetch
+        # those details explicitly before declaring the problem set complete.
+        known_problem_ids = {
+            str(record.get("problem_set_problem_id") or "").strip()
+            for record in detail_records
+        }
+        evidence_problem_ids = []
+        ignored_non_programming_evidence_ids = []
+        seen_evidence_ids = set()
+        for submission in submissions:
+            problem_id = str(submission.get("problemSetProblemId") or "").strip()
+            if not problem_id or problem_id == "0" or problem_id in seen_evidence_ids:
+                continue
+            seen_evidence_ids.add(problem_id)
+            problem_type = str(submission.get("problemType") or "").strip().upper()
+            if problem_type and problem_type not in CRAWL_PROBLEM_TYPES:
+                ignored_non_programming_evidence_ids.append(problem_id)
+                continue
+            evidence_problem_ids.append(problem_id)
+        missing_evidence_ids = [
+            problem_id
+            for problem_id in evidence_problem_ids
+            if problem_id not in known_problem_ids
+        ]
+        evidence_failures = []
+        evidence_invalid_content_ids = []
+        if missing_evidence_ids:
+            def _fetch_evidence_detail(problem_id):
+                try:
+                    return self.get_problem_detail(ps_id, problem_id)
+                except Exception as exc:
+                    return exc
+
+            max_workers = min(DETAIL_MAX_WORKERS, len(missing_evidence_ids))
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                evidence_details = list(pool.map(_fetch_evidence_detail, missing_evidence_ids))
+            for problem_id, detail in zip(missing_evidence_ids, evidence_details):
+                if isinstance(detail, Exception) or not detail:
+                    evidence_failures.append(problem_id)
+                    continue
+                record = self._problem_detail_record(
+                    ps_id,
+                    {"id": problem_id},
+                    detail,
+                )
+                detail_records.append(record)
+                if not self._problem_record_has_valid_content(record):
+                    evidence_failures.append(problem_id)
+                    evidence_invalid_content_ids.append(problem_id)
+
+            with open(base_dir / "题目内容.txt", "w", encoding="utf-8") as f:
+                for record in detail_records:
+                    f.write(f"[{record.get('problem_label', '')}] {record.get('title', '')}\n")
+                    content = record.get("content_md") or record.get("content_html") or ""
+                    f.write(f"{content}\n\n{'='*40}\n\n")
+            with open(base_dir / "题目详情.json", "w", encoding="utf-8") as f:
+                json.dump(detail_records, f, ensure_ascii=False, indent=2)
+            print(
+                f"  提交记录补充题目详情: "
+                f"+{len(missing_evidence_ids) - len(evidence_failures)} 条"
+            )
+
+        with open(base_dir / "problem_crawl_status.json", "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "problem_set_id": str(ps_id),
+                    "problem_type_filter": list(CRAWL_PROBLEM_TYPES),
+                    "listed_problem_count": len(problems),
+                    "submission_evidence_problem_count": len(evidence_problem_ids),
+                    "ignored_non_programming_evidence_problem_ids": (
+                        ignored_non_programming_evidence_ids
+                    ),
+                    "detail_problem_count": len(detail_records),
+                    "failed_problem_ids": evidence_failures,
+                    "invalid_content_problem_ids": evidence_invalid_content_ids,
+                    "complete": not evidence_failures,
+                },
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
+        if evidence_failures:
+            raise RuntimeError(
+                f"{len(evidence_failures)} evidence problem detail(s) failed: "
+                f"{', '.join(evidence_failures[:10])}"
+            )
 
         # 3. Export essential types only (PAPER/PAPER_ACCURATE/PAPER_ANALYSIS are redundant/computable)
         export_dir = base_dir / "导出"
@@ -2012,6 +2510,11 @@ class PTAClient:
         )
         if EXPORT_BETWEEN_DELAY_SECONDS > 0:
             time.sleep(min(EXPORT_BETWEEN_DELAY_SECONDS, 1.0))
+        return {
+            "problem_count": len(detail_records),
+            "problem_detail_count": len(detail_records),
+            "submission_count": len(submissions),
+        }
 
     def _refresh_one_problem_set(self, ps_id, ps_name, export_answer_sheet=False):
         """

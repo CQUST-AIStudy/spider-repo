@@ -26,17 +26,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 URL_RE = re.compile(r"/problem-sets/(?P<problem_set_id>\d+)/examinees/(?P<pta_user_id>\d+)")
 
-PROBLEM_TYPES = (
-    "PROGRAMMING",
-    "CODE_COMPLETION",
-    "MULTIPLE_CHOICE",
-    "SINGLE_CHOICE",
-    "MULTI_CHOICE",
-    "FILL_IN_BLANK",
-    "FUNCTION",
-    "SUBJECTIVE",
-    "TRUE_OR_FALSE",
-)
+PROBLEM_TYPES = ("PROGRAMMING",)
 
 STATUS_TEXT_ZH = {
     "ACCEPTED": "答案正确",
@@ -223,15 +213,6 @@ def build_problem_map(client, problem_set_id):
                 "sort_order": sort_order,
             }
             sort_order += 1
-    result.setdefault(
-        "MULTIPLE_CHOICE:0",
-        {
-            "source_problem_id": "MULTIPLE_CHOICE:0",
-            "problem_no": "单选题",
-            "title": "单选题",
-            "sort_order": sort_order,
-        },
-    )
     return result
 
 
@@ -245,7 +226,12 @@ def get_user_submissions(client, problem_set_id, pta_user_id):
             params={
                 "page": page,
                 "limit": 200,
-                "filter": json.dumps({"userId": pta_user_id}),
+                "filter": json.dumps(
+                    {
+                        "userId": pta_user_id,
+                        "problemType": "PROGRAMMING",
+                    }
+                ),
             },
         )
         page_items = data.get("submissions", [])
@@ -258,11 +244,23 @@ def get_user_submissions(client, problem_set_id, pta_user_id):
                 continue
             if submission_id:
                 seen_ids.add(submission_id)
-            submissions.append(submission)
+            if normalize_id(submission.get("problemType")).upper() == "PROGRAMMING":
+                submissions.append(submission)
             new_count += 1
-        if new_count == 0 or len(page_items) < 200:
+        if new_count == 0:
+            if len(page_items) >= 200:
+                raise RuntimeError(
+                    f"PTA repeated a full submission page for user {pta_user_id}; "
+                    "refusing to treat the first 200 rows as complete"
+                )
+            break
+        if len(page_items) < 200:
             break
         page += 1
+    if page >= 100:
+        raise RuntimeError(
+            f"submission pagination exceeded safety cap for user {pta_user_id}"
+        )
     return submissions
 
 
@@ -305,61 +303,68 @@ def export_loaded(loaded, output_dir):
     return written_files
 
 
-def resolve_offering(cursor, problem_set_id, experiment_name, problem_count):
-    import sync_to_unified_db as unified
+def resolve_offering(cursor, problem_set_id, experiment_name, problem_count, class_id=None):
+    from pta_spider import sync_to_unified_db as unified
 
     cursor.execute(
         """
         SELECT id, class_id
         FROM assignment_offering
         WHERE pta_problem_set_id = %s
-        LIMIT 1
+          AND (%s IS NULL OR class_id = %s)
+        ORDER BY id
+        LIMIT 2
         """,
-        (problem_set_id,),
+        (problem_set_id, class_id, class_id),
     )
-    row = cursor.fetchone()
-    if row:
-        return {"offering_id": row[0], "class_id": row[1]}
+    rows = cursor.fetchall()
+    if len(rows) > 1:
+        raise RuntimeError(
+            f"Multiple offerings use PTA problem set {problem_set_id}; pass --class-id to disambiguate"
+        )
+    if rows:
+        return {"offering_id": rows[0][0], "class_id": rows[0][1]}
 
-    cursor.execute(
-        """
-        SELECT ao.id, ao.class_id
-        FROM assignment_offering ao
-        JOIN assignment_template at ON at.id = ao.template_id
-        WHERE ao.title_override = %s OR at.title = %s
-        ORDER BY ao.id DESC
-        LIMIT 1
-        """,
-        (experiment_name, experiment_name),
+    problem_set_info = {
+        "id": str(problem_set_id),
+        "name": experiment_name,
+        "problemCount": problem_count,
+    }
+    named = unified._resolve_named_pta_offering(
+        cursor,
+        experiment_name,
+        class_id,
+        str(problem_set_id),
     )
-    row = cursor.fetchone()
-    if row:
-        cursor.execute(
-            "UPDATE assignment_offering SET pta_problem_set_id = %s, updated_at = CURRENT_TIMESTAMP(3) WHERE id = %s",
-            (problem_set_id, row[0]),
+    if named:
+        migrated = unified._migrate_legacy_offering_to_pta(
+            cursor,
+            named,
+            experiment_name,
+            str(problem_set_id),
+            problem_set_info,
         )
-        return {"offering_id": row[0], "class_id": row[1]}
+        return {"offering_id": migrated[0], "class_id": migrated[1]}
 
-    cursor.execute("SELECT experiment_id FROM experiment WHERE name = %s LIMIT 1", (experiment_name,))
-    row = cursor.fetchone()
-    if row:
-        legacy_experiment_id = row[0]
-    else:
-        cursor.execute("SELECT COALESCE(MAX(num), 0) + 1 FROM experiment")
-        next_num = cursor.fetchone()[0]
-        cursor.execute(
-            "INSERT INTO experiment (num, name, topic_sum) VALUES (%s, %s, %s)",
-            (next_num, experiment_name, problem_count),
+    legacy = unified._resolve_legacy_offering(cursor, experiment_name, class_id)
+    if legacy:
+        migrated = unified._migrate_legacy_offering_to_pta(
+            cursor,
+            legacy,
+            experiment_name,
+            str(problem_set_id),
+            problem_set_info,
         )
-        legacy_experiment_id = cursor.lastrowid
+        return {"offering_id": migrated[0], "class_id": migrated[1]}
 
-    resolved = unified._ensure_assignment_offering(cursor, legacy_experiment_id, experiment_name)
+    resolved = unified._ensure_assignment_offering(
+        cursor,
+        experiment_name,
+        class_id=class_id,
+        problem_set_info=problem_set_info,
+    )
     if not resolved:
         raise RuntimeError(f"Cannot match teaching_class for PTA problem set: {experiment_name}")
-    cursor.execute(
-        "UPDATE assignment_offering SET pta_problem_set_id = %s, updated_at = CURRENT_TIMESTAMP(3) WHERE id = %s",
-        (problem_set_id, resolved["offering_id"]),
-    )
     return resolved
 
 
@@ -405,21 +410,35 @@ def ensure_problem(cursor, offering_id, problem_info, cache):
     return cursor.lastrowid
 
 
-def find_student_by_pta_user(cursor, pta_user_id):
+def find_student_by_pta_user(cursor, pta_user_id, offering_id):
     cursor.execute(
         """
         SELECT sp.id, sp.student_no, sp.real_name
         FROM external_identity_binding eib
         JOIN student_profile sp ON sp.id = eib.entity_id
+        JOIN assignment_offering ao ON ao.id = %s
+        LEFT JOIN pta_user_group_member ugm
+          ON ugm.pta_user_group_id = ao.pta_user_group_id
+         AND ugm.student_id = sp.id
+         AND ugm.member_status = 'ACTIVE'
+        LEFT JOIN class_member cm
+          ON cm.class_id = ao.class_id
+         AND cm.student_id = sp.id
+         AND cm.member_status = 'ACTIVE'
         WHERE eib.entity_type = 'STUDENT_PROFILE'
           AND eib.source_system = 'PTA'
           AND eib.binding_type = 'PTA_USER_ID'
           AND eib.external_id = %s
           AND eib.is_active = TRUE
+          AND (
+            (ao.pta_user_group_id IS NOT NULL AND ugm.id IS NOT NULL)
+            OR
+            (ao.pta_user_group_id IS NULL AND cm.id IS NOT NULL)
+          )
         ORDER BY eib.id DESC
         LIMIT 1
         """,
-        (pta_user_id,),
+        (offering_id, pta_user_id),
     )
     row = cursor.fetchone()
     if not row:
@@ -428,7 +447,7 @@ def find_student_by_pta_user(cursor, pta_user_id):
 
 
 def source_attempt_key(problem_set_id, submission):
-    import sync_to_unified_db as unified
+    from pta_spider import sync_to_unified_db as unified
 
     submission_id = normalize_id(submission.get("id"))
     if submission_id:
@@ -512,22 +531,31 @@ def insert_raw_api_row(
     return cursor.fetchone()[0]
 
 
-def write_loaded_to_db(loaded):
+def write_loaded_to_db(loaded, class_id=None):
     from pta_spider import sync_to_db as legacy_sync
-    import sync_to_unified_db as unified
+    from pta_spider import sync_to_unified_db as unified
 
     conn = legacy_sync.get_db()
     report = {
         "problem_sets": [],
         "raw_rows_upserted": 0,
         "attempts_upserted": 0,
+        "invalid_submitted_at_rows": 0,
         "unmapped_pta_user_ids": [],
     }
+    if class_id is None:
+        raise RuntimeError("--class-id is required for direct database writes")
     try:
         with conn.cursor() as cursor:
             for problem_set_id, bundle in loaded.items():
                 problem_count = max(0, len(bundle["problem_map"]) - 1)
-                resolved = resolve_offering(cursor, problem_set_id, bundle["name"], problem_count)
+                resolved = resolve_offering(
+                    cursor,
+                    problem_set_id,
+                    bundle["name"],
+                    problem_count,
+                    class_id=class_id,
+                )
                 offering_id = resolved["offering_id"]
                 class_id = resolved["class_id"]
                 import_job_id = unified._ensure_import_job(
@@ -548,26 +576,36 @@ def write_loaded_to_db(loaded):
                     "offering_id": offering_id,
                     "raw_rows": 0,
                     "attempts": 0,
+                    "invalid_submitted_at_rows": 0,
                     "unmapped_pta_user_ids": [],
                 }
                 touched_student_ids = set()
 
                 for pta_user_id, submissions in bundle["user_submissions"].items():
-                    student = find_student_by_pta_user(cursor, pta_user_id)
+                    student = find_student_by_pta_user(cursor, pta_user_id, offering_id)
                     if not student:
                         set_report["unmapped_pta_user_ids"].append(pta_user_id)
                     for submission in submissions:
+                        problem_type = normalize_id(submission.get("problemType")).upper()
+                        supported_problem = problem_type in unified.SUPPORTED_PROBLEM_TYPES
                         source_problem_id = compact_problem_source_id(submission)
-                        problem_info = bundle["problem_map"].get(
-                            source_problem_id,
-                            {
-                                "source_problem_id": source_problem_id,
-                                "problem_no": source_problem_id,
-                                "title": f"PTA Problem {source_problem_id}",
-                                "sort_order": 0,
-                            },
-                        )
-                        problem_id = ensure_problem(cursor, offering_id, problem_info, problem_cache)
+                        problem_id = None
+                        if supported_problem:
+                            problem_info = bundle["problem_map"].get(
+                                source_problem_id,
+                                {
+                                    "source_problem_id": source_problem_id,
+                                    "problem_no": source_problem_id,
+                                    "title": f"PTA Problem {source_problem_id}",
+                                    "sort_order": 0,
+                                },
+                            )
+                            problem_id = ensure_problem(
+                                cursor,
+                                offering_id,
+                                problem_info,
+                                problem_cache,
+                            )
                         student_id = student["student_id"] if student else None
                         raw_api_id = insert_raw_api_row(
                             cursor,
@@ -581,13 +619,15 @@ def write_loaded_to_db(loaded):
                         )
                         set_report["raw_rows"] += 1
                         report["raw_rows_upserted"] += 1
-                        if not student:
+                        if not student or not supported_problem:
                             continue
                         touched_student_ids.add(student["student_id"])
 
                         submitted_at = parse_datetime(submission.get("submitAt") or submission.get("submittedAt"))
                         if submitted_at is None:
-                            submitted_at = datetime(2000, 1, 1)
+                            set_report["invalid_submitted_at_rows"] += 1
+                            report["invalid_submitted_at_rows"] += 1
+                            continue
                         cursor.execute(
                             """
                             INSERT INTO student_problem_attempt (
@@ -625,7 +665,13 @@ def write_loaded_to_db(loaded):
                         report["attempts_upserted"] += 1
 
                 unified._recalc_problem_state(cursor, offering_id)
-                unified._recalc_student_assignment(cursor, offering_id, [], {})
+                unified._recalc_student_assignment(
+                    cursor,
+                    offering_id,
+                    [],
+                    {},
+                    available_roles=set(),
+                )
                 refresh_direct_assignment_summary(cursor, offering_id, sorted(touched_student_ids))
                 unified._update_import_job(cursor, import_job_id, "SUCCEEDED", set_report, None)
                 report["problem_sets"].append(set_report)
@@ -730,6 +776,7 @@ def main():
     parser.add_argument("urls", nargs="+", help="PTA examinee submission page URLs")
     parser.add_argument("--output-dir", help="CSV output directory. Defaults to PTA_CRAWL_DIR.")
     parser.add_argument("--write-db", action="store_true", help="Write normalized records to MySQL")
+    parser.add_argument("--class-id", type=int, help="Teaching class ID used to disambiguate offerings")
     parser.add_argument("--no-csv", action="store_true", help="Skip CSV export")
     args = parser.parse_args()
 
@@ -744,7 +791,7 @@ def main():
         output_dir = args.output_dir or str(client.crawl_dir)
         export_loaded(loaded, output_dir)
     if args.write_db:
-        report = write_loaded_to_db(loaded)
+        report = write_loaded_to_db(loaded, class_id=args.class_id)
         print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
 
 

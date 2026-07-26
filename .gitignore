@@ -12,3 +12,12 @@ venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.chrome-profile/
+.selenium/
+login_debug/
+*.pkl
+*.egg-info/
+backend_callback_outbox.json
+captcha_bg.jpg
+cooldown_state.json
+crawl_history.json

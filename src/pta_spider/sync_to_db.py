@@ -852,7 +852,7 @@ def sync_problem_scores(conn, exp_map):
                     continue
                 # 解析满分: row2[j] 格式如 "C(3.0)" 或 "10.0"
                 header_val = str(row2[j]).strip() if j < len(row2) and row2[j] is not None else ""
-                max_score = 0
+                max_score = None
                 # 尝试从括号中提取满分: "C(3.0)" → 3.0
                 import re as _re
                 m = _re.search(r'\((\d+\.?\d*)\)', header_val)
@@ -1201,7 +1201,7 @@ def sync_problem_scores(conn, exp_map):
 
                 header_val = str(row2[j]).strip() if j < len(row2) and row2[j] is not None else ""
                 m = re.search(r"\((\d+\.?\d*)\)", header_val)
-                max_score = float(m.group(1)) if m else _safe_float(header_val, 0)
+                max_score = float(m.group(1)) if m else _safe_float(header_val, None)
                 problem_cols[j] = {
                     "label": label,
                     "type": row0[j] if j < len(row0) else "",
@@ -1559,7 +1559,7 @@ def sync_problem_scores(conn, exp_map):
                     continue
                 header_val = str(row2[j]).strip() if j < len(row2) and row2[j] is not None else ""
                 m = re.search(r"\((\d+\.?\d*)\)", header_val)
-                max_score = float(m.group(1)) if m else _safe_float(header_val, 0)
+                max_score = float(m.group(1)) if m else _safe_float(header_val, None)
                 problem_cols[j] = {"label": label, "type": row0[j] if j < len(row0) else "", "max_score": max_score}
             if not problem_cols:
                 continue
@@ -1605,6 +1605,16 @@ def sync_problem_scores(conn, exp_map):
 
 
 def sync_all(crawl_dir=None, strict=True):
+    if os.getenv("PTA_ALLOW_LEGACY_DB_SYNC", "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        raise RuntimeError(
+            "Legacy PTA database sync is disabled. Use "
+            "pta_spider.sync_to_unified_db.run_configured_sync instead."
+        )
     global CRAWL_DIR
     if crawl_dir:
         CRAWL_DIR = Path(crawl_dir)
