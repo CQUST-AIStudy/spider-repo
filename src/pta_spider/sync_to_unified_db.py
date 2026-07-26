@@ -1908,33 +1908,33 @@ def _recalc_student_assignment(
             f"""
             UPDATE student_assignment sa
             {joined_aggregates}
-            SET submission_status = CASE
+            SET sa.submission_status = CASE
                   WHEN tr.total_score IS NOT NULL THEN 'GRADED'
                   WHEN COALESCE(ev.answer_sheet_count, 0) > 0 THEN 'SUBMITTED'
                   WHEN COALESCE(ev.scored_code_count, 0) > 0 THEN 'SUBMITTED'
                   WHEN COALESCE(spa.submitted_problem_count, 0) = 0 THEN 'NOT_STARTED'
                   ELSE 'IN_PROGRESS'
                 END,
-                first_submit_at = spa.first_submit_at,
-                last_submit_at = spa.last_submit_at,
-                accepted_problem_count = COALESCE(sps.accepted_problem_count, 0),
-                submitted_problem_count = {evidence_problem_count_expr},
-                best_total_score = tr.total_score,
-                latest_total_score = tr.total_score,
-                ranking = CASE WHEN tr.total_score IS NOT NULL THEN tr.ranking ELSE NULL END,
-                transcript_row_present = CASE WHEN tr.student_id IS NOT NULL THEN TRUE ELSE FALSE END,
-                answer_sheet_count = COALESCE(ev.answer_sheet_count, 0),
-                scored_code_count = COALESCE(ev.scored_code_count, 0),
-                submission_attempt_count = COALESCE(spa.submission_attempt_count, 0),
-                completion_evidence = CASE
+                sa.first_submit_at = spa.first_submit_at,
+                sa.last_submit_at = spa.last_submit_at,
+                sa.accepted_problem_count = COALESCE(sps.accepted_problem_count, 0),
+                sa.submitted_problem_count = {evidence_problem_count_expr},
+                sa.best_total_score = tr.total_score,
+                sa.latest_total_score = tr.total_score,
+                sa.ranking = CASE WHEN tr.total_score IS NOT NULL THEN tr.ranking ELSE NULL END,
+                sa.transcript_row_present = CASE WHEN tr.student_id IS NOT NULL THEN TRUE ELSE FALSE END,
+                sa.answer_sheet_count = COALESCE(ev.answer_sheet_count, 0),
+                sa.scored_code_count = COALESCE(ev.scored_code_count, 0),
+                sa.submission_attempt_count = COALESCE(spa.submission_attempt_count, 0),
+                sa.completion_evidence = CASE
                   WHEN tr.total_score IS NOT NULL THEN 'TRANSCRIPT_SCORE'
                   WHEN COALESCE(ev.answer_sheet_count, 0) > 0 THEN 'ANSWER_SHEET'
                   WHEN COALESCE(ev.scored_code_count, 0) > 0 THEN 'SCORED_CODE'
                   WHEN COALESCE(spa.submitted_problem_count, 0) = 0 THEN 'NONE'
                   ELSE 'SUBMISSION_ATTEMPT'
                 END,
-                latest_sync_at = CURRENT_TIMESTAMP(3),
-                updated_at = CURRENT_TIMESTAMP(3)
+                sa.latest_sync_at = CURRENT_TIMESTAMP(3),
+                sa.updated_at = CURRENT_TIMESTAMP(3)
             WHERE sa.offering_id = %s
             """,
             (offering_id, offering_id, offering_id),
@@ -1944,22 +1944,22 @@ def _recalc_student_assignment(
             f"""
             UPDATE student_assignment sa
             {joined_aggregates}
-            SET submission_status = CASE
+            SET sa.submission_status = CASE
                   WHEN tr.total_score IS NOT NULL THEN 'GRADED'
                   WHEN COALESCE(ev.answer_sheet_count, 0) > 0 THEN 'SUBMITTED'
                   WHEN COALESCE(ev.scored_code_count, 0) > 0 THEN 'SUBMITTED'
                   WHEN COALESCE(spa.submitted_problem_count, 0) = 0 THEN 'NOT_STARTED'
                   ELSE 'IN_PROGRESS'
                 END,
-                first_submit_at = spa.first_submit_at,
-                last_submit_at = spa.last_submit_at,
-                accepted_problem_count = COALESCE(sps.accepted_problem_count, 0),
-                submitted_problem_count = {evidence_problem_count_expr},
-                best_total_score = tr.total_score,
-                latest_total_score = tr.total_score,
-                ranking = CASE WHEN tr.total_score IS NOT NULL THEN tr.ranking ELSE NULL END,
-                latest_sync_at = CURRENT_TIMESTAMP(3),
-                updated_at = CURRENT_TIMESTAMP(3)
+                sa.first_submit_at = spa.first_submit_at,
+                sa.last_submit_at = spa.last_submit_at,
+                sa.accepted_problem_count = COALESCE(sps.accepted_problem_count, 0),
+                sa.submitted_problem_count = {evidence_problem_count_expr},
+                sa.best_total_score = tr.total_score,
+                sa.latest_total_score = tr.total_score,
+                sa.ranking = CASE WHEN tr.total_score IS NOT NULL THEN tr.ranking ELSE NULL END,
+                sa.latest_sync_at = CURRENT_TIMESTAMP(3),
+                sa.updated_at = CURRENT_TIMESTAMP(3)
             WHERE sa.offering_id = %s
             """,
             (offering_id, offering_id, offering_id),
