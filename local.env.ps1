@@ -1,9 +1,0 @@
-$env:PTA_CONDA_ENV = if ($env:PTA_CONDA_ENV) { $env:PTA_CONDA_ENV } else { "dl310" }
-$env:ACADEMIC_UNIFIED_IMPORT_ENABLED = if ($env:ACADEMIC_UNIFIED_IMPORT_ENABLED) { $env:ACADEMIC_UNIFIED_IMPORT_ENABLED } else { "true" }
-$env:ACADEMIC_LEGACY_WRITE_ENABLED = if ($env:ACADEMIC_LEGACY_WRITE_ENABLED) { $env:ACADEMIC_LEGACY_WRITE_ENABLED } else { "true" }
-$env:DB_HOST = "rm-bp179y7vm468o6yc5qo.mysql.rds.aliyuncs.com"
-$env:DB_PORT = "3306"
-$env:DB_NAME = "ptadatabase"
-$env:DB_USERNAME = "root"
-$env:DB_USER = "root"
-$env:DB_PASSWORD = "cqust!admin123"
