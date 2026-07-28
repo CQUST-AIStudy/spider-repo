@@ -1606,8 +1606,101 @@ class PTAClient:
             "complete": not (hit_server_cap and repeated_page),
         }
 
+    def get_latest_submissions(self, ps_id, pta_user_ids=None, previous_cursor=None):
+        """Fetch one bounded newest-first window without per-user fallback."""
+        if pta_user_ids is None:
+            pta_user_ids = getattr(self, "_active_group_user_ids", None)
+        if previous_cursor is None:
+            previous_cursors = getattr(self, "_submission_previous_cursors", {})
+            previous_cursor = previous_cursors.get(str(ps_id))
+
+        data = self.get_submissions(
+            ps_id,
+            page=0,
+            limit=200,
+            filter_obj={"problemType": "PROGRAMMING"},
+        )
+        global_rows = list(data.get("submissions") or [])
+        global_rows.sort(
+            key=lambda row: str(row.get("submitAt") or ""),
+            reverse=True,
+        )
+        global_rows = global_rows[:200]
+        server_cap_reached = len(global_rows) >= 200
+
+        member_ids = {
+            str(value or "").strip()
+            for value in (pta_user_ids or [])
+            if str(value or "").strip()
+        }
+        submissions = [
+            row
+            for row in global_rows
+            if str(row.get("problemType") or "").strip().upper() == "PROGRAMMING"
+            and (
+                not member_ids
+                or str(row.get("userId") or "").strip() in member_ids
+            )
+        ]
+        scoped_ids = {
+            str(row.get("id") or "").strip()
+            for row in submissions
+            if str(row.get("id") or "").strip()
+        }
+        latest_cursor = next(
+            (
+                str(row.get("id") or "").strip()
+                for row in submissions
+                if str(row.get("id") or "").strip()
+            ),
+            None,
+        )
+        cursor_found = bool(previous_cursor and str(previous_cursor) in scoped_ids)
+        gap_detected = bool(
+            previous_cursor
+            and server_cap_reached
+            and not cursor_found
+        )
+        status = {
+            "problem_set_id": str(ps_id),
+            "scope": (
+                "PTA_USER_GROUP_MEMBERS"
+                if member_ids
+                else "PROBLEM_SET_SNAPSHOT"
+            ),
+            "strategy": "LATEST_200_GLOBAL_WINDOW",
+            "coverage": "LATEST_200",
+            "complete": True,
+            "snapshot_complete": False,
+            "rows": len(submissions),
+            "global_rows": len(global_rows),
+            "queried_user_count": 0,
+            "incomplete_user_ids": [],
+            "truncated": server_cap_reached,
+            "previous_cursor": str(previous_cursor) if previous_cursor else None,
+            "previous_cursor_found": cursor_found,
+            "gap_detected": gap_detected,
+            "latest_cursor": latest_cursor,
+            "problem_type": "PROGRAMMING",
+        }
+        if not hasattr(self, "_submission_crawl_status"):
+            self._submission_crawl_status = {}
+        self._submission_crawl_status[str(ps_id)] = status
+        if gap_detected:
+            print(
+                f"  warning: latest-200 window no longer overlaps the previous "
+                f"cursor for {ps_id}; full-history sync is recommended"
+            )
+        return submissions
+
     def get_all_submissions(self, ps_id, pta_user_ids=None):
         """Fetch only PROGRAMMING submissions in the authoritative group scope."""
+        policy = str(
+            getattr(self, "submission_policy", "FULL_HISTORY") or "FULL_HISTORY"
+        ).strip().upper()
+        if policy == "LATEST_200":
+            return self.get_latest_submissions(ps_id, pta_user_ids=pta_user_ids)
+
         if pta_user_ids is None:
             pta_user_ids = getattr(self, "_active_group_user_ids", None)
 
@@ -1693,6 +1786,22 @@ class PTAClient:
         ]
         status["problem_type"] = "PROGRAMMING"
         status["rows"] = len(submissions)
+        status["coverage"] = "FULL_HISTORY"
+        status["snapshot_complete"] = bool(status["complete"])
+        status["truncated"] = not bool(status["complete"])
+        status["gap_detected"] = False
+        submissions.sort(
+            key=lambda row: str(row.get("submitAt") or ""),
+            reverse=True,
+        )
+        status["latest_cursor"] = next(
+            (
+                str(row.get("id") or "").strip()
+                for row in submissions
+                if str(row.get("id") or "").strip()
+            ),
+            None,
+        )
         if not hasattr(self, "_submission_crawl_status"):
             self._submission_crawl_status = {}
         self._submission_crawl_status[str(ps_id)] = status

@@ -235,7 +235,11 @@ def _is_problem_set_closed(problem_set, now=None):
     return deadline is not None and deadline <= (now or datetime.now())
 
 
-def _database_has_experiment_data(problem_set, class_id=None):
+def _database_has_experiment_data(
+    problem_set,
+    class_id=None,
+    allow_existing_problem_rows=False,
+):
     name = _problem_set_name(problem_set)
     if not name or name == "unknown":
         return False
@@ -246,6 +250,17 @@ def _database_has_experiment_data(problem_set, class_id=None):
         conn = legacy_sync.get_db()
         with conn.cursor() as cursor:
             def offering_has_complete_problem_details(offering_id):
+                if allow_existing_problem_rows:
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*)
+                        FROM assignment_problem
+                        WHERE offering_id = %s
+                        """,
+                        (offering_id,),
+                    )
+                    if int(cursor.fetchone()[0] or 0) > 0:
+                        return True
                 supported_types = tuple(
                     sorted(SUPPORTED_PROBLEM_TYPES)
                 )
@@ -384,6 +399,13 @@ def _load_problem_set_sync_states(class_id):
                   transcript_complete,
                   answer_complete,
                   submission_complete,
+                  submission_coverage,
+                  submission_truncated,
+                  submission_gap_detected,
+                  submission_row_count,
+                  last_submission_cursor,
+                  last_fast_sync_at,
+                  full_history_finalized_at,
                   last_dynamic_sync_at,
                   finalized_at,
                   last_success_at,
@@ -405,11 +427,18 @@ def _load_problem_set_sync_states(class_id):
                     "transcript_complete": bool(row[5]),
                     "answer_complete": bool(row[6]),
                     "submission_complete": bool(row[7]),
-                    "last_dynamic_sync_at": row[8],
-                    "finalized_at": row[9],
-                    "last_success_at": row[10],
-                    "last_error": row[11],
-                    "sync_version": int(row[12] or 0),
+                    "submission_coverage": str(row[8] or "NONE"),
+                    "submission_truncated": bool(row[9]),
+                    "submission_gap_detected": bool(row[10]),
+                    "submission_row_count": int(row[11] or 0),
+                    "last_submission_cursor": row[12],
+                    "last_fast_sync_at": row[13],
+                    "full_history_finalized_at": row[14],
+                    "last_dynamic_sync_at": row[15],
+                    "finalized_at": row[16],
+                    "last_success_at": row[17],
+                    "last_error": row[18],
+                    "sync_version": int(row[19] or 0),
                 }
             return result
     except Exception as exc:
@@ -430,10 +459,12 @@ def _classify_problem_sets(
     problem_sets,
     persisted_states,
     mode,
+    submission_policy=None,
     now=None,
     durable_content_checker=None,
 ):
     now = now or datetime.now()
+    submission_policy = submission_policy or SubmissionPolicy.LATEST_200
     decisions = []
     for problem_set in problem_sets or []:
         problem_set_id = _problem_set_sync_id(problem_set)
@@ -455,15 +486,39 @@ def _classify_problem_sets(
                 print(f"durable content classification failed for {name}: {exc}")
                 content_complete = False
 
+        coverage = str(
+            state.get("submission_coverage")
+            or (
+                SubmissionPolicy.FULL_HISTORY.value
+                if state.get("submission_complete")
+                else "NONE"
+            )
+        ).upper()
+        submission_satisfied = (
+            coverage == SubmissionPolicy.FULL_HISTORY.value
+            if submission_policy == SubmissionPolicy.FULL_HISTORY
+            else coverage in {
+                SubmissionPolicy.LATEST_200.value,
+                SubmissionPolicy.FULL_HISTORY.value,
+            }
+        ) and not bool(state.get("submission_gap_detected"))
         all_complete = (
             content_complete
-            and bool(state.get("transcript_complete"))
-            and bool(state.get("answer_complete"))
-            and bool(state.get("submission_complete"))
+            and submission_satisfied
+            and (
+                submission_policy == SubmissionPolicy.LATEST_200
+                or (
+                    bool(state.get("transcript_complete"))
+                    and bool(state.get("answer_complete"))
+                )
+            )
         )
         finalized = bool(state.get("finalized_at"))
 
-        if mode == CrawlMode.FULL:
+        if (
+            mode == CrawlMode.FULL
+            or submission_policy == SubmissionPolicy.FULL_HISTORY
+        ):
             decision = "REPAIR_REQUIRED" if closed else "OPEN"
             target = True
             needs_content = True
@@ -512,12 +567,15 @@ def _save_problem_set_sync_states(
     transcript_complete_names,
     answer_complete_names,
     submission_complete_names,
+    submission_metadata_by_name,
+    submission_policy,
 ):
     successful_names = set(successful_names or ())
     content_completed_names = set(content_completed_names or ())
     transcript_complete_names = set(transcript_complete_names or ())
     answer_complete_names = set(answer_complete_names or ())
     submission_complete_names = set(submission_complete_names or ())
+    submission_metadata_by_name = submission_metadata_by_name or {}
     rows = []
     now = datetime.now()
     for item in decisions or []:
@@ -528,14 +586,74 @@ def _save_problem_set_sync_states(
             item.get("content_complete")
             or name in content_completed_names
         )
-        transcript_complete = name in transcript_complete_names
-        answer_complete = name in answer_complete_names
-        submission_complete = name in submission_complete_names
+        persisted_state = item.get("persisted_state") or {}
+        transcript_complete = bool(
+            name in transcript_complete_names
+            or persisted_state.get("transcript_complete")
+        )
+        answer_complete = bool(
+            name in answer_complete_names
+            or persisted_state.get("answer_complete")
+        )
+        submission_complete = bool(
+            name in submission_complete_names
+            or persisted_state.get("submission_complete")
+        )
+        metadata = submission_metadata_by_name.get(name) or {}
+        observed_coverage = str(
+            metadata.get("coverage")
+            or persisted_state.get("submission_coverage")
+            or "NONE"
+        ).upper()
+        persisted_coverage = str(
+            persisted_state.get("submission_coverage") or "NONE"
+        ).upper()
+        current_gap_detected = bool(metadata.get("gap_detected", False))
+        coverage = observed_coverage
+        if (
+            observed_coverage == SubmissionPolicy.LATEST_200.value
+            and persisted_coverage == SubmissionPolicy.FULL_HISTORY.value
+            and not current_gap_detected
+            and not persisted_state.get("submission_gap_detected")
+        ):
+            coverage = SubmissionPolicy.FULL_HISTORY.value
+        truncated = bool(
+            metadata.get(
+                "truncated",
+                persisted_state.get("submission_truncated", False),
+            )
+        )
+        gap_detected = (
+            False
+            if observed_coverage == SubmissionPolicy.FULL_HISTORY.value
+            else bool(
+                current_gap_detected
+                or persisted_state.get("submission_gap_detected", False)
+            )
+        )
+        submission_row_count = int(
+            metadata.get(
+                "rows",
+                persisted_state.get("submission_row_count", 0),
+            )
+            or 0
+        )
+        latest_cursor = (
+            metadata.get("latest_cursor")
+            or persisted_state.get("last_submission_cursor")
+        )
         complete = (
             content_complete
-            and transcript_complete
-            and answer_complete
             and submission_complete
+            and not gap_detected
+            and (
+                submission_policy == SubmissionPolicy.LATEST_200
+                or (
+                    coverage == SubmissionPolicy.FULL_HISTORY.value
+                    and transcript_complete
+                    and answer_complete
+                )
+            )
         )
         closed = bool(item.get("closed"))
         sync_state = (
@@ -556,6 +674,17 @@ def _save_problem_set_sync_states(
                 transcript_complete,
                 answer_complete,
                 submission_complete,
+                coverage,
+                truncated,
+                gap_detected,
+                submission_row_count,
+                latest_cursor,
+                now
+                if observed_coverage == SubmissionPolicy.LATEST_200.value
+                else None,
+                now
+                if observed_coverage == SubmissionPolicy.FULL_HISTORY.value
+                else None,
                 now,
                 now if closed and complete else None,
                 now,
@@ -579,6 +708,13 @@ def _save_problem_set_sync_states(
                   transcript_complete,
                   answer_complete,
                   submission_complete,
+                  submission_coverage,
+                  submission_truncated,
+                  submission_gap_detected,
+                  submission_row_count,
+                  last_submission_cursor,
+                  last_fast_sync_at,
+                  full_history_finalized_at,
                   last_dynamic_sync_at,
                   finalized_at,
                   last_success_at,
@@ -587,7 +723,8 @@ def _save_problem_set_sync_states(
                 )
                 VALUES (
                   %s, %s, %s, %s, %s, %s, %s, %s,
-                  %s, %s, %s, %s, NULL, 1
+                  %s, %s, %s, %s, %s, %s, %s, %s,
+                  %s, %s, %s, NULL, 1
                 )
                 ON DUPLICATE KEY UPDATE
                   problem_set_name = VALUES(problem_set_name),
@@ -597,6 +734,19 @@ def _save_problem_set_sync_states(
                   transcript_complete = VALUES(transcript_complete),
                   answer_complete = VALUES(answer_complete),
                   submission_complete = VALUES(submission_complete),
+                  submission_coverage = VALUES(submission_coverage),
+                  submission_truncated = VALUES(submission_truncated),
+                  submission_gap_detected = VALUES(submission_gap_detected),
+                  submission_row_count = VALUES(submission_row_count),
+                  last_submission_cursor = VALUES(last_submission_cursor),
+                  last_fast_sync_at = COALESCE(
+                    VALUES(last_fast_sync_at),
+                    last_fast_sync_at
+                  ),
+                  full_history_finalized_at = COALESCE(
+                    VALUES(full_history_finalized_at),
+                    full_history_finalized_at
+                  ),
                   last_dynamic_sync_at = VALUES(last_dynamic_sync_at),
                   finalized_at = VALUES(finalized_at),
                   last_success_at = VALUES(last_success_at),
@@ -730,6 +880,11 @@ class CrawlMode(str, Enum):
     FULL = "full"
 
 
+class SubmissionPolicy(str, Enum):
+    LATEST_200 = "LATEST_200"
+    FULL_HISTORY = "FULL_HISTORY"
+
+
 def _refresh_all_content(mode):
     """Only the explicit full mode may recrawl immutable problem content."""
     return mode == CrawlMode.FULL
@@ -756,6 +911,8 @@ class CrawlRequest(BaseModel):
     keyword: str | None = None
     ptaKeyword: str | None = None
     mode: str | None = CrawlMode.INCREMENTAL.value
+    submission_policy: str | None = None
+    submissionPolicy: str | None = None
     force: bool = False
     credential_source: str | None = None
     credentialSource: str | None = None
@@ -778,6 +935,7 @@ class TaskInfo:
         group_id,
         group_name,
         mode,
+        submission_policy=None,
         force=False,
         credential_source=None,
         username=None,
@@ -794,6 +952,14 @@ class TaskInfo:
         self.group_id = group_id
         self.group_name = group_name
         self.mode = mode
+        self.submission_policy = (
+            submission_policy
+            or (
+                SubmissionPolicy.FULL_HISTORY
+                if mode in (CrawlMode.REFRESH, CrawlMode.FULL)
+                else SubmissionPolicy.LATEST_200
+            )
+        )
         self.force = force
         self.credential_source = credential_source or ("temporary" if username and password else "cookie")
         self.username = username
@@ -826,6 +992,7 @@ class TaskInfo:
             "group_id": self.group_id,
             "group_name": self.group_name,
             "mode": self.mode.value,
+            "submission_policy": self.submission_policy.value,
             "force": self.force, "status": self.status.value,
             "credential_source": self.credential_source,
             "force_selenium_login": self.force_selenium_login,
@@ -856,11 +1023,20 @@ def _get_queue():
         _queue = asyncio.Queue(maxsize=MAX_QUEUE_SIZE)
     return _queue
 
-def _keyword_in_queue(keyword, mode, class_id=None, group_id=None, problem_set_id=None, problem_set_name=None):
+def _keyword_in_queue(
+    keyword,
+    mode,
+    submission_policy,
+    class_id=None,
+    group_id=None,
+    problem_set_id=None,
+    problem_set_name=None,
+):
     for t in _task_store.values():
         if (
             t.keyword == keyword
             and t.mode == mode
+            and t.submission_policy == submission_policy
             and t.class_id == class_id
             and t.group_id == group_id
             and t.problem_set_id == problem_set_id
@@ -1236,10 +1412,24 @@ def _run_crawl(task):
             all_sets,
             persisted_states,
             mode,
+            submission_policy=task.submission_policy,
             durable_content_checker=lambda problem_set: (
-                _database_has_experiment_data(problem_set, task.class_id)
+                _database_has_experiment_data(
+                    problem_set,
+                    task.class_id,
+                    allow_existing_problem_rows=(
+                        task.submission_policy
+                        == SubmissionPolicy.LATEST_200
+                    ),
+                )
             ),
         )
+        client.submission_policy = task.submission_policy.value
+        client._submission_previous_cursors = {
+            str(problem_set_id): state.get("last_submission_cursor")
+            for problem_set_id, state in persisted_states.items()
+            if state.get("last_submission_cursor")
+        }
         target_decisions = [item for item in decisions if item["target"]]
         target_sets = [item["problem_set"] for item in target_decisions]
         target_names = {
@@ -1285,30 +1475,31 @@ def _run_crawl(task):
         group_export_t0 = time.time()
         group_answer_experiment_names = set()
         answer_complete_names = set()
-        try:
-            group_export_result = _export_group_answer_or_warn(
-                client,
-                task,
-                task_crawl_dir,
-                required_by_default=True,
-                experiment_names=target_names,
-            )
-            if isinstance(group_export_result, str):
-                task.warnings.append(group_export_result)
-            elif isinstance(group_export_result, dict):
-                group_answer_experiment_names = {
-                    str(item.get("experiment_name") or "").strip()
-                    for item in group_export_result.get("written", [])
-                    if isinstance(item, dict)
-                    and str(item.get("experiment_name") or "").strip()
-                }
-                # A successful aggregate answer export also proves that target
-                # sets absent from the archive currently have no answer sheet.
-                answer_complete_names.update(target_names)
-        except Exception as exc:
-            raise RuntimeError(
-                "group answer export: " + _summarize_group_answer_error(exc)
-            ) from exc
+        if task.submission_policy == SubmissionPolicy.FULL_HISTORY:
+            try:
+                group_export_result = _export_group_answer_or_warn(
+                    client,
+                    task,
+                    task_crawl_dir,
+                    required_by_default=True,
+                    experiment_names=target_names,
+                )
+                if isinstance(group_export_result, str):
+                    task.warnings.append(group_export_result)
+                elif isinstance(group_export_result, dict):
+                    group_answer_experiment_names = {
+                        str(item.get("experiment_name") or "").strip()
+                        for item in group_export_result.get("written", [])
+                        if isinstance(item, dict)
+                        and str(item.get("experiment_name") or "").strip()
+                    }
+                    answer_complete_names.update(target_names)
+            except Exception as exc:
+                raise RuntimeError(
+                    "group answer export: " + _summarize_group_answer_error(exc)
+                ) from exc
+        else:
+            print("fast sync: group answer export skipped")
         print(
             f"[timing] group answer export phase: "
             f"{time.time() - group_export_t0:.1f}s"
@@ -1316,28 +1507,31 @@ def _run_crawl(task):
 
         transcript_export_t0 = time.time()
         group_transcript_experiment_names = set()
-        try:
-            group_transcript_result = _export_group_transcript_or_warn(
-                client,
-                task,
-                task_crawl_dir,
-                required_by_default=True,
-                experiment_names=target_names,
-            )
-            if isinstance(group_transcript_result, str):
-                task.warnings.append(group_transcript_result)
-            elif isinstance(group_transcript_result, dict):
-                group_transcript_experiment_names = {
-                    str(item.get("experiment_name") or "").strip()
-                    for item in group_transcript_result.get("written", [])
-                    if isinstance(item, dict)
-                    and str(item.get("experiment_name") or "").strip()
-                }
-        except Exception as exc:
-            raise RuntimeError(
-                "group transcript export: "
-                + _summarize_group_answer_error(exc)
-            ) from exc
+        if task.submission_policy == SubmissionPolicy.FULL_HISTORY:
+            try:
+                group_transcript_result = _export_group_transcript_or_warn(
+                    client,
+                    task,
+                    task_crawl_dir,
+                    required_by_default=True,
+                    experiment_names=target_names,
+                )
+                if isinstance(group_transcript_result, str):
+                    task.warnings.append(group_transcript_result)
+                elif isinstance(group_transcript_result, dict):
+                    group_transcript_experiment_names = {
+                        str(item.get("experiment_name") or "").strip()
+                        for item in group_transcript_result.get("written", [])
+                        if isinstance(item, dict)
+                        and str(item.get("experiment_name") or "").strip()
+                    }
+            except Exception as exc:
+                raise RuntimeError(
+                    "group transcript export: "
+                    + _summarize_group_answer_error(exc)
+                ) from exc
+        else:
+            print("fast sync: group transcript export skipped")
         print(
             f"[timing] group transcript export phase: "
             f"{time.time() - transcript_export_t0:.1f}s"
@@ -1347,6 +1541,7 @@ def _run_crawl(task):
         crawl_errors = []
         completed_content_sets = []
         submission_complete_names = set()
+        submission_metadata_by_name = {}
         transcript_complete_names = set(group_transcript_experiment_names)
         touched_problem_set_names = set(target_names)
 
@@ -1364,7 +1559,9 @@ def _run_crawl(task):
                         ps.get("name", ""),
                         export_answer_sheet=False,
                         export_problem_set_artifacts=(
-                            _problem_set_name(ps)
+                            task.submission_policy
+                            == SubmissionPolicy.FULL_HISTORY
+                            and _problem_set_name(ps)
                             not in group_transcript_experiment_names
                         ),
                     )
@@ -1378,6 +1575,19 @@ def _run_crawl(task):
                         completed_content_sets.append(ps)
                         content_crawled_ids.add(ps.get("id", ""))
                         submission_complete_names.add(_problem_set_name(ps))
+                        submission_status = getattr(
+                            client,
+                            "_submission_crawl_status",
+                            {},
+                        ).get(str(ps.get("id", "")), {})
+                        submission_metadata_by_name[
+                            _problem_set_name(ps)
+                        ] = dict(submission_status)
+                        if submission_status.get("gap_detected"):
+                            task.warnings.append(
+                                f"{_problem_set_name(ps)}: 最新 200 条与上次水位线"
+                                "未重叠，建议执行完整历史同步"
+                            )
                         if (
                             _problem_set_name(ps)
                             not in group_transcript_experiment_names
@@ -1426,6 +1636,19 @@ def _run_crawl(task):
                 if status == "ok":
                     total_subs += int(payload or 0)
                     submission_complete_names.add(_problem_set_name(ps))
+                    submission_status = getattr(
+                        client,
+                        "_submission_crawl_status",
+                        {},
+                    ).get(str(ps.get("id", "")), {})
+                    submission_metadata_by_name[
+                        _problem_set_name(ps)
+                    ] = dict(submission_status)
+                    if submission_status.get("gap_detected"):
+                        task.warnings.append(
+                            f"{_problem_set_name(ps)}: 最新 200 条与上次水位线"
+                            "未重叠，建议执行完整历史同步"
+                        )
                     _mark_problem_set_refreshed(ps, "submissions")
                 else:
                     print(f"pull submissions failed {ps.get('name', '')}: {payload}")
@@ -1440,7 +1663,10 @@ def _run_crawl(task):
                 if item["persisted_state"].get("submission_complete")
             )
 
-        if mode in (CrawlMode.REFRESH, CrawlMode.FULL, CrawlMode.INCREMENTAL):
+        if (
+            task.submission_policy == SubmissionPolicy.FULL_HISTORY
+            and mode in (CrawlMode.REFRESH, CrawlMode.FULL, CrawlMode.INCREMENTAL)
+        ):
             export_candidates = []
             for ps in target_sets:
                 ps_id = ps.get("id", "")
@@ -1521,6 +1747,8 @@ def _run_crawl(task):
                 transcript_complete_names=transcript_complete_names,
                 answer_complete_names=answer_complete_names,
                 submission_complete_names=submission_complete_names,
+                submission_metadata_by_name=submission_metadata_by_name,
+                submission_policy=task.submission_policy,
             )
         else:
             print("no refreshed problem sets; database synchronization skipped")
@@ -1578,6 +1806,25 @@ def _parse_mode(value):
     raise HTTPException(400, f"invalid mode: {raw}; allowed: {allowed}")
 
 
+def _parse_submission_policy(value, mode):
+    raw = _first_text(value)
+    if raw is None:
+        return (
+            SubmissionPolicy.FULL_HISTORY
+            if mode == CrawlMode.FULL
+            else SubmissionPolicy.LATEST_200
+        )
+    normalized = raw.strip().upper()
+    for policy in SubmissionPolicy:
+        if normalized == policy.value:
+            return policy
+    allowed = ", ".join(policy.value for policy in SubmissionPolicy)
+    raise HTTPException(
+        400,
+        f"invalid submission policy: {raw}; allowed: {allowed}",
+    )
+
+
 @app.post("/crawl")
 async def crawl(req: CrawlRequest):
     class_id = req.class_id if req.class_id is not None else req.classId
@@ -1591,6 +1838,10 @@ async def crawl(req: CrawlRequest):
         force_selenium_login = req.forceSeleniumLogin
     dry_run = req.dry_run if req.dryRun is None else req.dryRun
     mode = _parse_mode(req.mode)
+    submission_policy = _parse_submission_policy(
+        _first_text(req.submission_policy, req.submissionPolicy),
+        mode,
+    )
     keyword = (group_name or group_id or "").strip()
     if not keyword:
         raise HTTPException(400, "group_id or group_name required")
@@ -1599,6 +1850,7 @@ async def crawl(req: CrawlRequest):
     existing = _keyword_in_queue(
         keyword,
         mode,
+        submission_policy,
         class_id,
         group_id,
         problem_set_id,
@@ -1621,6 +1873,7 @@ async def crawl(req: CrawlRequest):
         group_id,
         group_name,
         mode,
+        submission_policy,
         req.force,
         credential_source,
         username,
@@ -1636,6 +1889,7 @@ async def crawl(req: CrawlRequest):
     dry_run_hint = " (dry-run, no database import)" if dry_run else ""
     return {"task_id": tid, "status": task.status.value,
             "credential_source": task.credential_source,
+            "submission_policy": task.submission_policy.value,
             "message": (
                 f"queued: {mode_cn.get(mode.value, mode.value)}"
                 f"{force_hint}{dry_run_hint}"

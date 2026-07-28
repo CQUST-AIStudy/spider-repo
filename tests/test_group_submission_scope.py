@@ -109,6 +109,38 @@ class GroupSubmissionScopeTests(unittest.TestCase):
         self.assertEqual(status["problem_type"], "PROGRAMMING")
         self.assertEqual(status["rows"], 1)
 
+    def test_latest_200_uses_one_request_and_detects_cursor_gap(self):
+        rows = [
+            {
+                "id": f"s-{index}",
+                "userId": "user-a",
+                "problemType": "PROGRAMMING",
+                "submitAt": f"2026-07-01T00:{index // 60:02d}:{index % 60:02d}Z",
+            }
+            for index in range(200)
+        ]
+        calls = []
+
+        def fake_get(ps_id, page=0, limit=200, filter_obj=None):
+            calls.append((page, limit, filter_obj))
+            return {"submissions": rows, "total": 0}
+
+        self.client.submission_policy = "LATEST_200"
+        self.client._submission_previous_cursors = {"ps-fast": "older-than-window"}
+        with patch.object(self.client, "get_submissions", side_effect=fake_get):
+            result = self.client.get_all_submissions(
+                "ps-fast",
+                pta_user_ids=["user-a"],
+            )
+
+        self.assertEqual(len(result), 200)
+        self.assertEqual(len(calls), 1)
+        status = self.client._submission_crawl_status["ps-fast"]
+        self.assertEqual(status["coverage"], "LATEST_200")
+        self.assertTrue(status["truncated"])
+        self.assertTrue(status["gap_detected"])
+        self.assertFalse(status["snapshot_complete"])
+
 
 if __name__ == "__main__":
     unittest.main()

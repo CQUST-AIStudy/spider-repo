@@ -163,6 +163,46 @@ class ImportSafetyTests(unittest.TestCase):
             )
         )
 
+    def test_latest_200_snapshot_does_not_require_all_member_queries(self):
+        path = self._write_submission_csv(
+            [
+                {
+                    "提交ID": "submission-fast-1",
+                    "用户ID": "user-1",
+                    "题目ID": "problem-1",
+                    "题型": "PROGRAMMING",
+                    "提交时间": "2026-07-01T00:00:00Z",
+                }
+            ]
+        )
+        (self.tmp / sync.SUBMISSION_CRAWL_STATUS_FILE).write_text(
+            json.dumps(
+                {
+                    "problem_set_id": "ps-1",
+                    "scope": "PTA_USER_GROUP_MEMBERS",
+                    "coverage": "LATEST_200",
+                    "complete": True,
+                    "snapshot_complete": False,
+                    "rows": 1,
+                    "queried_user_count": 0,
+                    "incomplete_user_ids": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        sync._validate_experiment_snapshot(
+            self.tmp,
+            {"SUBMISSIONS": path},
+            [],
+            sync._read_submission_rows(path),
+            expected_group_member_count=58,
+        )
+        self.assertEqual(
+            sync._submission_coverage_for_experiment(self.tmp),
+            "LATEST_200",
+        )
+
     def test_empty_problem_content_is_rejected_before_db_sync(self):
         detail_path = self.tmp / "题目详情.json"
         detail_path.write_text(

@@ -279,9 +279,13 @@ def _validate_experiment_snapshot(
                     f"submission crawl is not user-group scoped: {status_path}"
                 )
             queried_user_count = _safe_int(status.get("queried_user_count"))
-            if not _submission_scope_covers_roster(
-                status,
-                expected_group_member_count,
+            coverage = str(status.get("coverage") or "FULL_HISTORY").upper()
+            if (
+                coverage != "LATEST_200"
+                and not _submission_scope_covers_roster(
+                    status,
+                    expected_group_member_count,
+                )
             ):
                 raise RuntimeError(
                     f"submission crawl member count mismatch for {exp_dir.name}: "
@@ -338,6 +342,19 @@ def _submission_scope_covers_roster(status, expected_group_member_count):
         global_complete_then_filtered
         or queried_user_count == expected_group_member_count
     )
+
+
+def _submission_coverage_for_experiment(exp_dir: Path):
+    status_path = exp_dir / SUBMISSION_CRAWL_STATUS_FILE
+    if not status_path.exists():
+        return "NONE"
+    status = _read_json_object(status_path, "submission crawl status")
+    coverage = str(status.get("coverage") or "").strip().upper()
+    if coverage in {"LATEST_200", "FULL_HISTORY"}:
+        return coverage
+    # Crawl status files written before coverage metadata was introduced were
+    # accepted only after a complete all-member snapshot.
+    return "FULL_HISTORY" if status.get("complete") is True else "NONE"
 
 
 def _knowledge_strings(points):
@@ -2945,6 +2962,7 @@ def _sync_one_experiment(
             else None
         ),
     )
+    submission_coverage = _submission_coverage_for_experiment(exp_dir)
     _log_sync_stage("开始同步实验", experiment=exp_dir.name, class_id=class_id)
     resolved = _resolve_experiment_and_offering(cursor, exp_dir, class_id)
     if not resolved:
@@ -2990,6 +3008,7 @@ def _sync_one_experiment(
         "sync_mode": "FULL"
         if set(EXPERIMENT_SOURCE_ROLES).issubset(source_paths)
         else "PARTIAL",
+        "submission_coverage": submission_coverage,
     }
 
     try:
@@ -3340,7 +3359,7 @@ def _sync_one_experiment(
             invalid_submission_time_rows=report["invalid_submission_time_rows"],
             elapsed_ms=_elapsed_ms(stage_start),
         )
-        if "SUBMISSIONS" in files:
+        if "SUBMISSIONS" in files and submission_coverage == "FULL_HISTORY":
             _log_sync_stage("开始清理过期提交记录", experiment=exp_dir.name)
             stage_start = time.perf_counter()
             report["stale_attempts_pruned"] = _prune_stale_attempts_for_source_file(
@@ -3483,7 +3502,11 @@ def _sync_one_experiment(
         )
         _log_sync_stage("刷新参与记录补齐完成", experiment=exp_dir.name, elapsed_ms=_elapsed_ms(substage_start))
         substage_start = time.perf_counter()
-        report["stale_problem_states_pruned"] = _prune_orphan_problem_states(cursor, resolved["offering_id"])
+        if submission_coverage == "FULL_HISTORY":
+            report["stale_problem_states_pruned"] = _prune_orphan_problem_states(
+                cursor,
+                resolved["offering_id"],
+            )
         _log_sync_stage("孤立题目状态清理完成", experiment=exp_dir.name, pruned=report["stale_problem_states_pruned"], elapsed_ms=_elapsed_ms(substage_start))
         substage_start = time.perf_counter()
         _recalc_problem_state(cursor, resolved["offering_id"])
