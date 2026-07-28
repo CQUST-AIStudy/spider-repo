@@ -14,23 +14,22 @@ class GroupSubmissionScopeTests(unittest.TestCase):
     def setUp(self):
         self.client = PTAClient.__new__(PTAClient)
 
-    def test_group_roster_is_queried_per_user_and_merged(self):
-        rows = {
-            "user-a": [
+    def test_complete_global_snapshot_is_filtered_locally_in_one_query(self):
+        rows = [
                 {"id": "s1", "userId": "user-a", "problemType": "PROGRAMMING"},
                 {"id": "s2", "userId": "user-a", "problemType": "PROGRAMMING"},
-            ],
-            "user-b": [
                 {"id": "s3", "userId": "user-b", "problemType": "PROGRAMMING"},
-            ],
-        }
+                {"id": "outsider", "userId": "user-c", "problemType": "PROGRAMMING"},
+        ]
+        calls = []
 
         def fake_get(ps_id, page=0, limit=200, filter_obj=None):
+            calls.append(filter_obj)
             self.assertEqual(ps_id, "ps-1")
             self.assertEqual(page, 0)
             self.assertEqual(limit, 200)
-            self.assertEqual(filter_obj["problemType"], "PROGRAMMING")
-            return {"submissions": rows[filter_obj["userId"]], "total": 0}
+            self.assertEqual(filter_obj, {"problemType": "PROGRAMMING"})
+            return {"submissions": rows, "total": len(rows)}
 
         self.client._active_group_user_ids = ["user-b", "user-a"]
         with patch.object(self.client, "get_submissions", side_effect=fake_get):
@@ -39,7 +38,9 @@ class GroupSubmissionScopeTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in result], ["s1", "s2", "s3"])
         status = self.client._submission_crawl_status["ps-1"]
         self.assertEqual(status["scope"], "PTA_USER_GROUP_MEMBERS")
-        self.assertEqual(status["queried_user_count"], 2)
+        self.assertEqual(status["strategy"], "GLOBAL_COMPLETE_THEN_LOCAL_FILTER")
+        self.assertEqual(status["queried_user_count"], 0)
+        self.assertEqual(calls, [{"problemType": "PROGRAMMING"}])
         self.assertTrue(status["complete"])
 
     def test_exactly_200_repeated_user_rows_are_marked_incomplete(self):
@@ -89,9 +90,9 @@ class GroupSubmissionScopeTests(unittest.TestCase):
 
     def test_non_programming_rows_are_excluded_even_if_pta_ignores_filter(self):
         rows = [
-            {"id": "programming", "problemType": "PROGRAMMING"},
-            {"id": "choice", "problemType": "MULTIPLE_CHOICE"},
-            {"id": "completion", "problemType": "CODE_COMPLETION"},
+            {"id": "programming", "userId": "user-a", "problemType": "PROGRAMMING"},
+            {"id": "choice", "userId": "user-a", "problemType": "MULTIPLE_CHOICE"},
+            {"id": "completion", "userId": "user-a", "problemType": "CODE_COMPLETION"},
         ]
 
         def fake_get(ps_id, page=0, limit=200, filter_obj=None):

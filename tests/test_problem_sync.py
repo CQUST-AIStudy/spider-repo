@@ -14,6 +14,7 @@ from pta_spider.sync_to_unified_db import (
     _fail_stale_import_jobs,
     _is_stable_problem_set_source_id,
     _recalc_student_assignment,
+    _resolve_named_pta_offering,
 )
 
 
@@ -89,6 +90,41 @@ class SourceDiscoveryTests(unittest.TestCase):
         self.assertFalse(_is_stable_problem_set_source_id("NAME-abc"))
         self.assertFalse(_is_stable_problem_set_source_id(""))
         self.assertTrue(_is_stable_problem_set_source_id("190384721"))
+
+
+class OfferingResolutionTests(unittest.TestCase):
+    def test_name_only_group_export_prefers_consistent_stable_offering(self):
+        class Cursor:
+            def execute(self, sql, params=None):
+                self.sql = sql
+                self.params = params
+
+            def fetchall(self):
+                return [
+                    (
+                        44,
+                        3,
+                        1,
+                        "2062567705938599936",
+                        "PTA_PROBLEM_SET_OFFERING:2062567705938599936:CLASS:3",
+                    ),
+                    (
+                        107,
+                        3,
+                        1,
+                        "2062567705938599936",
+                        "PTA_PROBLEM_SET_OFFERING:NAME-shadow:CLASS:3",
+                    ),
+                ]
+
+        resolved = _resolve_named_pta_offering(
+            Cursor(),
+            "计科25数据结构第10次实验（Huffman树与Huffman编码）",
+            class_id=3,
+            problem_set_source_id="NAME-from-group-export",
+        )
+
+        self.assertEqual(resolved, (44, 3, 1))
 
 
 class AssignmentPartialSyncTests(unittest.TestCase):

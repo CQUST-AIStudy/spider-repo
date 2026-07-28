@@ -148,6 +148,21 @@ class ImportSafetyTests(unittest.TestCase):
                 expected_group_member_count=1,
             )
 
+    def test_complete_global_snapshot_filtered_by_roster_is_accepted(self):
+        self.assertTrue(
+            sync._submission_scope_covers_roster(
+                {
+                    "strategy": "GLOBAL_COMPLETE_THEN_LOCAL_FILTER",
+                    "queried_user_count": 0,
+                    "global_query": {
+                        "complete": True,
+                        "hit_server_cap": False,
+                    },
+                },
+                58,
+            )
+        )
+
     def test_empty_problem_content_is_rejected_before_db_sync(self):
         detail_path = self.tmp / "题目详情.json"
         detail_path.write_text(

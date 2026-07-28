@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -12,6 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from pta_spider.spider import PTAClient
+from pta_spider.group_exports import split_group_answer_export
 from pta_spider.spider_api import (
     _drain_callback_outbox,
     _export_group_answer_or_warn,
@@ -120,6 +122,36 @@ class GroupAnswerExportRetryTests(unittest.TestCase):
             self.assertEqual(save_path.read_bytes(), b"export-data")
 
         self.assertEqual(get_mock.call_count, 2)
+
+
+class GroupAnswerSplitTests(unittest.TestCase):
+    def test_non_target_experiment_is_not_written(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "group.zip"
+            with zipfile.ZipFile(
+                source,
+                "w",
+                compression=zipfile.ZIP_DEFLATED,
+            ) as archive:
+                archive.writestr(
+                    "experiment-1/test-group/html/20250001-student.html",
+                    "<html><title>experiment-1</title></html>",
+                )
+
+            result = split_group_answer_export(
+                source,
+                root / "crawl",
+                group_name="test-group",
+                experiment_names={"experiment-2"},
+            )
+
+            self.assertEqual(result["written"], [])
+            self.assertEqual(
+                result["skipped"]["non_target_experiment"],
+                1,
+            )
+            self.assertFalse((root / "crawl").exists())
 
 
 class GroupAnswerExportPolicyTests(unittest.TestCase):

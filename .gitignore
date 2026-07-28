@@ -1,5 +1,6 @@
 runtime/
 output/
+_cache/
 __pycache__/
 *.py[cod]
 *.log
@@ -16,6 +17,7 @@ venv/
 .chrome-profile/
 .selenium/
 login_debug/
+scripts/debug/*_temp.py
 *.pkl
 *.egg-info/
 backend_callback_outbox.json

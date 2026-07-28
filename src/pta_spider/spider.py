@@ -48,9 +48,19 @@ from webdriver_manager.chrome import ChromeDriverManager
 from dotenv import load_dotenv
 
 try:
-    from .group_exports import inspect_group_answer_export, split_group_answer_export
+    from .group_exports import (
+        inspect_group_answer_export,
+        inspect_group_transcript_export,
+        split_group_answer_export,
+        split_group_transcript_export,
+    )
 except ImportError:
-    from group_exports import inspect_group_answer_export, split_group_answer_export
+    from group_exports import (
+        inspect_group_answer_export,
+        inspect_group_transcript_export,
+        split_group_answer_export,
+        split_group_transcript_export,
+    )
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = PACKAGE_DIR.parents[1]
@@ -262,14 +272,28 @@ class AdaptiveTokenBucketRateLimiter:
     - on_rate_limit (429) halves current rate down to rate_min
     """
 
-    def __init__(self, rate=60, per=60, rate_min=10, rate_max=None):
+    def __init__(
+        self,
+        rate=60,
+        per=60,
+        rate_min=10,
+        rate_max=None,
+        burst=None,
+        recovery_successes=20,
+        recovery_factor=1.05,
+    ):
         self.rate_min = float(max(1, rate_min))
         self.rate_max = float(rate_max if rate_max is not None else rate)
         if self.rate_max < self.rate_min:
             self.rate_max = self.rate_min
         self.rate = float(max(self.rate_min, min(rate, self.rate_max)))
         self.per = float(per) if per else 60.0
-        self.tokens = float(self.rate)
+        self.burst = float(
+            max(1.0, min(burst if burst is not None else self.rate, self.rate_max))
+        )
+        self.tokens = self.burst
+        self.recovery_successes = max(1, int(recovery_successes))
+        self.recovery_factor = max(1.0, float(recovery_factor))
         self.last_refill = time.monotonic()
         self._lock = threading.Lock()
         self._success_streak = 0
@@ -278,7 +302,10 @@ class AdaptiveTokenBucketRateLimiter:
         now = time.monotonic() if now is None else now
         elapsed = now - self.last_refill
         if elapsed > 0 and self.rate > 0:
-            self.tokens = min(self.rate, self.tokens + elapsed * (self.rate / self.per))
+            self.tokens = min(
+                self.burst,
+                self.tokens + elapsed * (self.rate / self.per),
+            )
             self.last_refill = now
 
     def acquire(self):
@@ -301,9 +328,9 @@ class AdaptiveTokenBucketRateLimiter:
         """Slowly recover rate after consecutive successes."""
         with self._lock:
             self._success_streak += 1
-            if self._success_streak >= 20 and self.rate < self.rate_max:
+            if self._success_streak >= self.recovery_successes and self.rate < self.rate_max:
                 old = self.rate
-                self.rate = min(self.rate_max, self.rate * 1.05)
+                self.rate = min(self.rate_max, self.rate * self.recovery_factor)
                 self._success_streak = 0
                 if self.rate - old > 0.5:
                     print(f"  限流自适应: rate {old:.1f} -> {self.rate:.1f}/min (恢复)")
@@ -369,6 +396,15 @@ EXPORT_DOWNLOAD_RETRY_DELAY_SECONDS = _env_float(
 # Throughput / concurrency knobs. Defaults favor stable PTA production crawls.
 API_RATE_LIMIT_PER_MINUTE = _env_int("PTA_API_RATE_LIMIT_PER_MINUTE", 30, minimum=1, maximum=180)
 API_RATE_LIMIT_MIN = _env_int("PTA_API_RATE_LIMIT_MIN", 8, minimum=1, maximum=180)
+API_RATE_LIMIT_INITIAL = _env_int(
+    "PTA_API_RATE_LIMIT_INITIAL", 15, minimum=1, maximum=180
+)
+API_RATE_LIMIT_BURST = _env_float(
+    "PTA_API_RATE_LIMIT_BURST", 1.0, minimum=1.0, maximum=20.0
+)
+API_RATE_LIMIT_RECOVERY_SUCCESSES = _env_int(
+    "PTA_API_RATE_LIMIT_RECOVERY_SUCCESSES", 60, minimum=10, maximum=1000
+)
 DETAIL_MAX_WORKERS = _env_int("PTA_DETAIL_MAX_WORKERS", 4, minimum=1, maximum=32)
 PROBLEM_SET_MAX_WORKERS = _env_int("PTA_PROBLEM_SET_MAX_WORKERS", 2, minimum=1, maximum=8)
 EXPORT_POLL_INTERVAL_SECONDS = _env_float("PTA_EXPORT_POLL_INTERVAL_SECONDS", 1.0, minimum=0.2, maximum=10.0)
@@ -394,10 +430,12 @@ def _export_poll_sleep(elapsed_seconds):
 
 # Global rate limiter instance (adaptive)
 _rate_limiter = AdaptiveTokenBucketRateLimiter(
-    rate=API_RATE_LIMIT_PER_MINUTE,
+    rate=min(API_RATE_LIMIT_INITIAL, API_RATE_LIMIT_PER_MINUTE),
     per=60,
     rate_min=min(API_RATE_LIMIT_MIN, API_RATE_LIMIT_PER_MINUTE),
     rate_max=API_RATE_LIMIT_PER_MINUTE,
+    burst=API_RATE_LIMIT_BURST,
+    recovery_successes=API_RATE_LIMIT_RECOVERY_SUCCESSES,
 )
 
 
@@ -629,9 +667,28 @@ class PTAClient:
         with open(base_dir / "题目集信息.json", "w", encoding="utf-8") as f:
             json.dump(info, f, ensure_ascii=False, indent=2)
 
-    def get_sets_requiring_content(self, all_sets):
-        """Return new sets plus history entries whose local content was lost."""
+    def get_sets_requiring_content(self, all_sets, persisted_content_checker=None):
+        """Return sets whose content is absent from both cache and durable storage."""
         pending = self.history.get_new_sets(all_sets)
+        if persisted_content_checker is not None:
+            unresolved = []
+            for ps in pending:
+                ps_name = ps.get("name", "")
+                try:
+                    if persisted_content_checker(ps):
+                        print(
+                            "problem set is new to local history, but verified "
+                            "database content exists; skip recrawl: "
+                            f"{ps_name}"
+                        )
+                        continue
+                except Exception as exc:
+                    print(
+                        "persisted content check failed; recrawling "
+                        f"{ps_name}: {exc}"
+                    )
+                unresolved.append(ps)
+            pending = unresolved
         pending_ids = {ps.get("id", "") for ps in pending}
         for ps in all_sets:
             ps_id = ps.get("id", "")
@@ -640,6 +697,19 @@ class PTAClient:
                 continue
             content_file = self.crawl_dir / ps_name / "题目内容.txt"
             if not content_file.exists():
+                if persisted_content_checker is not None:
+                    try:
+                        if persisted_content_checker(ps):
+                            print(
+                                "local crawl content is missing, but verified "
+                                f"database content exists; skip recrawl: {ps_name}"
+                            )
+                            continue
+                    except Exception as exc:
+                        print(
+                            "persisted content check failed; recrawling "
+                            f"{ps_name}: {exc}"
+                        )
                 print(f"本地爬取内容缺失，将重新抓取: {ps_name}")
                 pending.append(ps)
                 pending_ids.add(ps_id)
@@ -1550,35 +1620,58 @@ class PTAClient:
             "incomplete_user_ids": [],
         }
         if pta_user_ids:
-            merged = []
-            seen = set()
-            incomplete_user_ids = []
             user_ids = sorted({
                 str(value or "").strip()
                 for value in pta_user_ids
                 if str(value or "").strip()
             })
-            for user_id in user_ids:
-                rows, query_status = self._get_all_submissions_for_filter(
-                    ps_id,
-                    {"userId": user_id, "problemType": "PROGRAMMING"},
-                )
-                if not query_status["complete"]:
-                    incomplete_user_ids.append(user_id)
-                for sub in rows:
-                    key = self._submission_dedup_key(sub)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    merged.append(sub)
-            status.update({
-                "scope": "PTA_USER_GROUP_MEMBERS",
-                "complete": not incomplete_user_ids,
-                "rows": len(merged),
-                "queried_user_count": len(user_ids),
-                "incomplete_user_ids": incomplete_user_ids,
-            })
-            submissions = merged
+            member_ids = set(user_ids)
+            global_rows, global_status = self._get_all_submissions_for_filter(
+                ps_id,
+                {"problemType": "PROGRAMMING"},
+            )
+            if global_status["complete"]:
+                submissions = [
+                    row
+                    for row in global_rows
+                    if str(row.get("userId") or "").strip() in member_ids
+                ]
+                status.update({
+                    "scope": "PTA_USER_GROUP_MEMBERS",
+                    "strategy": "GLOBAL_COMPLETE_THEN_LOCAL_FILTER",
+                    "complete": True,
+                    "rows": len(submissions),
+                    "queried_user_count": 0,
+                    "global_query": global_status,
+                    "incomplete_user_ids": [],
+                })
+            else:
+                merged = []
+                seen = set()
+                incomplete_user_ids = []
+                for user_id in user_ids:
+                    rows, query_status = self._get_all_submissions_for_filter(
+                        ps_id,
+                        {"userId": user_id, "problemType": "PROGRAMMING"},
+                    )
+                    if not query_status["complete"]:
+                        incomplete_user_ids.append(user_id)
+                    for sub in rows:
+                        key = self._submission_dedup_key(sub)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        merged.append(sub)
+                status.update({
+                    "scope": "PTA_USER_GROUP_MEMBERS",
+                    "strategy": "PER_USER_FALLBACK_AFTER_GLOBAL_CAP",
+                    "complete": not incomplete_user_ids,
+                    "rows": len(merged),
+                    "queried_user_count": len(user_ids),
+                    "global_query": global_status,
+                    "incomplete_user_ids": incomplete_user_ids,
+                })
+                submissions = merged
         else:
             submissions, query_status = self._get_all_submissions_for_filter(
                 ps_id,
@@ -1940,6 +2033,104 @@ class PTAClient:
                     raise
         raise RuntimeError(f"failed to create PTA user-group answer export; tried: {'; '.join(errors)}")
 
+    def create_group_transcript_export(self, group_id, group_name=None):
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
+        title = f"{group_name or group_id}-用户组成绩单-{timestamp}"
+        payload = {
+            "type": "USER_GROUP_TRANSCRIPT",
+            "title": title,
+            "detail": {
+                "exportUserGroupTranscript": {
+                    "userGroupId": str(group_id),
+                }
+            },
+        }
+        print(f"  create user-group transcript export: {title}")
+        resp = self.api_post("/exports", json_data=payload)
+        result = resp.json() if resp.text else {}
+        if not isinstance(result, dict):
+            result = {"raw": result}
+        result["_requested_title"] = title
+        result["_requested_at"] = time.time()
+        result["_requested_type"] = payload["type"]
+        result["_requested_group_id"] = str(group_id)
+        return result
+
+    def wait_group_transcript_export_ready(
+        self,
+        group_id,
+        export_marker,
+        timeout=None,
+    ):
+        timeout = timeout or GROUP_EXPORT_READY_TIMEOUT_SECONDS
+        start = time.time()
+        expected_id = self._export_id_from_payload(export_marker or {})
+        expected_title = (export_marker or {}).get("_requested_title")
+        filter_candidates = [
+            {"userGroupId": str(group_id)},
+            {"groupId": str(group_id)},
+            {},
+        ]
+        effective_filter = None
+        seen = []
+
+        while time.time() - start < timeout:
+            candidates = (
+                [effective_filter]
+                if effective_filter is not None
+                else filter_candidates
+            )
+            for filter_obj in candidates:
+                data = self.api_get(
+                    "/exports",
+                    params={
+                        "page": 0,
+                        "limit": 20,
+                        "filter": json.dumps(
+                            filter_obj,
+                            ensure_ascii=False,
+                        ),
+                    },
+                )
+                found = False
+                for exp in data.get("exports", []):
+                    if exp.get("type") != "USER_GROUP_TRANSCRIPT":
+                        continue
+                    exp_id = self._export_id_from_payload(exp)
+                    exp_title = exp.get("title") or exp.get("name")
+                    seen.append(exp_title)
+                    if expected_id and exp_id and exp_id != expected_id:
+                        continue
+                    if expected_title and exp_title != expected_title:
+                        continue
+                    found = True
+                    effective_filter = filter_obj
+                    status = exp.get("status")
+                    if status == "FAILED":
+                        raise RuntimeError(
+                            "PTA user-group transcript export failed: "
+                            f"{expected_title}"
+                        )
+                    if status == "READY" and exp.get("docUrl"):
+                        print("\n  user-group transcript export is ready")
+                        return exp["docUrl"]
+                    break
+                if found:
+                    break
+            elapsed = time.time() - start
+            print(
+                "  waiting for user-group transcript export... "
+                f"({int(elapsed)}s)",
+                end="\r",
+            )
+            _export_poll_sleep(elapsed)
+
+        sample = ", ".join(str(value) for value in seen[:5])
+        raise TimeoutError(
+            "PTA user-group transcript export timed out: "
+            f"{expected_title}; seen: {sample}"
+        )
+
     def wait_group_answer_export_ready(self, group_id, export_marker, timeout=None):
         timeout = timeout or GROUP_EXPORT_READY_TIMEOUT_SECONDS
         start = time.time()
@@ -2001,6 +2192,7 @@ class PTAClient:
         group_id: str | None = None,
         group_name: str | None = None,
         crawl_dir: Path | None = None,
+        experiment_names=None,
     ) -> object:
         """Create a fresh group-answer export for every retry attempt.
 
@@ -2030,6 +2222,7 @@ class PTAClient:
                     group_id=group_id,
                     group_name=group_name,
                     crawl_dir=crawl_dir,
+                    experiment_names=experiment_names,
                 )
             except Exception as exc:
                 last_error = exc
@@ -2051,7 +2244,13 @@ class PTAClient:
 
         raise last_error or RuntimeError("group answer export failed")
 
-    def export_group_answer_sheets(self, group_id=None, group_name=None, crawl_dir=None):
+    def export_group_answer_sheets(
+        self,
+        group_id=None,
+        group_name=None,
+        crawl_dir=None,
+        experiment_names=None,
+    ):
         group_id, group_name = self._resolve_user_group_id(group_id, group_name)
         if not group_id:
             raise RuntimeError("PTA user group id or exact user group name is required for group answer export")
@@ -2075,10 +2274,103 @@ class PTAClient:
             crawl_dir,
             group_name=group_name,
             overwrite=True,
+            experiment_names=experiment_names,
         )
-        if not split_result.get("written"):
+        if not split_result.get("written") and experiment_names is None:
             raise RuntimeError(f"PTA user-group answer export produced no per-experiment answer sheets: {save_path}")
         print(f"  用户组答卷已拆分为 {len(split_result['written'])} 个实验 ANSWER_SHEET.zip")
+        return split_result
+
+    def export_group_transcripts_with_retry(
+        self,
+        group_id=None,
+        group_name=None,
+        crawl_dir=None,
+        experiment_names=None,
+    ):
+        retryable_statuses = {400, 404, 408, 429, 500, 502, 503, 504}
+        attempts = max(1, EXPORT_RETRY_ROUNDS + 1)
+        last_error = None
+        for attempt in range(1, attempts + 1):
+            if attempt > 1 and EXPORT_RETRY_DELAY_SECONDS > 0:
+                time.sleep(EXPORT_RETRY_DELAY_SECONDS)
+            try:
+                return self.export_group_transcripts(
+                    group_id=group_id,
+                    group_name=group_name,
+                    crawl_dir=crawl_dir,
+                    experiment_names=experiment_names,
+                )
+            except Exception as exc:
+                last_error = exc
+                response = getattr(exc, "response", None)
+                status_code = getattr(response, "status_code", None)
+                status_codes = (
+                    {
+                        int(value)
+                        for value in re.findall(r"\b(\d{3})\b", str(exc))
+                    }
+                    if status_code is None
+                    else {int(status_code)}
+                )
+                if not bool(status_codes & retryable_statuses) or attempt >= attempts:
+                    raise
+                print(
+                    "  retry user-group transcript export "
+                    f"({attempt}/{attempts}): {exc}"
+                )
+        raise last_error or RuntimeError("group transcript export failed")
+
+    def export_group_transcripts(
+        self,
+        group_id=None,
+        group_name=None,
+        crawl_dir=None,
+        experiment_names=None,
+    ):
+        group_id, group_name = self._resolve_user_group_id(
+            group_id,
+            group_name,
+        )
+        if not group_id:
+            raise RuntimeError(
+                "PTA user group id or exact user group name is required "
+                "for group transcript export"
+            )
+        crawl_dir = Path(crawl_dir or self.crawl_dir)
+        save_dir = crawl_dir / "_group_exports"
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        marker = self.create_group_transcript_export(group_id, group_name)
+        if EXPORT_CREATE_DELAY_SECONDS > 0:
+            time.sleep(EXPORT_CREATE_DELAY_SECONDS)
+        doc_url = self.wait_group_transcript_export_ready(group_id, marker)
+        title = marker.get("_requested_title") or (
+            f"{group_name or group_id}-用户组成绩单"
+        )
+        save_path = save_dir / f"{title}.xlsx"
+        self.download_export(doc_url, str(save_path))
+        summary = inspect_group_transcript_export(save_path)
+        if summary.get("experiment_count", 0) <= 0:
+            raise RuntimeError(
+                "PTA user-group transcript has no experiment detail sheets: "
+                f"{save_path}"
+            )
+        split_result = split_group_transcript_export(
+            save_path,
+            crawl_dir,
+            overwrite=True,
+            experiment_names=experiment_names,
+        )
+        if not split_result.get("written") and experiment_names is None:
+            raise RuntimeError(
+                "PTA user-group transcript produced no per-experiment files: "
+                f"{save_path}"
+            )
+        print(
+            "  user-group transcript split into "
+            f"{len(split_result['written'])} PAPER_TRANSCRIPT.xlsx files"
+        )
         return split_result
 
     # ==================== Incremental Crawl Core ====================
@@ -2267,7 +2559,13 @@ class PTAClient:
             f"{', '.join(failed_names)}"
         )
 
-    def _crawl_one_problem_set(self, ps_id, ps_name, export_answer_sheet=False):
+    def _crawl_one_problem_set(
+        self,
+        ps_id,
+        ps_name,
+        export_answer_sheet=False,
+        export_problem_set_artifacts=True,
+    ):
         """Crawl all data for a single problem set, save to ./爬取结果/"""
         base_dir = self._problem_set_dir(ps_name)
 
@@ -2501,15 +2799,19 @@ class PTAClient:
             )
 
         # 3. Export essential types only (PAPER/PAPER_ACCURATE/PAPER_ANALYSIS are redundant/computable)
-        export_dir = base_dir / "导出"
-        self._export_required_files(
-            ps_id,
-            ps_name,
-            export_dir,
-            self._required_export_configs(export_answer_sheet, answer_sheet_index=0),
-        )
-        if EXPORT_BETWEEN_DELAY_SECONDS > 0:
-            time.sleep(min(EXPORT_BETWEEN_DELAY_SECONDS, 1.0))
+        if export_problem_set_artifacts:
+            export_dir = base_dir / "导出"
+            self._export_required_files(
+                ps_id,
+                ps_name,
+                export_dir,
+                self._required_export_configs(
+                    export_answer_sheet,
+                    answer_sheet_index=0,
+                ),
+            )
+            if EXPORT_BETWEEN_DELAY_SECONDS > 0:
+                time.sleep(min(EXPORT_BETWEEN_DELAY_SECONDS, 1.0))
         return {
             "problem_count": len(detail_records),
             "problem_detail_count": len(detail_records),

@@ -1,17 +1,17 @@
 ﻿"""
-PTA Spider API v2 - Data-type aware crawling with per-problem-set refresh policy.
-Open problem sets refresh daily; ended sets are skipped automatically unless forced or missing data.
+PTA Spider API v2 - durable, per-problem-set incremental synchronization.
 
-incremental（手动同步默认）与 full 模式均按实验维度更新：
-- 数据库无该班级数据时，全量爬取整个学期的题目集（内容 + 提交 + 导出）；
-- 数据库已有数据时，仅刷新未截止实验的提交记录与导出，已截止且数据库有数据的实验自动跳过。
+Incremental mode refreshes dynamic data for open sets, performs one final sync
+after a deadline, and then makes zero per-set export/import requests once all
+durable components are complete. Full mode remains the explicit repair path.
 """
 import asyncio, uuid, os, sys, time, csv, shutil, hashlib
 import json as json_mod
 import threading
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 
 if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
@@ -30,6 +30,7 @@ import re
 from .spider import PTAClient, CrawlHistory, RUNTIME_DIR, PROBLEM_SET_MAX_WORKERS
 from . import sync_to_db as legacy_sync
 from .sync_to_unified_db import (
+    SUPPORTED_PROBLEM_TYPES,
     _problem_content_is_valid,
     class_id_exists,
     resolve_class_id_for_roster,
@@ -41,6 +42,10 @@ app = FastAPI(title="PTA Spider API", version="2.0.0")
 JAVA_BACKEND_URL = os.getenv("JAVA_BACKEND_URL", "http://127.0.0.1:8081")
 COOLDOWN_SUBMISSIONS = int(os.getenv("COOLDOWN_SUBMISSIONS", str(24 * 3600)))
 COOLDOWN_EXPORTS = int(os.getenv("COOLDOWN_EXPORTS", str(24 * 3600)))
+FINALIZE_GRACE_SECONDS = max(
+    0,
+    int(os.getenv("PTA_FINALIZE_GRACE_SECONDS", "600")),
+)
 CALLBACK_OUTBOX_FILE = RUNTIME_DIR / "backend_callback_outbox.json"
 CALLBACK_RETRY_INTERVAL_SECONDS = max(
     5, int(os.getenv("PTA_CALLBACK_RETRY_INTERVAL_SECONDS", "30"))
@@ -241,20 +246,23 @@ def _database_has_experiment_data(problem_set, class_id=None):
         conn = legacy_sync.get_db()
         with conn.cursor() as cursor:
             def offering_has_complete_problem_details(offering_id):
+                supported_types = tuple(
+                    sorted(SUPPORTED_PROBLEM_TYPES)
+                )
+                placeholders = ", ".join(["%s"] * len(supported_types))
                 cursor.execute(
-                    """
+                    f"""
                     SELECT
-                      COALESCE(NULLIF(TRIM(apd.content), ''), ap.statement_md) AS content,
+                      apd.content,
                       apd.image_urls_json
-                    FROM assignment_problem ap
-                    JOIN assignment_offering ao ON ao.id = ap.offering_id
-                    LEFT JOIN pta_problem_detail apd
+                    FROM assignment_offering ao
+                    JOIN pta_problem_detail apd
                       ON apd.problem_set_id = ao.pta_problem_set_id
-                     AND apd.problem_set_problem_id = ap.source_problem_id
-                    WHERE ap.offering_id = %s
-                      AND ap.status = 'ACTIVE'
+                    WHERE ao.id = %s
+                      AND UPPER(COALESCE(apd.problem_type, 'PROGRAMMING'))
+                          IN ({placeholders})
                     """,
-                    (offering_id,),
+                    (offering_id, *supported_types),
                 )
                 rows = cursor.fetchall()
                 if not rows:
@@ -345,6 +353,313 @@ def _database_has_experiment_data(problem_set, class_id=None):
     return has_data
 
 
+def _problem_set_sync_id(problem_set):
+    problem_set_id = str(
+        (problem_set or {}).get("id")
+        or (problem_set or {}).get("problemSetId")
+        or ""
+    ).strip()
+    if problem_set_id:
+        return problem_set_id
+    name = _problem_set_name(problem_set or {})
+    digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:40]
+    return f"name:{digest}"
+
+
+def _load_problem_set_sync_states(class_id):
+    if class_id is None:
+        return {}
+    conn = None
+    try:
+        conn = legacy_sync.get_db()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                  pta_problem_set_id,
+                  problem_set_name,
+                  deadline_at,
+                  sync_state,
+                  content_complete,
+                  transcript_complete,
+                  answer_complete,
+                  submission_complete,
+                  last_dynamic_sync_at,
+                  finalized_at,
+                  last_success_at,
+                  last_error,
+                  sync_version
+                FROM pta_problem_set_sync_state
+                WHERE class_id = %s
+                """,
+                (class_id,),
+            )
+            result = {}
+            for row in cursor.fetchall():
+                result[str(row[0])] = {
+                    "pta_problem_set_id": str(row[0]),
+                    "problem_set_name": row[1],
+                    "deadline_at": row[2],
+                    "sync_state": row[3],
+                    "content_complete": bool(row[4]),
+                    "transcript_complete": bool(row[5]),
+                    "answer_complete": bool(row[6]),
+                    "submission_complete": bool(row[7]),
+                    "last_dynamic_sync_at": row[8],
+                    "finalized_at": row[9],
+                    "last_success_at": row[10],
+                    "last_error": row[11],
+                    "sync_version": int(row[12] or 0),
+                }
+            return result
+    except Exception as exc:
+        message = str(exc).lower()
+        if (
+            "doesn't exist" not in message
+            and "does not exist" not in message
+            and "unknown table" not in message
+        ):
+            print(f"problem-set sync state load failed: {exc}")
+        return {}
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _classify_problem_sets(
+    problem_sets,
+    persisted_states,
+    mode,
+    now=None,
+    durable_content_checker=None,
+):
+    now = now or datetime.now()
+    decisions = []
+    for problem_set in problem_sets or []:
+        problem_set_id = _problem_set_sync_id(problem_set)
+        name = _problem_set_name(problem_set)
+        state = persisted_states.get(problem_set_id) or {}
+        deadline_at = _problem_set_time(problem_set, DEADLINE_KEYS)
+        closed = bool(
+            deadline_at is not None
+            and now >= deadline_at + timedelta(seconds=FINALIZE_GRACE_SECONDS)
+        )
+
+        content_complete = bool(state.get("content_complete"))
+        if not content_complete and durable_content_checker is not None:
+            try:
+                content_complete = bool(
+                    durable_content_checker(problem_set)
+                )
+            except Exception as exc:
+                print(f"durable content classification failed for {name}: {exc}")
+                content_complete = False
+
+        all_complete = (
+            content_complete
+            and bool(state.get("transcript_complete"))
+            and bool(state.get("answer_complete"))
+            and bool(state.get("submission_complete"))
+        )
+        finalized = bool(state.get("finalized_at"))
+
+        if mode == CrawlMode.FULL:
+            decision = "REPAIR_REQUIRED" if closed else "OPEN"
+            target = True
+            needs_content = True
+        elif closed and finalized and all_complete:
+            decision = "CLOSED_COMPLETE"
+            target = False
+            needs_content = False
+        elif closed and state and not all_complete:
+            decision = "REPAIR_REQUIRED"
+            target = True
+            needs_content = not content_complete
+        elif closed:
+            decision = "CLOSED_PENDING_FINAL"
+            target = True
+            needs_content = not content_complete
+        else:
+            decision = "OPEN" if state or content_complete else "NEW"
+            target = True
+            needs_content = not content_complete
+
+        if mode not in (CrawlMode.INCREMENTAL, CrawlMode.FULL):
+            needs_content = False
+
+        decisions.append(
+            {
+                "problem_set": problem_set,
+                "problem_set_id": problem_set_id,
+                "problem_set_name": name,
+                "deadline_at": deadline_at,
+                "closed": closed,
+                "decision": decision,
+                "target": target,
+                "needs_content": needs_content,
+                "content_complete": content_complete,
+                "persisted_state": state,
+            }
+        )
+    return decisions
+
+
+def _save_problem_set_sync_states(
+    class_id,
+    decisions,
+    successful_names,
+    content_completed_names,
+    transcript_complete_names,
+    answer_complete_names,
+    submission_complete_names,
+):
+    successful_names = set(successful_names or ())
+    content_completed_names = set(content_completed_names or ())
+    transcript_complete_names = set(transcript_complete_names or ())
+    answer_complete_names = set(answer_complete_names or ())
+    submission_complete_names = set(submission_complete_names or ())
+    rows = []
+    now = datetime.now()
+    for item in decisions or []:
+        name = item["problem_set_name"]
+        if name not in successful_names:
+            continue
+        content_complete = bool(
+            item.get("content_complete")
+            or name in content_completed_names
+        )
+        transcript_complete = name in transcript_complete_names
+        answer_complete = name in answer_complete_names
+        submission_complete = name in submission_complete_names
+        complete = (
+            content_complete
+            and transcript_complete
+            and answer_complete
+            and submission_complete
+        )
+        closed = bool(item.get("closed"))
+        sync_state = (
+            "CLOSED_COMPLETE"
+            if closed and complete
+            else "REPAIR_REQUIRED"
+            if closed
+            else "OPEN"
+        )
+        rows.append(
+            (
+                class_id,
+                item["problem_set_id"],
+                name,
+                item.get("deadline_at"),
+                sync_state,
+                content_complete,
+                transcript_complete,
+                answer_complete,
+                submission_complete,
+                now,
+                now if closed and complete else None,
+                now,
+            )
+        )
+    if not rows:
+        return
+
+    conn = legacy_sync.get_db()
+    try:
+        with conn.cursor() as cursor:
+            cursor.executemany(
+                """
+                INSERT INTO pta_problem_set_sync_state (
+                  class_id,
+                  pta_problem_set_id,
+                  problem_set_name,
+                  deadline_at,
+                  sync_state,
+                  content_complete,
+                  transcript_complete,
+                  answer_complete,
+                  submission_complete,
+                  last_dynamic_sync_at,
+                  finalized_at,
+                  last_success_at,
+                  last_error,
+                  sync_version
+                )
+                VALUES (
+                  %s, %s, %s, %s, %s, %s, %s, %s,
+                  %s, %s, %s, %s, NULL, 1
+                )
+                ON DUPLICATE KEY UPDATE
+                  problem_set_name = VALUES(problem_set_name),
+                  deadline_at = VALUES(deadline_at),
+                  sync_state = VALUES(sync_state),
+                  content_complete = VALUES(content_complete),
+                  transcript_complete = VALUES(transcript_complete),
+                  answer_complete = VALUES(answer_complete),
+                  submission_complete = VALUES(submission_complete),
+                  last_dynamic_sync_at = VALUES(last_dynamic_sync_at),
+                  finalized_at = VALUES(finalized_at),
+                  last_success_at = VALUES(last_success_at),
+                  last_error = NULL,
+                  sync_version = sync_version + 1
+                """,
+                rows,
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _save_problem_set_sync_failure(class_id, decisions, error):
+    if class_id is None or not decisions:
+        return
+    detail = str(error or "unknown error").strip()[:4000]
+    rows = [
+        (
+            class_id,
+            item["problem_set_id"],
+            item["problem_set_name"],
+            item.get("deadline_at"),
+            detail,
+        )
+        for item in decisions
+        if item.get("target")
+    ]
+    if not rows:
+        return
+    conn = None
+    try:
+        conn = legacy_sync.get_db()
+        with conn.cursor() as cursor:
+            cursor.executemany(
+                """
+                INSERT INTO pta_problem_set_sync_state (
+                  class_id,
+                  pta_problem_set_id,
+                  problem_set_name,
+                  deadline_at,
+                  sync_state,
+                  last_error,
+                  sync_version
+                )
+                VALUES (%s, %s, %s, %s, 'FAILED_RETRY', %s, 1)
+                ON DUPLICATE KEY UPDATE
+                  problem_set_name = VALUES(problem_set_name),
+                  deadline_at = VALUES(deadline_at),
+                  sync_state = 'FAILED_RETRY',
+                  last_error = VALUES(last_error),
+                  sync_version = sync_version + 1
+                """,
+                rows,
+            )
+        conn.commit()
+    except Exception as state_error:
+        print(f"problem-set sync failure state write failed: {state_error}")
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def _problem_set_cooldown(problem_set, data_type, now=None):
     return COOLDOWN_EXPORTS if data_type == "exports" else COOLDOWN_SUBMISSIONS
 
@@ -414,6 +729,17 @@ class CrawlMode(str, Enum):
     REFRESH = "refresh"
     FULL = "full"
 
+
+def _refresh_all_content(mode):
+    """Only the explicit full mode may recrawl immutable problem content."""
+    return mode == CrawlMode.FULL
+
+
+def _bypass_phase_cooldown(mode, force=False):
+    """Force refreshes selected dynamic phases; full refreshes every phase."""
+    return bool(force) or mode == CrawlMode.FULL
+
+
 class CrawlRequest(BaseModel):
     class_id: int | None = None
     classId: int | None = None
@@ -438,6 +764,8 @@ class CrawlRequest(BaseModel):
     force_selenium_login: bool = False
     forceSeleniumLogin: bool | None = None
     headless: bool | None = None
+    dry_run: bool = False
+    dryRun: bool | None = None
 
 class TaskInfo:
     def __init__(
@@ -456,6 +784,7 @@ class TaskInfo:
         password=None,
         force_selenium_login=False,
         headless=None,
+        dry_run=False,
     ):
         self.task_id = tid
         self.keyword = keyword
@@ -471,12 +800,17 @@ class TaskInfo:
         self.password = password
         self.force_selenium_login = force_selenium_login
         self.headless = headless
+        self.dry_run = bool(dry_run)
         self.status = TaskStatus.QUEUED
         self.created_at = datetime.now().isoformat()
         self.started_at = None
         self.finished_at = None
         self.error = None
         self.warnings = []
+        self.phase = "QUEUED"
+        self.target_sets_count = 0
+        self.skipped_closed_count = 0
+        self.decision_summary = {}
         self.new_sets_count = 0
         self.refreshed_count = 0
         self.submissions_count = 0
@@ -496,9 +830,14 @@ class TaskInfo:
             "credential_source": self.credential_source,
             "force_selenium_login": self.force_selenium_login,
             "headless": self.headless,
+            "dry_run": self.dry_run,
             "created_at": self.created_at, "started_at": self.started_at,
             "finished_at": self.finished_at, "error": self.error,
             "warnings": self.warnings,
+            "phase": self.phase,
+            "target_sets_count": self.target_sets_count,
+            "skipped_closed_count": self.skipped_closed_count,
+            "decision_summary": self.decision_summary,
             "new_sets_count": self.new_sets_count,
             "refreshed_count": self.refreshed_count,
             "submissions_count": self.submissions_count,
@@ -792,19 +1131,22 @@ def _export_group_answer_or_warn(
     client: PTAClient,
     task: TaskInfo,
     crawl_dir: Path,
-) -> str | None:
+    required_by_default: bool | None = None,
+    experiment_names=None,
+) -> object | None:
     """Export group answers and require them when the crawl found submissions."""
     try:
-        client.export_group_answer_sheets_with_retry(
+        return client.export_group_answer_sheets_with_retry(
             group_id=task.group_id,
             group_name=task.group_name,
             crawl_dir=crawl_dir,
+            experiment_names=experiment_names,
         )
-        return None
     except Exception as exc:
         detail = _summarize_group_answer_error(exc)
         message = f"group answer export: {detail}"
-        required_by_default = int(getattr(task, "submissions_count", 0) or 0) > 0
+        if required_by_default is None:
+            required_by_default = int(getattr(task, "submissions_count", 0) or 0) > 0
         if _env_bool("PTA_GROUP_ANSWER_EXPORT_REQUIRED", required_by_default):
             print(f"{message} (required; task will fail)")
             raise
@@ -813,12 +1155,46 @@ def _export_group_answer_or_warn(
         return warning
 
 
+def _export_group_transcript_or_warn(
+    client: PTAClient,
+    task: TaskInfo,
+    crawl_dir: Path,
+    required_by_default: bool = True,
+    experiment_names=None,
+) -> object | None:
+    """Export one group workbook that replaces per-problem-set transcripts."""
+    try:
+        return client.export_group_transcripts_with_retry(
+            group_id=task.group_id,
+            group_name=task.group_name,
+            crawl_dir=crawl_dir,
+            experiment_names=experiment_names,
+        )
+    except Exception as exc:
+        detail = _summarize_group_answer_error(exc)
+        message = f"group transcript export: {detail}"
+        if _env_bool(
+            "PTA_GROUP_TRANSCRIPT_EXPORT_REQUIRED",
+            required_by_default,
+        ):
+            print(f"{message} (required; task will fail)")
+            raise
+        warning = (
+            "用户组成绩单导出失败，将回退到逐题目集成绩单导出："
+            + detail
+        )
+        print(f"{message} (warning; falling back to per-set exports)")
+        return warning
+
+
 def _run_crawl(task):
     client = None
     base_crawl_dir = None
     task_crawl_dir = None
+    decisions = []
     try:
         task.status = TaskStatus.RUNNING
+        task.phase = "AUTHENTICATING"
         task.started_at = datetime.now().isoformat()
         client = PTAClient(task.username, task.password, allow_env_fallback=False)
         base_crawl_dir = Path(client.crawl_dir).resolve()
@@ -852,55 +1228,164 @@ def _run_crawl(task):
         else:
             validate_class_id_for_roster(task.class_id, roster_payload)
 
+        task.phase = "DISCOVERING"
         mode = task.mode
-        all_sets = None
+        all_sets = _resolve_problem_sets(client, task) or []
+        persisted_states = _load_problem_set_sync_states(task.class_id)
+        decisions = _classify_problem_sets(
+            all_sets,
+            persisted_states,
+            mode,
+            durable_content_checker=lambda problem_set: (
+                _database_has_experiment_data(problem_set, task.class_id)
+            ),
+        )
+        target_decisions = [item for item in decisions if item["target"]]
+        target_sets = [item["problem_set"] for item in target_decisions]
+        target_names = {
+            item["problem_set_name"]
+            for item in target_decisions
+            if item["problem_set_name"]
+        }
+        content_targets = [
+            item["problem_set"]
+            for item in target_decisions
+            if item["needs_content"]
+        ]
+        task.target_sets_count = len(target_decisions)
+        task.skipped_closed_count = len(decisions) - len(target_decisions)
+        task.decision_summary = dict(
+            Counter(item["decision"] for item in decisions)
+        )
+        task.new_sets_count = len(content_targets)
+        for item in decisions:
+            if not item["target"]:
+                task.skipped_cooldown.append(
+                    f"{item['problem_set_name']}: closed and finalized; "
+                    "all durable data is complete"
+                )
+
+        if not target_decisions:
+            print(
+                "all problem sets are closed and finalized; "
+                "PTA exports and database synchronization skipped"
+            )
+            task.phase = "SUCCESS"
+            task.status = TaskStatus.SUCCESS
+            task.finished_at = datetime.now().isoformat()
+            if not _env_bool("PTA_KEEP_LOCAL_CRAWL_DATA", True):
+                _cleanup_task_crawl_dir(task_crawl_dir, base_crawl_dir)
+            _notify_java(task.class_id, "SUCCESS", task.task_id)
+            return
+
+        # Aggregate exports are requested only after target classification.
+        # The downloaded archive can contain the whole group, but the split
+        # layer writes files only for the target allowlist.
+        task.phase = "EXPORTING"
+        group_export_t0 = time.time()
+        group_answer_experiment_names = set()
+        answer_complete_names = set()
+        try:
+            group_export_result = _export_group_answer_or_warn(
+                client,
+                task,
+                task_crawl_dir,
+                required_by_default=True,
+                experiment_names=target_names,
+            )
+            if isinstance(group_export_result, str):
+                task.warnings.append(group_export_result)
+            elif isinstance(group_export_result, dict):
+                group_answer_experiment_names = {
+                    str(item.get("experiment_name") or "").strip()
+                    for item in group_export_result.get("written", [])
+                    if isinstance(item, dict)
+                    and str(item.get("experiment_name") or "").strip()
+                }
+                # A successful aggregate answer export also proves that target
+                # sets absent from the archive currently have no answer sheet.
+                answer_complete_names.update(target_names)
+        except Exception as exc:
+            raise RuntimeError(
+                "group answer export: " + _summarize_group_answer_error(exc)
+            ) from exc
+        print(
+            f"[timing] group answer export phase: "
+            f"{time.time() - group_export_t0:.1f}s"
+        )
+
+        transcript_export_t0 = time.time()
+        group_transcript_experiment_names = set()
+        try:
+            group_transcript_result = _export_group_transcript_or_warn(
+                client,
+                task,
+                task_crawl_dir,
+                required_by_default=True,
+                experiment_names=target_names,
+            )
+            if isinstance(group_transcript_result, str):
+                task.warnings.append(group_transcript_result)
+            elif isinstance(group_transcript_result, dict):
+                group_transcript_experiment_names = {
+                    str(item.get("experiment_name") or "").strip()
+                    for item in group_transcript_result.get("written", [])
+                    if isinstance(item, dict)
+                    and str(item.get("experiment_name") or "").strip()
+                }
+        except Exception as exc:
+            raise RuntimeError(
+                "group transcript export: "
+                + _summarize_group_answer_error(exc)
+            ) from exc
+        print(
+            f"[timing] group transcript export phase: "
+            f"{time.time() - transcript_export_t0:.1f}s"
+        )
+
         content_crawled_ids = set()
         crawl_errors = []
-        needs_group_answer_export = False
         completed_content_sets = []
-        touched_problem_set_names = set()
+        submission_complete_names = set()
+        transcript_complete_names = set(group_transcript_experiment_names)
+        touched_problem_set_names = set(target_names)
 
+        task.phase = "CRAWLING"
         phase_t0 = time.time()
 
         if mode in (CrawlMode.INCREMENTAL, CrawlMode.FULL):
-            all_sets = _resolve_problem_sets(client, task)
-            if all_sets:
-                new_sets = all_sets if task.force else client.get_sets_requiring_content(all_sets)
-                task.new_sets_count = len(new_sets)
+            if content_targets:
                 content_t0 = time.time()
 
                 def _content_one(ps):
-                    if (
-                        not task.force
-                        and _is_problem_set_closed(ps)
-                        and _database_has_experiment_data(ps, task.class_id)
-                    ):
-                        reason = (
-                            f"{_problem_set_name(ps)}: deadline passed and database data exists; "
-                            "skip content crawl"
-                        )
-                        return ("skip", reason, ps)
                     client._write_problem_set_info(ps["id"], ps.get("name", ""), ps)
                     crawl_summary = client._crawl_one_problem_set(
                         ps["id"],
                         ps.get("name", ""),
                         export_answer_sheet=False,
+                        export_problem_set_artifacts=(
+                            _problem_set_name(ps)
+                            not in group_transcript_experiment_names
+                        ),
                     )
                     return ("ok", crawl_summary, ps)
 
                 content_results = _map_problem_sets_parallel(
-                    new_sets, _content_one, label="content"
+                    content_targets, _content_one, label="content"
                 )
                 for status, payload, ps in content_results:
-                    if status == "skip":
-                        task.skipped_cooldown.append(payload)
-                        client.history.mark_crawled(ps["id"], ps.get("name", ""))
-                    elif status == "ok":
+                    if status == "ok":
                         completed_content_sets.append(ps)
-                        touched_problem_set_names.add(_problem_set_name(ps))
                         content_crawled_ids.add(ps.get("id", ""))
+                        submission_complete_names.add(_problem_set_name(ps))
+                        if (
+                            _problem_set_name(ps)
+                            not in group_transcript_experiment_names
+                        ):
+                            transcript_complete_names.add(
+                                _problem_set_name(ps)
+                            )
                         task.submissions_count += int((payload or {}).get("submission_count") or 0)
-                        needs_group_answer_export = True
                         _mark_problem_set_refreshed(ps, "submissions")
                         _mark_problem_set_refreshed(ps, "exports")
                     else:
@@ -908,29 +1393,15 @@ def _run_crawl(task):
                         print(f"crawl {ps.get('name', '')} failed: {payload}")
                         crawl_errors.append(f"{ps.get('name', '')}: {payload}")
                 print(f"[timing] content phase: {time.time() - content_t0:.1f}s "
-                      f"({len(completed_content_sets)}/{len(new_sets)} ok)")
+                      f"({len(completed_content_sets)}/{len(content_targets)} ok)")
 
-        # incremental 同样走此分支：按实验更新已有未截止实验的提交记录
-        # （已截止且数据库已有数据的实验会被 _should_refresh_problem_set 跳过）
         if mode in (CrawlMode.SUBMISSIONS, CrawlMode.FULL, CrawlMode.INCREMENTAL):
-            if all_sets is None:
-                all_sets = _resolve_problem_sets(client, task)
-            crawled = client.history.get_all_crawled()
             total_subs = 0
-            sub_candidates = []
-            for ps in (all_sets or []):
-                ps_id = ps.get("id", "")
-                if ps_id in content_crawled_ids:
-                    continue
-                if ps_id not in crawled:
-                    continue
-                ok, _, reason = _should_refresh_problem_set(
-                    ps, "submissions", task.force, class_id=task.class_id
-                )
-                if not ok:
-                    task.skipped_cooldown.append(reason)
-                    continue
-                sub_candidates.append(ps)
+            sub_candidates = [
+                ps
+                for ps in target_sets
+                if ps.get("id", "") not in content_crawled_ids
+            ]
 
             sub_t0 = time.time()
 
@@ -954,7 +1425,7 @@ def _run_crawl(task):
             for status, payload, ps in sub_results:
                 if status == "ok":
                     total_subs += int(payload or 0)
-                    touched_problem_set_names.add(_problem_set_name(ps))
+                    submission_complete_names.add(_problem_set_name(ps))
                     _mark_problem_set_refreshed(ps, "submissions")
                 else:
                     print(f"pull submissions failed {ps.get('name', '')}: {payload}")
@@ -962,24 +1433,23 @@ def _run_crawl(task):
             task.submissions_count += total_subs
             print(f"[timing] submissions phase: {time.time() - sub_t0:.1f}s "
                   f"({len(sub_candidates)} sets, {total_subs} rows)")
+        else:
+            submission_complete_names.update(
+                item["problem_set_name"]
+                for item in target_decisions
+                if item["persisted_state"].get("submission_complete")
+            )
 
-        # incremental 同样走此分支：按实验刷新已有未截止实验的导出数据
-        # （已截止且数据库已有数据的实验会被 _should_refresh_problem_set 跳过）
         if mode in (CrawlMode.REFRESH, CrawlMode.FULL, CrawlMode.INCREMENTAL):
-            if all_sets is None:
-                all_sets = _resolve_problem_sets(client, task)
             export_candidates = []
-            for ps in (all_sets or []):
+            for ps in target_sets:
                 ps_id = ps.get("id", "")
+                ps_name = _problem_set_name(ps)
+                if ps_name in group_transcript_experiment_names:
+                    client.history.mark_export_refreshed(ps_id)
+                    _mark_problem_set_refreshed(ps, "exports")
+                    continue
                 if ps_id in content_crawled_ids:
-                    continue
-                if not client.history.is_crawled(ps_id):
-                    continue
-                ok, _, reason = _should_refresh_problem_set(
-                    ps, "exports", task.force, class_id=task.class_id
-                )
-                if not ok:
-                    task.skipped_cooldown.append(reason)
                     continue
                 export_candidates.append(ps)
 
@@ -998,10 +1468,9 @@ def _run_crawl(task):
             refreshed = 0
             for status, payload, ps in export_results:
                 if status == "ok":
-                    touched_problem_set_names.add(_problem_set_name(ps))
+                    transcript_complete_names.add(_problem_set_name(ps))
                     client.history.mark_export_refreshed(ps.get("id", ""))
                     _mark_problem_set_refreshed(ps, "exports")
-                    needs_group_answer_export = True
                     refreshed += 1
                 else:
                     ps_name = ps.get("name", "")
@@ -1013,28 +1482,25 @@ def _run_crawl(task):
 
         print(f"[timing] crawl phases total: {time.time() - phase_t0:.1f}s")
 
-        if needs_group_answer_export and not crawl_errors:
-            try:
-                warning = _export_group_answer_or_warn(
-                    client, task, task_crawl_dir
-                )
-                if warning:
-                    task.warnings.append(warning)
-            except Exception as exc:
-                crawl_errors.append(
-                    "group answer export: " + _summarize_group_answer_error(exc)
-                )
-
         if crawl_errors:
             raise RuntimeError("; ".join(crawl_errors[:5]))
 
         for ps in completed_content_sets:
             client.history.mark_crawled(ps.get("id", ""), ps.get("name", ""))
 
-        if not task_crawl_dir or not any(p.is_dir() for p in task_crawl_dir.iterdir()):
+        if not task_crawl_dir or not any(
+            (task_crawl_dir / name).is_dir()
+            for name in target_names
+        ):
             raise RuntimeError("no PTA data was downloaded for this task")
 
-        if touched_problem_set_names:
+        if touched_problem_set_names and task.dry_run:
+            task.phase = "DRY_RUN_COMPLETE"
+            print(
+                "dry-run: database import and problem-set sync state writes skipped"
+            )
+        elif touched_problem_set_names:
+            task.phase = "IMPORTING"
             print("syncing to database...")
             report = run_configured_sync(
                 crawl_dir=task_crawl_dir,
@@ -1044,9 +1510,22 @@ def _run_crawl(task):
             )
             if not report.get("ok"):
                 raise RuntimeError(report.get("error") or "database sync failed")
+            _save_problem_set_sync_states(
+                task.class_id,
+                target_decisions,
+                successful_names=target_names,
+                content_completed_names={
+                    _problem_set_name(ps)
+                    for ps in completed_content_sets
+                },
+                transcript_complete_names=transcript_complete_names,
+                answer_complete_names=answer_complete_names,
+                submission_complete_names=submission_complete_names,
+            )
         else:
             print("no refreshed problem sets; database synchronization skipped")
 
+        task.phase = "SUCCESS"
         task.status = TaskStatus.SUCCESS
         task.finished_at = datetime.now().isoformat()
         if _env_bool("PTA_KEEP_LOCAL_CRAWL_DATA", True):
@@ -1055,6 +1534,9 @@ def _run_crawl(task):
             _cleanup_task_crawl_dir(task_crawl_dir, base_crawl_dir)
         _notify_java(task.class_id, "SUCCESS", task.task_id)
     except Exception as e:
+        if not task.dry_run:
+            _save_problem_set_sync_failure(task.class_id, decisions, e)
+        task.phase = "FAILED"
         task.status = TaskStatus.FAILED
         task.error = str(e)
         task.finished_at = datetime.now().isoformat()
@@ -1107,6 +1589,7 @@ async def crawl(req: CrawlRequest):
     force_selenium_login = req.force_selenium_login
     if req.forceSeleniumLogin is not None:
         force_selenium_login = req.forceSeleniumLogin
+    dry_run = req.dry_run if req.dryRun is None else req.dryRun
     mode = _parse_mode(req.mode)
     keyword = (group_name or group_id or "").strip()
     if not keyword:
@@ -1144,14 +1627,19 @@ async def crawl(req: CrawlRequest):
         password,
         force_selenium_login,
         req.headless,
+        dry_run,
     )
     _task_store[tid] = task
     await q.put(tid)
     mode_cn = {"incremental": "incremental", "submissions": "submissions", "refresh": "refresh", "full": "full"}
     force_hint = " (force)" if req.force else ""
+    dry_run_hint = " (dry-run, no database import)" if dry_run else ""
     return {"task_id": tid, "status": task.status.value,
             "credential_source": task.credential_source,
-            "message": f"queued: {mode_cn.get(mode.value, mode.value)}{force_hint}"}
+            "message": (
+                f"queued: {mode_cn.get(mode.value, mode.value)}"
+                f"{force_hint}{dry_run_hint}"
+            )}
 
 @app.get("/status/{task_id}")
 async def status(task_id: str):

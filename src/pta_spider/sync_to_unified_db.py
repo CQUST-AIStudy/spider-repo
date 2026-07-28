@@ -279,9 +279,9 @@ def _validate_experiment_snapshot(
                     f"submission crawl is not user-group scoped: {status_path}"
                 )
             queried_user_count = _safe_int(status.get("queried_user_count"))
-            if (
-                expected_group_member_count is not None
-                and queried_user_count != expected_group_member_count
+            if not _submission_scope_covers_roster(
+                status,
+                expected_group_member_count,
             ):
                 raise RuntimeError(
                     f"submission crawl member count mismatch for {exp_dir.name}: "
@@ -320,6 +320,24 @@ def _safe_int(value, default=None):
         return int(float(str(value).strip()))
     except (ValueError, TypeError):
         return default
+
+
+def _submission_scope_covers_roster(status, expected_group_member_count):
+    if expected_group_member_count is None:
+        return True
+    queried_user_count = _safe_int(status.get("queried_user_count"))
+    strategy = str(status.get("strategy") or "").strip()
+    global_query = status.get("global_query")
+    global_complete_then_filtered = (
+        strategy == "GLOBAL_COMPLETE_THEN_LOCAL_FILTER"
+        and isinstance(global_query, dict)
+        and global_query.get("complete") is True
+        and global_query.get("hit_server_cap") is not True
+    )
+    return (
+        global_complete_then_filtered
+        or queried_user_count == expected_group_member_count
+    )
 
 
 def _knowledge_strings(points):
@@ -2370,6 +2388,12 @@ def _recalc_student_assignment(
           )
         END
     """
+    accepted_problem_count_expr = f"""
+        LEAST(
+          COALESCE(sps.accepted_problem_count, 0),
+          {evidence_problem_count_expr}
+        )
+    """
     joined_aggregates = """
         LEFT JOIN tmp_pta_transcript_sync tr
           ON tr.student_id = sa.student_id
@@ -2415,7 +2439,7 @@ def _recalc_student_assignment(
                 END,
                 sa.first_submit_at = spa.first_submit_at,
                 sa.last_submit_at = spa.last_submit_at,
-                sa.accepted_problem_count = COALESCE(sps.accepted_problem_count, 0),
+                sa.accepted_problem_count = {accepted_problem_count_expr},
                 sa.submitted_problem_count = {evidence_problem_count_expr},
                 sa.best_total_score = tr.total_score,
                 sa.latest_total_score = tr.total_score,
@@ -2451,7 +2475,7 @@ def _recalc_student_assignment(
                 END,
                 sa.first_submit_at = spa.first_submit_at,
                 sa.last_submit_at = spa.last_submit_at,
-                sa.accepted_problem_count = COALESCE(sps.accepted_problem_count, 0),
+                sa.accepted_problem_count = {accepted_problem_count_expr},
                 sa.submitted_problem_count = {evidence_problem_count_expr},
                 sa.best_total_score = tr.total_score,
                 sa.latest_total_score = tr.total_score,
@@ -2771,6 +2795,23 @@ def _resolve_named_pta_offering(
                 f"{existing_problem_set_id}, not {problem_set_source_id}"
             )
         return row[:3]
+
+    if not _is_stable_problem_set_source_id(problem_set_source_id):
+        # User-group answer archives do not always contain a PTA problem-set
+        # id. Older imports therefore created NAME-* shadow offerings beside
+        # the canonical id-based offering. Prefer the one whose persisted
+        # source key is internally consistent with its stable PTA id. This
+        # prevents another shadow row and lets repaired deployments continue
+        # importing while historical duplicates are cleaned separately.
+        canonical = [
+            row
+            for row in rows
+            if _is_stable_problem_set_source_id(row[3])
+            and str(row[4] or "")
+            in _offering_source_keys(str(row[3]), row[1])
+        ]
+        if len(canonical) == 1:
+            return canonical[0][:3]
 
     if _is_stable_problem_set_source_id(problem_set_source_id):
         canonical = [
