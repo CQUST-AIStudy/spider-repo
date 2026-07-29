@@ -567,6 +567,19 @@ class AdaptiveRateLimiterTests(unittest.TestCase):
 class ExportParallelTests(unittest.TestCase):
     """同题集多类型导出并行"""
 
+    def test_group_transcript_only_replaces_problem_set_transcript(self):
+        client = PTAClient.__new__(PTAClient)
+
+        configs = client._required_export_configs(
+            export_answer_sheet=False,
+            include_transcript=False,
+        )
+
+        self.assertEqual(
+            [export_type for export_type, _ in configs],
+            ["SCORED_CODE"],
+        )
+
     def test_parallel_export_faster_than_serial(self):
         client = PTAClient.__new__(PTAClient)
         calls = []

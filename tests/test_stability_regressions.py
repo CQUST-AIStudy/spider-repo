@@ -217,6 +217,19 @@ class GroupExportOrderingTests(unittest.TestCase):
                     },
                 },
             )()
+            client._write_problem_set_info = lambda *args, **kwargs: None
+
+            def refresh_problem_set(
+                ps_id,
+                ps_name,
+                export_answer_sheet=False,
+                export_problem_set_transcript=True,
+            ):
+                events.append("scored-code-export")
+                self.assertFalse(export_answer_sheet)
+                self.assertFalse(export_problem_set_transcript)
+
+            client._refresh_one_problem_set = refresh_problem_set
             task = TaskInfo(
                 "task-1",
                 "test-group",
@@ -324,6 +337,7 @@ class GroupExportOrderingTests(unittest.TestCase):
                 "problem-sets",
                 "group-export",
                 "group-transcript",
+                "scored-code-export",
                 "database-sync",
             ],
         )

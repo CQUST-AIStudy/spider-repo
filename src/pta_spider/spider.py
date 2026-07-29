@@ -2566,11 +2566,20 @@ class PTAClient:
         # 自动同步到数据库
         self._auto_sync_to_db()
 
-    def _required_export_configs(self, export_answer_sheet=False, answer_sheet_index=0):
+    def _required_export_configs(
+        self,
+        export_answer_sheet=False,
+        answer_sheet_index=0,
+        include_transcript=True,
+    ):
         export_configs = [
             ("PAPER_TRANSCRIPT", "成绩单"),
             ("SCORED_CODE", "得分代码"),
         ]
+        if not include_transcript:
+            export_configs = [
+                item for item in export_configs if item[0] != "PAPER_TRANSCRIPT"
+            ]
         if export_answer_sheet:
             export_configs.insert(answer_sheet_index, ("ANSWER_SHEET", "答题卡"))
         return export_configs
@@ -2674,6 +2683,7 @@ class PTAClient:
         ps_name,
         export_answer_sheet=False,
         export_problem_set_artifacts=True,
+        export_problem_set_transcript=True,
     ):
         """Crawl all data for a single problem set, save to ./爬取结果/"""
         base_dir = self._problem_set_dir(ps_name)
@@ -2917,6 +2927,7 @@ class PTAClient:
                 self._required_export_configs(
                     export_answer_sheet,
                     answer_sheet_index=0,
+                    include_transcript=export_problem_set_transcript,
                 ),
             )
             if EXPORT_BETWEEN_DELAY_SECONDS > 0:
@@ -2927,7 +2938,13 @@ class PTAClient:
             "submission_count": len(submissions),
         }
 
-    def _refresh_one_problem_set(self, ps_id, ps_name, export_answer_sheet=False):
+    def _refresh_one_problem_set(
+        self,
+        ps_id,
+        ps_name,
+        export_answer_sheet=False,
+        export_problem_set_transcript=True,
+    ):
         """
         刷新已爬取题目集的导出数据（不重新爬取题目内容和提交记录）。
         只重新导出: PAPER_TRANSCRIPT, SCORED_CODE；ANSWER_SHEET 可由用户组总导出替代
@@ -2940,7 +2957,11 @@ class PTAClient:
             ps_id,
             ps_name,
             export_dir,
-            self._required_export_configs(export_answer_sheet, answer_sheet_index=1),
+            self._required_export_configs(
+                export_answer_sheet,
+                answer_sheet_index=1,
+                include_transcript=export_problem_set_transcript,
+            ),
         )
 
     def refresh_exports(self, group_id=None, group_name=None):

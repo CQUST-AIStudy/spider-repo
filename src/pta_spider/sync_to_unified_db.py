@@ -9,6 +9,7 @@ import traceback
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 from . import sync_to_db as legacy_sync
 
@@ -2917,6 +2918,98 @@ def _migrate_legacy_offering_to_pta(
     return (offering_id, offering_class_id, teacher_id)
 
 
+def _inspect_code_state_materialization(
+    cursor: Any,
+    offering_id: int,
+    code_state_updates: list[
+        tuple[int | None, int, int | None, int | None]
+    ],
+    sample_size: int = 3,
+) -> dict:
+    requested_update_count = len(code_state_updates)
+    expected = {
+        (int(problem_id), int(student_id)): int(artifact_id)
+        for artifact_id, _, problem_id, student_id in code_state_updates
+        if artifact_id and problem_id and student_id
+    }
+    validation = {
+        "ok": requested_update_count == len(expected),
+        "requested_update_rows": requested_update_count,
+        "invalid_expected_rows": requested_update_count - len(expected),
+        "expected_problem_student_rows": len(expected),
+        "materialized_problem_student_rows": 0,
+        "expected_students": len({student_id for _, student_id in expected}),
+        "materialized_students": 0,
+        "sampled_rows": [],
+        "missing_or_stale_rows": 0,
+        "empty_content_rows": 0,
+    }
+    if not expected:
+        return validation
+
+    cursor.execute(
+        """
+        SELECT
+          sps.problem_id,
+          sps.student_id,
+          sps.latest_code_artifact_id,
+          CHAR_LENGTH(TRIM(COALESCE(a.text_content, ''))) AS code_length
+        FROM student_problem_state sps
+        LEFT JOIN artifact a ON a.id = sps.latest_code_artifact_id
+        WHERE sps.offering_id = %s
+          AND sps.latest_code_artifact_id IS NOT NULL
+        """,
+        (offering_id,),
+    )
+    actual = {
+        (int(row[0]), int(row[1])): (
+            int(row[2]),
+            int(row[3] or 0),
+        )
+        for row in cursor.fetchall()
+        if row[0] is not None and row[1] is not None and row[2] is not None
+    }
+
+    materialized = {}
+    missing_or_stale = []
+    empty_content = []
+    for pair, expected_artifact_id in expected.items():
+        actual_row = actual.get(pair)
+        if actual_row is None or actual_row[0] != expected_artifact_id:
+            missing_or_stale.append(pair)
+            continue
+        if actual_row[1] <= 0:
+            empty_content.append(pair)
+            continue
+        materialized[pair] = actual_row
+
+    validation.update(
+        {
+            "ok": (
+                validation["invalid_expected_rows"] == 0
+                and not missing_or_stale
+                and not empty_content
+            ),
+            "materialized_problem_student_rows": len(materialized),
+            "materialized_students": len(
+                {student_id for _, student_id in materialized}
+            ),
+            "missing_or_stale_rows": len(missing_or_stale),
+            "empty_content_rows": len(empty_content),
+            "sampled_rows": [
+                {
+                    "problem_id": problem_id,
+                    "student_id": student_id,
+                    "artifact_id": materialized[(problem_id, student_id)][0],
+                    "code_length": materialized[(problem_id, student_id)][1],
+                }
+                for problem_id, student_id in sorted(materialized)[:sample_size]
+            ],
+        }
+    )
+    return validation
+
+
 def _sync_one_experiment(
     conn,
     crawl_dir: Path,
@@ -3039,6 +3132,29 @@ def _sync_one_experiment(
             answer_sheet_rows,
             scored_code_rows,
         )
+        answer_sheet_code_students = {
+            str(row.get("student_no") or "").strip()
+            for row in answer_sheet_rows
+            if str(row.get("student_no") or "").strip()
+            and str(row.get("code_text") or "").strip()
+        }
+        if (
+            submission_coverage == "FULL_HISTORY"
+            and answer_sheet_code_students
+            and "SCORED_CODE" not in files
+        ):
+            report["code_materialization"] = {
+                "ok": False,
+                "reason": "missing_scored_code_source",
+                "answer_sheet_code_students": len(answer_sheet_code_students),
+                "expected_problem_student_rows": 0,
+                "materialized_problem_student_rows": 0,
+                "sampled_rows": [],
+            }
+            raise RuntimeError(
+                f"full-history sync for {exp_dir.name} has answer-sheet code "
+                "but no SCORED_CODE export; refusing to report a complete import"
+            )
         attempt_submission_rows = [
             row
             for row in submission_rows
@@ -3530,6 +3646,21 @@ def _sync_one_experiment(
                 code_state_updates,
             )
             _log_sync_stage("代码artifact状态回填完成", experiment=exp_dir.name, rows=len(code_state_updates), elapsed_ms=_elapsed_ms(substage_start))
+        report["code_materialization"] = _inspect_code_state_materialization(
+            cursor,
+            resolved["offering_id"],
+            code_state_updates,
+        )
+        if not report["code_materialization"]["ok"]:
+            validation = report["code_materialization"]
+            raise RuntimeError(
+                f"code materialization validation failed for {exp_dir.name}: "
+                f"expected={validation['expected_problem_student_rows']}, "
+                f"materialized={validation['materialized_problem_student_rows']}, "
+                f"invalid={validation['invalid_expected_rows']}, "
+                f"missing_or_stale={validation['missing_or_stale_rows']}, "
+                f"empty={validation['empty_content_rows']}"
+            )
         answer_state_updates = [
             (artifact_id, resolved["offering_id"], student_id)
             for student_id, artifact_id in answer_sheet_artifact_by_student.items()

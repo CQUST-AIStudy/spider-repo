@@ -12,10 +12,78 @@ from pta_spider.sync_to_unified_db import (
     _bulk_ensure_assignment_problems,
     _discover_experiment_source_paths,
     _fail_stale_import_jobs,
+    _inspect_code_state_materialization,
     _is_stable_problem_set_source_id,
     _recalc_student_assignment,
     _resolve_named_pta_offering,
 )
+
+
+class CodeValidationCursor:
+    def __init__(self, rows):
+        self.rows = rows
+        self.sql = ""
+        self.params = None
+
+    def execute(self, sql, params=None):
+        self.sql = sql
+        self.params = params
+
+    def fetchall(self):
+        return self.rows
+
+
+class CodeMaterializationValidationTests(unittest.TestCase):
+    def test_accepts_exact_non_empty_code_artifacts_and_samples_rows(self):
+        cursor = CodeValidationCursor(
+            [
+                (101, 201, 301, 120),
+                (102, 201, 302, 80),
+            ]
+        )
+
+        result = _inspect_code_state_materialization(
+            cursor,
+            77,
+            [
+                (301, 77, 101, 201),
+                (302, 77, 102, 201),
+            ],
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["expected_problem_student_rows"], 2)
+        self.assertEqual(result["materialized_problem_student_rows"], 2)
+        self.assertEqual(result["expected_students"], 1)
+        self.assertEqual(result["materialized_students"], 1)
+        self.assertEqual(result["invalid_expected_rows"], 0)
+        self.assertEqual(len(result["sampled_rows"]), 2)
+        self.assertEqual(cursor.params, (77,))
+
+    def test_rejects_missing_stale_and_empty_code_artifacts(self):
+        cursor = CodeValidationCursor(
+            [
+                (101, 201, 999, 120),
+                (102, 201, 302, 0),
+            ]
+        )
+
+        result = _inspect_code_state_materialization(
+            cursor,
+            77,
+            [
+                (301, 77, 101, 201),
+                (302, 77, 102, 201),
+                (303, 77, 103, 202),
+                (304, 77, None, 203),
+            ],
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["materialized_problem_student_rows"], 0)
+        self.assertEqual(result["missing_or_stale_rows"], 2)
+        self.assertEqual(result["empty_content_rows"], 1)
+        self.assertEqual(result["invalid_expected_rows"], 1)
 
 
 class RecordingCursor:

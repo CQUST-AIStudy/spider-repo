@@ -1561,7 +1561,9 @@ def _run_crawl(task):
                         export_problem_set_artifacts=(
                             task.submission_policy
                             == SubmissionPolicy.FULL_HISTORY
-                            and _problem_set_name(ps)
+                        ),
+                        export_problem_set_transcript=(
+                            _problem_set_name(ps)
                             not in group_transcript_experiment_names
                         ),
                     )
@@ -1670,11 +1672,6 @@ def _run_crawl(task):
             export_candidates = []
             for ps in target_sets:
                 ps_id = ps.get("id", "")
-                ps_name = _problem_set_name(ps)
-                if ps_name in group_transcript_experiment_names:
-                    client.history.mark_export_refreshed(ps_id)
-                    _mark_problem_set_refreshed(ps, "exports")
-                    continue
                 if ps_id in content_crawled_ids:
                     continue
                 export_candidates.append(ps)
@@ -1685,7 +1682,15 @@ def _run_crawl(task):
                 ps_id = ps.get("id", "")
                 ps_name = ps.get("name", "")
                 client._write_problem_set_info(ps_id, ps_name, ps)
-                client._refresh_one_problem_set(ps_id, ps_name, export_answer_sheet=False)
+                client._refresh_one_problem_set(
+                    ps_id,
+                    ps_name,
+                    export_answer_sheet=False,
+                    export_problem_set_transcript=(
+                        _problem_set_name(ps)
+                        not in group_transcript_experiment_names
+                    ),
+                )
                 return ("ok", None, ps)
 
             export_results = _map_problem_sets_parallel(
