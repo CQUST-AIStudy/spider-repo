@@ -12,10 +12,14 @@ from pta_spider.sync_to_unified_db import (
     _bulk_ensure_assignment_problems,
     _discover_experiment_source_paths,
     _fail_stale_import_jobs,
+    _filter_scored_code_rows_by_problem_ids,
     _inspect_code_state_materialization,
     _is_stable_problem_set_source_id,
+    _load_supported_problem_ids_for_offering,
+    _remove_assignment_problems_outside_supported_scope,
     _recalc_student_assignment,
     _resolve_named_pta_offering,
+    _supported_problem_detail_rows,
 )
 
 
@@ -84,6 +88,79 @@ class CodeMaterializationValidationTests(unittest.TestCase):
         self.assertEqual(result["missing_or_stale_rows"], 2)
         self.assertEqual(result["empty_content_rows"], 1)
         self.assertEqual(result["invalid_expected_rows"], 1)
+
+
+class ProgrammingProblemScopeTests(unittest.TestCase):
+    def test_keeps_only_explicit_programming_problem_details(self):
+        programming = {
+            "problem_set_problem_id": "p1",
+            "problem_type": "PROGRAMMING",
+        }
+        function_problem = {
+            "problem_set_problem_id": "p2",
+            "problem_type": "CODE_COMPLETION",
+        }
+
+        supported, unsupported = _supported_problem_detail_rows(
+            [programming, function_problem]
+        )
+
+        self.assertEqual(supported, [programming])
+        self.assertEqual(unsupported, [function_problem])
+
+    def test_rejects_missing_problem_type_instead_of_defaulting_to_programming(self):
+        with self.assertRaisesRegex(RuntimeError, "missing problem_type"):
+            _supported_problem_detail_rows(
+                [{"problem_set_problem_id": "unknown", "problem_type": None}]
+            )
+
+    def test_scored_code_must_match_supported_problem_id(self):
+        rows = [
+            {"pta_problem_id": "p1", "student_no": "1"},
+            {"pta_problem_id": "p2", "student_no": "1"},
+            {"pta_problem_id": "0", "student_no": "1"},
+        ]
+
+        accepted, ignored = _filter_scored_code_rows_by_problem_ids(rows, {"p1"})
+
+        self.assertEqual(accepted, [rows[0]])
+        self.assertEqual(ignored, rows[1:])
+
+    def test_partial_sync_loads_only_explicit_active_programming_ids(self):
+        class Cursor:
+            def execute(self, sql, params=None):
+                self.sql = sql
+                self.params = params
+
+            def fetchall(self):
+                return [("p1",), (None,), ("",)]
+
+        cursor = Cursor()
+        result = _load_supported_problem_ids_for_offering(cursor, 7)
+
+        self.assertEqual(result, {"p1"})
+        self.assertIn("ap.status = 'ACTIVE'", cursor.sql)
+        self.assertIn("COALESCE(pd.problem_type, '')", cursor.sql)
+        self.assertEqual(cursor.params, (7, "PROGRAMMING"))
+
+    def test_empty_supported_scope_removes_all_active_problem_mappings(self):
+        class Cursor:
+            rowcount = 3
+
+            def execute(self, sql, params=None):
+                self.sql = sql
+                self.params = params
+
+        cursor = Cursor()
+        removed = _remove_assignment_problems_outside_supported_scope(
+            cursor,
+            offering_id=7,
+            supported_problem_ids=set(),
+        )
+
+        self.assertEqual(removed, 3)
+        self.assertIn("status = 'REMOVED'", cursor.sql)
+        self.assertEqual(cursor.params, (7,))
 
 
 class RecordingCursor:

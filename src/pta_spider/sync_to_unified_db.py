@@ -147,6 +147,48 @@ def _read_problem_detail_rows(json_path: Path):
     return [item for item in data if isinstance(item, dict)]
 
 
+def _supported_problem_detail_rows(problem_detail_rows):
+    """Return only explicitly supported problem details; unknown types are invalid."""
+    supported = []
+    unsupported = []
+    unknown_problem_ids = []
+    for row in problem_detail_rows or []:
+        problem_id = str(
+            row.get("problem_set_problem_id") or row.get("id") or ""
+        ).strip()
+        problem_type = str(row.get("problem_type") or "").strip().upper()
+        if not problem_type:
+            unknown_problem_ids.append(problem_id or "<missing-id>")
+        elif problem_type in SUPPORTED_PROBLEM_TYPES:
+            supported.append(row)
+        else:
+            unsupported.append(row)
+    if unknown_problem_ids:
+        sample = ", ".join(unknown_problem_ids[:10])
+        raise RuntimeError(
+            "problem details contain missing problem_type; refusing to treat them as "
+            f"PROGRAMMING (count={len(unknown_problem_ids)}, sample={sample})"
+        )
+    return supported, unsupported
+
+
+def _filter_scored_code_rows_by_problem_ids(scored_code_rows, supported_problem_ids):
+    supported_ids = {
+        str(problem_id or "").strip()
+        for problem_id in supported_problem_ids or set()
+        if str(problem_id or "").strip()
+    }
+    accepted = []
+    ignored = []
+    for row in scored_code_rows or []:
+        problem_id = str(row.get("pta_problem_id") or "").strip()
+        if problem_id and problem_id in supported_ids:
+            accepted.append(row)
+        else:
+            ignored.append(row)
+    return accepted, ignored
+
+
 def _read_json_object(path: Path, label: str):
     if not path.exists():
         raise RuntimeError(f"{label} is missing: {path}")
@@ -214,6 +256,7 @@ def _validate_experiment_snapshot(
     problem_detail_rows,
     submission_rows,
     expected_group_member_count=None,
+    raw_problem_detail_count=None,
 ):
     allow_unverified = _flag("PTA_ALLOW_LEGACY_UNVERIFIED_IMPORT", False)
     problem_set_info = _read_problem_set_info(exp_dir)
@@ -238,10 +281,15 @@ def _validate_experiment_snapshot(
             if status.get("failed_problem_ids") or status.get("invalid_content_problem_ids"):
                 raise RuntimeError(f"problem crawl contains failed problem details: {status_path}")
             detail_count = _safe_int(status.get("detail_problem_count"))
-            if detail_count is not None and detail_count != len(problem_detail_rows):
+            actual_detail_count = (
+                len(problem_detail_rows)
+                if raw_problem_detail_count is None
+                else int(raw_problem_detail_count)
+            )
+            if detail_count is not None and detail_count != actual_detail_count:
                 raise RuntimeError(
                     f"problem detail count mismatch for {exp_dir.name}: "
-                    f"status={detail_count}, file={len(problem_detail_rows)}"
+                    f"status={detail_count}, file={actual_detail_count}"
                 )
         elif not allow_unverified:
             raise RuntimeError(f"problem crawl status is required: {status_path}")
@@ -1760,6 +1808,74 @@ def _bulk_ensure_assignment_problems(cursor, offering_id: int, problem_specs, ca
     return cache
 
 
+def _load_supported_problem_ids_for_offering(cursor, offering_id: int):
+    supported_types = sorted(SUPPORTED_PROBLEM_TYPES)
+    placeholders = ", ".join(["%s"] * len(supported_types))
+    cursor.execute(
+        f"""
+        SELECT DISTINCT ap.source_problem_id
+        FROM assignment_problem ap
+        JOIN assignment_offering ao ON ao.id = ap.offering_id
+        JOIN pta_problem_detail pd
+          ON pd.problem_set_id = ao.pta_problem_set_id
+         AND pd.problem_set_problem_id = ap.source_problem_id
+        WHERE ap.offering_id = %s
+          AND ap.status = 'ACTIVE'
+          AND UPPER(TRIM(COALESCE(pd.problem_type, ''))) IN ({placeholders})
+        """,
+        tuple([offering_id, *supported_types]),
+    )
+    return {
+        str(row[0]).strip()
+        for row in cursor.fetchall()
+        if row and row[0] is not None and str(row[0]).strip()
+    }
+
+
+def _remove_assignment_problems_outside_supported_scope(
+    cursor,
+    offering_id: int,
+    supported_problem_ids,
+):
+    """Deactivate stale/non-programming mappings after an authoritative detail crawl."""
+    supported_ids = sorted(
+        {
+            str(problem_id or "").strip()
+            for problem_id in supported_problem_ids or set()
+            if str(problem_id or "").strip()
+        }
+    )
+    if not supported_ids:
+        cursor.execute(
+            """
+            UPDATE assignment_problem
+            SET status = 'REMOVED',
+                updated_at = CURRENT_TIMESTAMP(3)
+            WHERE offering_id = %s
+              AND status <> 'REMOVED'
+            """,
+            (offering_id,),
+        )
+        return cursor.rowcount
+
+    placeholders = ", ".join(["%s"] * len(supported_ids))
+    cursor.execute(
+        f"""
+        UPDATE assignment_problem
+        SET status = 'REMOVED',
+            updated_at = CURRENT_TIMESTAMP(3)
+        WHERE offering_id = %s
+          AND status <> 'REMOVED'
+          AND (
+            source_problem_id IS NULL
+            OR source_problem_id NOT IN ({placeholders})
+          )
+        """,
+        tuple([offering_id, *supported_ids]),
+    )
+    return cursor.rowcount
+
+
 def _bulk_upsert_pta_problem_details(
     cursor,
     legacy_experiment_id,
@@ -3021,29 +3137,33 @@ def _sync_one_experiment(
 ):
     cursor = conn.cursor()
     source_paths = _discover_experiment_source_paths(exp_dir)
-    problem_detail_rows = (
+    raw_problem_detail_rows = (
         _read_problem_detail_rows(source_paths["PROBLEM_DETAILS"])
         if "PROBLEM_DETAILS" in source_paths
         else []
     )
-    problem_detail_rows = [
-        row
+    problem_detail_rows, unsupported_problem_detail_rows = (
+        _supported_problem_detail_rows(raw_problem_detail_rows)
+    )
+    supported_problem_ids = {
+        str(row.get("problem_set_problem_id") or row.get("id") or "").strip()
         for row in problem_detail_rows
-        if not str(row.get("problem_type") or "").strip()
-        or str(row.get("problem_type") or "").strip().upper()
-        in SUPPORTED_PROBLEM_TYPES
-    ]
-    submission_rows = (
+        if str(row.get("problem_set_problem_id") or row.get("id") or "").strip()
+    }
+    raw_submission_rows = (
         _read_submission_rows(source_paths["SUBMISSIONS"])
         if "SUBMISSIONS" in source_paths
         else []
     )
     submission_rows = [
         row
-        for row in submission_rows
+        for row in raw_submission_rows
         if str(row.get("problem_type") or "").strip().upper()
         in SUPPORTED_PROBLEM_TYPES
     ]
+    ignored_unsupported_submission_rows = (
+        len(raw_submission_rows) - len(submission_rows)
+    )
     _validate_experiment_snapshot(
         exp_dir,
         source_paths,
@@ -3054,6 +3174,7 @@ def _sync_one_experiment(
             if pta_group_context
             else None
         ),
+        raw_problem_detail_count=len(raw_problem_detail_rows),
     )
     submission_coverage = _submission_coverage_for_experiment(exp_dir)
     _log_sync_stage("开始同步实验", experiment=exp_dir.name, class_id=class_id)
@@ -3062,6 +3183,11 @@ def _sync_one_experiment(
         _log_sync_stage("跳过实验同步", experiment=exp_dir.name, reason="missing_assignment_offering_mapping")
         return {"experiment": exp_dir.name, "skipped": True, "reason": "missing assignment_offering mapping"}
     _update_assignment_offering_pta_group(cursor, resolved["offering_id"], pta_group_context)
+    if "PROBLEM_DETAILS" not in source_paths:
+        supported_problem_ids = _load_supported_problem_ids_for_offering(
+            cursor,
+            resolved["offering_id"],
+        )
 
     import_job_id = _ensure_import_job(cursor, resolved["class_id"], {"experiment": exp_dir.name})
     conn.commit()
@@ -3082,12 +3208,16 @@ def _sync_one_experiment(
         "raw_transcript_rows": 0,
         "raw_answer_sheet_rows": 0,
         "problem_detail_rows": 0,
+        "supported_problem_count": len(supported_problem_ids),
+        "ignored_unsupported_problem_count": len(unsupported_problem_detail_rows),
+        "ignored_unsupported_scored_code_rows": 0,
+        "stale_assignment_problems_removed": 0,
         "attempts_upserted": 0,
         "students_resolved": 0,
         "official_roster_students": len(pta_group_context.get("active_student_nos", [])) if pta_group_context else None,
         "unmapped_submission_rows": 0,
         "invalid_submission_time_rows": 0,
-        "ignored_unsupported_submission_rows": 0,
+        "ignored_unsupported_submission_rows": ignored_unsupported_submission_rows,
         "filtered_out_non_group_rows": {
             "transcript": 0,
             "submissions": 0,
@@ -3109,11 +3239,41 @@ def _sync_one_experiment(
         for role, path in source_paths.items():
             files[role] = (path, _register_source_file(cursor, import_job_id, path, crawl_dir, role))
 
+        if "PROBLEM_DETAILS" in files:
+            report["stale_assignment_problems_removed"] = (
+                _remove_assignment_problems_outside_supported_scope(
+                    cursor,
+                    resolved["offering_id"],
+                    supported_problem_ids,
+                )
+            )
+            if not supported_problem_ids:
+                report["skipped"] = True
+                report["reason"] = "no_supported_programming_problems"
+                _update_import_job(cursor, import_job_id, "SUCCEEDED", report, None)
+                conn.commit()
+                _log_sync_stage(
+                    "skip experiment without programming problems",
+                    experiment=exp_dir.name,
+                    import_job_id=import_job_id,
+                    ignored_problem_count=len(unsupported_problem_detail_rows),
+                )
+                return report
+
         _log_sync_stage("开始读取同步源文件", experiment=exp_dir.name, files=",".join(sorted(files.keys())) or "none")
         stage_start = time.perf_counter()
         transcript_rows = _read_transcript_rows(files["PAPER_TRANSCRIPT"][0]) if "PAPER_TRANSCRIPT" in files else []
         answer_sheet_rows = _read_answer_sheet_rows(files["ANSWER_SHEET"][0]) if "ANSWER_SHEET" in files else []
-        scored_code_rows = _read_scored_code_rows(files["SCORED_CODE"][0]) if "SCORED_CODE" in files else []
+        raw_scored_code_rows = _read_scored_code_rows(files["SCORED_CODE"][0]) if "SCORED_CODE" in files else []
+        scored_code_rows, ignored_scored_code_rows = (
+            _filter_scored_code_rows_by_problem_ids(
+                raw_scored_code_rows,
+                supported_problem_ids,
+            )
+        )
+        report["ignored_unsupported_scored_code_rows"] = len(
+            ignored_scored_code_rows
+        )
         if "PAPER_TRANSCRIPT" in files and pta_group_context and not transcript_rows:
             raise RuntimeError(
                 f"paper transcript parsed zero roster rows for {exp_dir.name}; "
@@ -3161,7 +3321,7 @@ def _sync_one_experiment(
             if str(row.get("problem_type") or "").strip().upper()
             in SUPPORTED_PROBLEM_TYPES
         ]
-        report["ignored_unsupported_submission_rows"] = (
+        report["ignored_unsupported_submission_rows"] += (
             len(submission_rows) - len(attempt_submission_rows)
         )
         _log_sync_stage(

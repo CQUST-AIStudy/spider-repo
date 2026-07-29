@@ -250,17 +250,6 @@ def _database_has_experiment_data(
         conn = legacy_sync.get_db()
         with conn.cursor() as cursor:
             def offering_has_complete_problem_details(offering_id):
-                if allow_existing_problem_rows:
-                    cursor.execute(
-                        """
-                        SELECT COUNT(*)
-                        FROM assignment_problem
-                        WHERE offering_id = %s
-                        """,
-                        (offering_id,),
-                    )
-                    if int(cursor.fetchone()[0] or 0) > 0:
-                        return True
                 supported_types = tuple(
                     sorted(SUPPORTED_PROBLEM_TYPES)
                 )
@@ -271,10 +260,14 @@ def _database_has_experiment_data(
                       apd.content,
                       apd.image_urls_json
                     FROM assignment_offering ao
+                    JOIN assignment_problem ap
+                      ON ap.offering_id = ao.id
+                     AND ap.status = 'ACTIVE'
                     JOIN pta_problem_detail apd
                       ON apd.problem_set_id = ao.pta_problem_set_id
+                     AND apd.problem_set_problem_id = ap.source_problem_id
                     WHERE ao.id = %s
-                      AND UPPER(COALESCE(apd.problem_type, 'PROGRAMMING'))
+                      AND UPPER(TRIM(COALESCE(apd.problem_type, '')))
                           IN ({placeholders})
                     """,
                     (offering_id, *supported_types),
