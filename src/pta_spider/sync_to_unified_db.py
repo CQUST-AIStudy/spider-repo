@@ -1742,6 +1742,15 @@ def _bulk_ensure_assignment_participants(cursor, offering_id: int, student_scope
             THEN student_assignment.roster_scope
             ELSE VALUES(roster_scope)
           END,
+          accepted_problem_count = LEAST(
+            student_assignment.accepted_problem_count,
+            student_assignment.submitted_problem_count,
+            VALUES(problem_count)
+          ),
+          submitted_problem_count = LEAST(
+            student_assignment.submitted_problem_count,
+            VALUES(problem_count)
+          ),
           problem_count = VALUES(problem_count),
           updated_at = CURRENT_TIMESTAMP(3)
         """,
@@ -2100,6 +2109,15 @@ def _materialize_student_assignments(cursor, offering_id: int, class_id: int, pt
               AND ugm.student_id IS NOT NULL
             ON DUPLICATE KEY UPDATE
               {roster_scope_update}
+              accepted_problem_count = LEAST(
+                student_assignment.accepted_problem_count,
+                student_assignment.submitted_problem_count,
+                VALUES(problem_count)
+              ),
+              submitted_problem_count = LEAST(
+                student_assignment.submitted_problem_count,
+                VALUES(problem_count)
+              ),
               problem_count = VALUES(problem_count),
               updated_at = CURRENT_TIMESTAMP(3)
             """,
@@ -2129,6 +2147,15 @@ def _materialize_student_assignments(cursor, offering_id: int, class_id: int, pt
           AND cm.member_status = 'ACTIVE'
         ON DUPLICATE KEY UPDATE
           {roster_scope_update}
+          accepted_problem_count = LEAST(
+            student_assignment.accepted_problem_count,
+            student_assignment.submitted_problem_count,
+            VALUES(problem_count)
+          ),
+          submitted_problem_count = LEAST(
+            student_assignment.submitted_problem_count,
+            VALUES(problem_count)
+          ),
           problem_count = VALUES(problem_count),
           updated_at = CURRENT_TIMESTAMP(3)
         """,
@@ -2156,6 +2183,15 @@ def _ensure_student_assignment_participant(cursor, offering_id: int, student_id:
             THEN student_assignment.roster_scope
             ELSE VALUES(roster_scope)
           END,
+          accepted_problem_count = LEAST(
+            student_assignment.accepted_problem_count,
+            student_assignment.submitted_problem_count,
+            VALUES(problem_count)
+          ),
+          submitted_problem_count = LEAST(
+            student_assignment.submitted_problem_count,
+            VALUES(problem_count)
+          ),
           problem_count = VALUES(problem_count),
           updated_at = CURRENT_TIMESTAMP(3)
         """,
