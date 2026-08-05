@@ -3,13 +3,21 @@
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$localEnvScript = Join-Path $scriptDir "local.env.ps1"
+if (Test-Path $localEnvScript) {
+  . $localEnvScript
+}
+$portScript = Join-Path $scriptDir "spider_port.ps1"
+. $portScript
+Initialize-SpiderPort -ProjectRoot $scriptDir
+$spiderPort = $env:SPIDER_PORT
 $runtimeDir = if ($env:PTA_RUNTIME_DIR) {
   $env:PTA_RUNTIME_DIR
 } else {
   Join-Path $scriptDir "runtime"
 }
 $pidFile = Join-Path $runtimeDir "spider_api.pid"
-$healthUrl = "http://127.0.0.1:8100/health"
+$healthUrl = "http://127.0.0.1:$spiderPort/health"
 
 $pidText = ""
 $procAlive = $false

@@ -1,5 +1,12 @@
-import pymysql
-conn = pymysql.connect(host='localhost', port=3306, user='root', password='123456', database='ptadatabase', charset='utf8mb4')
+import argparse
+
+from db_connection import connect
+
+parser = argparse.ArgumentParser(description="Inspect score records for a student")
+parser.add_argument("--student-no", required=True)
+args = parser.parse_args()
+
+conn = connect()
 cur = conn.cursor()
 
 # 计科24 problem_score_detail
@@ -18,10 +25,10 @@ for r in cur.fetchall():
 cur.execute("""
     SELECT s.experiment_id, e.name, s.score
     FROM score s JOIN experiment e ON s.experiment_id = e.experiment_id
-    WHERE s.username = '2023442246'
+    WHERE s.username = %s
     ORDER BY s.experiment_id
-""")
-print("\n=== student1 (2023442246) 的分数 ===")
+""", (args.student_no,))
+print(f"\n=== {args.student_no} 的分数 ===")
 total = 0
 for r in cur.fetchall():
     print(f"  {r[1]}: {r[2]}")

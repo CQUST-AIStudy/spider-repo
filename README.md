@@ -136,7 +136,7 @@ docker compose down
 1. 让云服务器能够访问配置的 Debian 镜像源和 PyPI 镜像，直接在服务器上 `docker compose up -d --build` 构建镜像。
 2. 不要把本机 Windows Chrome 复制进容器；Windows 版 Chrome 不能在 Linux 云服务器容器里运行。
 3. cookie 会保存在 `runtime/`，`docker-compose.yml` 已把宿主机 `./runtime` 挂载到容器内 `/app/runtime`，容器重建后 cookie 不会丢。
-4. 如果自动登录遇到滑块验证码失败，在前端或接口写入手动 cookie。接口是 `POST /cookie/update`，请求体传浏览器导出的 cookie JSON 数组。
+4. 如果自动登录遇到滑块验证码失败，在前端或接口写入手动 cookie。接口是 `POST /cookie/update`，除浏览器导出的 cookie JSON 数组外，必须传 `class_id`、`teacher_id` 或 `username` 作为隔离作用域。
 5. 如果服务器无法访问配置的镜像源，可在 `.env` 中切换 `DEBIAN_MIRROR`、`PIP_INDEX_URL` 或 `PYTHON_BASE_IMAGE`，再重新构建镜像。
 
 ## 常用环境变量
@@ -146,6 +146,9 @@ PTA_USERNAME=
 PTA_PASSWORD=
 PTA_GROUP_ID=
 PTA_GROUP_NAME=
+PTA_BASE_URL=https://pintia.cn
+PTA_API_BASE=https://pintia.cn/api
+PTA_X_LOLLIPOP=
 PTA_HEADLESS=true
 PTA_FORCE_SELENIUM_LOGIN=false
 PTA_RUNTIME_DIR=/app/runtime
@@ -155,6 +158,8 @@ PTA_CHROMEDRIVER_PATH=/usr/bin/chromedriver
 JAVA_BACKEND_URL=http://host.docker.internal:8081
 SPIDER_PORT=8100
 SPIDER_CORS_ALLOW_ORIGINS=*
+PTA_STUDENT_INITIAL_PASSWORD_MODE=random
+PTA_INITIAL_CREDENTIALS_FILE=/app/runtime/student_initial_credentials.jsonl
 COOLDOWN_SUBMISSIONS=86400
 COOLDOWN_EXPORTS=86400
 # 爬取吞吐（激进默认；遇 429 可自行下调）
@@ -177,6 +182,8 @@ DB_NAME=ptadatabase
 DB_USERNAME=root
 DB_PASSWORD=
 ```
+
+新导入学生默认获得独立随机初始密码，不再使用学号。待发放凭据追加写入仅供运维读取的 `PTA_INITIAL_CREDENTIALS_FILE`；发放后应移出运行主机并要求学生修改密码。若必须由外部密钥系统统一提供初始密码，可设置 `PTA_STUDENT_INITIAL_PASSWORD_MODE=configured` 和至少 16 位的 `PTA_STUDENT_INITIAL_PASSWORD`。
 
 ## 爬取速度说明
 

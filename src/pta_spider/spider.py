@@ -15,6 +15,7 @@ import random
 import pickle
 import glob
 import html
+import hashlib
 import shutil
 import subprocess
 import tempfile
@@ -82,10 +83,9 @@ for _env in _env_candidates:
 else:
     load_dotenv()  # fallback
 
-BASE_URL = "https://pintia.cn"
-API_BASE = "https://pintia.cn/api"
-# Track crawled problem set IDs for incremental detection
-HISTORY_FILE = str(RUNTIME_DIR / "crawl_history.json")
+BASE_URL = os.getenv("PTA_BASE_URL", "https://pintia.cn").rstrip("/")
+API_BASE = os.getenv("PTA_API_BASE", f"{BASE_URL}/api").rstrip("/")
+COOKIE_DOMAIN = os.getenv("PTA_COOKIE_DOMAIN", ".pintia.cn")
 DEFAULT_BROWSER_HOME = (RUNTIME_DIR / "browser").resolve()
 CRAWL_DIR = Path(os.getenv("PTA_CRAWL_DIR", str(SPIDER_DIR / "output"))).resolve()
 CAPTCHA_IMAGE_FILE = RUNTIME_DIR / "captcha_bg.jpg"
@@ -447,8 +447,9 @@ class CrawlHistory:
       - export_refreshed_at: 导出数据（成绩单/答题卡/得分代码）最后刷新时间
     """
 
-    def __init__(self, path=HISTORY_FILE):
-        self.path = path
+    def __init__(self, path=None):
+        self.path = str(path or (RUNTIME_DIR / "crawl_history.json"))
+        Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self.data = self._load()
 
@@ -515,10 +516,26 @@ class CrawlHistory:
             return dict(self.data.get("crawled_sets", {}))
 
 
+def _scope_fragment(value):
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    label = re.sub(r"[^\w.-]+", "_", normalized, flags=re.UNICODE).strip("._")[:40]
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
+    return f"{label or 'scope'}-{digest}"
+
+
 class PTAClient:
     """PTA data crawler client, auto cookie management, API-first"""
 
-    def __init__(self, username=None, password=None, allow_env_fallback=True):
+    def __init__(
+        self,
+        username=None,
+        password=None,
+        allow_env_fallback=True,
+        credential_scope=None,
+        require_scoped_credentials=False,
+    ):
         self.allow_env_fallback = allow_env_fallback
         env_username = os.getenv("PTA_USERNAME") if allow_env_fallback else None
         env_password = (
@@ -526,12 +543,22 @@ class PTAClient:
         ) if allow_env_fallback else None
         self.username = username if username is not None else env_username
         self.password = password if password is not None else env_password
-        self.crawl_dir = CRAWL_DIR
+        resolved_scope = credential_scope or self.username
+        self.credential_scope = _scope_fragment(resolved_scope)
+        if require_scoped_credentials and not self.credential_scope:
+            raise ValueError("a teacher/account credential scope is required")
+        self.crawl_dir = (
+            CRAWL_DIR / "_accounts" / self.credential_scope
+            if self.credential_scope
+            else CRAWL_DIR
+        )
         self.force_selenium_login = _env_flag("PTA_FORCE_SELENIUM_LOGIN", False)
         self.headless = _env_flag("PTA_HEADLESS", False)
-        # Per-account cookie file, supports multi-account
-        safe_name = re.sub(r'[^\w]', '_', self.username or "default")
-        self.cookie_file = str(RUNTIME_DIR / f"pta_cookies_{safe_name}.pkl")
+        cookie_scope = self.credential_scope or "standalone-default"
+        self.cookie_file = str(RUNTIME_DIR / "credentials" / cookie_scope / "cookies.pkl")
+        self.manual_cookie_file = str(
+            RUNTIME_DIR / "credentials" / cookie_scope / "manual_cookies.json"
+        )
         self.session = requests.Session()
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -540,22 +567,48 @@ class PTAClient:
             "Accept": "application/json;charset=UTF-8",
             "Content-Type": "application/json;charset=UTF-8",
             "Accept-Language": "zh-CN",
-            "Referer": "https://pintia.cn/",
-            "x-lollipop": "c69dd20235e34148d85ece4af34ed26f",
+            "Referer": f"{BASE_URL}/",
             "x-marshmallow": "",
         })
+        lollipop = os.getenv("PTA_X_LOLLIPOP", "").strip()
+        if lollipop:
+            self.session.headers["x-lollipop"] = lollipop
         # Protect shared requests.Session under ThreadPool concurrency
         self._session_lock = threading.RLock()
         self.driver = None
-        self.history = CrawlHistory()
+        history_scope = self.credential_scope or "standalone-default"
+        self.history = CrawlHistory(
+            RUNTIME_DIR / "history" / history_scope / "crawl_history.json"
+        )
+        Path(self.cookie_file).parent.mkdir(parents=True, exist_ok=True)
         self.crawl_dir.mkdir(parents=True, exist_ok=True)
 
     # ==================== Cookie Management ====================
 
     def _save_cookies(self, cookies):
-        with open(self.cookie_file, "wb") as f:
-            pickle.dump(cookies, f)
+        descriptor = os.open(
+            self.cookie_file,
+            os.O_CREAT | os.O_TRUNC | os.O_WRONLY,
+            0o600,
+        )
+        with os.fdopen(descriptor, "wb") as file_obj:
+            pickle.dump(cookies, file_obj)
+        try:
+            os.chmod(self.cookie_file, 0o600)
+        except OSError:
+            pass
         print("Cookie 已缓存到本地")
+
+    def save_manual_cookies(self, cookies):
+        path = Path(self.manual_cookie_file)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as file_obj:
+            json.dump(cookies, file_obj, ensure_ascii=False, indent=2)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
 
     def _load_cookies(self):
         if not os.path.exists(self.cookie_file):
@@ -597,7 +650,7 @@ class PTAClient:
                 for c in cached:
                     self.session.cookies.set(
                         c["name"], c["value"],
-                        domain=c.get("domain", ".pintia.cn")
+                        domain=c.get("domain", COOKIE_DOMAIN)
                     )
                 if self._check_cookie_valid():
                     self._notify_cookie_status("OK")
@@ -624,7 +677,7 @@ class PTAClient:
                 time.sleep(delay)
 
         # 3) 尝试手动 cookie 文件
-        manual_cookie_path = str(RUNTIME_DIR / "manual_cookies.json")
+        manual_cookie_path = self.manual_cookie_file
         if os.path.exists(manual_cookie_path):
             print(f"尝试从手动 cookie 文件恢复: {manual_cookie_path}")
             with open(manual_cookie_path, "r", encoding="utf-8") as f:
@@ -632,7 +685,7 @@ class PTAClient:
             for c in manual_cookies:
                 name = c.get("name", c.get("Name", ""))
                 value = c.get("value", c.get("Value", ""))
-                domain = c.get("domain", c.get("Domain", ".pintia.cn"))
+                domain = c.get("domain", c.get("Domain", COOKIE_DOMAIN))
                 if name and value:
                     self.session.cookies.set(name, value, domain=domain)
             if self._check_cookie_valid():
@@ -823,7 +876,7 @@ class PTAClient:
             for c in selenium_cookies:
                 self.session.cookies.set(
                     c["name"], c["value"],
-                    domain=c.get("domain", ".pintia.cn")
+                    domain=c.get("domain", COOKIE_DOMAIN)
                 )
             print("登录完成，cookie 已转移到 requests")
         finally:
@@ -2006,7 +2059,7 @@ class PTAClient:
                     download_url,
                     stream=True,
                     timeout=120,
-                    headers={"Referer": "https://pintia.cn/"},
+                    headers={"Referer": f"{BASE_URL}/"},
                 )
             if resp.status_code not in {404, 408, 429, 500, 502, 503, 504}:
                 break
@@ -3088,9 +3141,16 @@ def run_once(mode="incremental"):
     accounts = load_accounts()
     for acc in accounts:
         try:
-            client = PTAClient(acc["username"], acc["password"])
             group_id = acc.get("group_id")
             group_name = acc.get("group_name")
+            account_scope = "::".join(
+                str(value) for value in (acc.get("username"), group_id, group_name) if value
+            )
+            client = PTAClient(
+                acc["username"],
+                acc["password"],
+                credential_scope=account_scope,
+            )
             if mode in ("incremental", "full"):
                 client.crawl_incremental(group_id=group_id, group_name=group_name)
             if mode in ("refresh", "full"):
@@ -3118,13 +3178,13 @@ def run_scheduled(interval_hours=24):
 
 
 def _pta_ensure_login_override(self):
-    manual_cookie_path = str(RUNTIME_DIR / "manual_cookies.json")
+    manual_cookie_path = self.manual_cookie_file
 
     def load_cookie_list(cookie_list):
         for c in cookie_list:
             name = c.get("name", c.get("Name", ""))
             value = c.get("value", c.get("Value", ""))
-            domain = c.get("domain", c.get("Domain", ".pintia.cn"))
+            domain = c.get("domain", c.get("Domain", COOKIE_DOMAIN))
             if name and value:
                 self.session.cookies.set(name, value, domain=domain)
 
@@ -3209,7 +3269,7 @@ def _pta_sync_driver_cookies_to_session(self):
         self.session.cookies.set(
             name,
             value,
-            domain=cookie.get("domain", ".pintia.cn"),
+            domain=cookie.get("domain", COOKIE_DOMAIN),
         )
     return selenium_cookies
 

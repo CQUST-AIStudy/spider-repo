@@ -66,7 +66,7 @@ curl http://127.0.0.1:8100/health
 - 让云服务器能够访问 `.env` 中配置的 Debian APT、PyPI 和 Docker 基础镜像源，这样构建时可以安装 Chromium 和匹配驱动。
 - 如果服务器网络访问镜像源失败，切换 `DEBIAN_MIRROR`、`PIP_INDEX_URL` 或 `PYTHON_BASE_IMAGE` 后重新 `docker compose build`。
 - `docker-compose.yml` 已把 `./runtime` 挂载到容器内 `/app/runtime`，cookie、手动 cookie 和 Selenium 运行缓存会保留，容器重建后不会丢。
-- 如果 PTA 自动登录遇到滑块验证码失败，在前端或接口写入手动 cookie：`POST /cookie/update`，请求体传浏览器导出的 cookie JSON 数组。
+- 如果 PTA 自动登录遇到滑块验证码失败，在前端或接口写入手动 cookie：`POST /cookie/update`，请求体还必须传 `class_id`、`teacher_id` 或 `username`，禁止跨教师共享无作用域 cookie。
 - 爬虫只采集 `PROGRAMMING` 编程题及其提交；其他题型不会写入本地快照或数据库。
 - 用户组答卷导出遇到 COS `404` 时会重新创建导出任务并重试；存在提交记录时，重试仍失败会使任务失败，避免数据库在答题卡缺失时显示成功。紧急情况下可设置 `PTA_GROUP_ANSWER_EXPORT_REQUIRED=false` 只同步核心数据。
 - 后端暂时不可达时，完成回调会保存在 `runtime/backend_callback_outbox.json` 并自动补发；超过 `PTA_IMPORT_JOB_STALE_HOURS` 的遗留导入任务会在下一次同步前自动关闭。
