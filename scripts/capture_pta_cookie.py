@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import time
@@ -15,7 +16,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from pta_spider import spider as spider_mod
 
 
-def build_driver(profile_scope):
+def build_driver():
     browser_path, browser_version, browser_major = spider_mod._detect_chrome_binary()
     selected_driver = spider_mod._resolve_chromedriver(browser_major)
     if not browser_path:
@@ -34,9 +35,7 @@ def build_driver(profile_scope):
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
 
-    profile_dir = (
-        spider_mod.RUNTIME_DIR / "browser-profiles" / profile_scope
-    ).resolve()
+    profile_dir = (spider_mod.RUNTIME_DIR / ".chrome-profile-manual").resolve()
     profile_dir.mkdir(parents=True, exist_ok=True)
     (profile_dir / "Default").mkdir(parents=True, exist_ok=True)
     (profile_dir / "First Run").touch(exist_ok=True)
@@ -54,17 +53,15 @@ def cookies_to_session(cookie_list):
     session.headers.update({
         "user-agent": "Mozilla/5.0",
         "accept": "application/json, text/plain, */*",
+        "x-lollipop": "c69dd20235e34148d85ece4af34ed26f",
         "x-marshmallow": "",
     })
-    lollipop = os.getenv("PTA_X_LOLLIPOP", "").strip()
-    if lollipop:
-        session.headers["x-lollipop"] = lollipop
     for cookie in cookie_list:
         name = cookie.get("name")
         value = cookie.get("value")
         if not name or not value:
             continue
-        session.cookies.set(name, value, domain=cookie.get("domain", spider_mod.COOKIE_DOMAIN))
+        session.cookies.set(name, value, domain=cookie.get("domain", ".pintia.cn"))
     return session
 
 
@@ -136,17 +133,9 @@ def cookie_valid(cookie_list):
 def main():
     timeout_seconds = int(os.getenv("PTA_MANUAL_LOGIN_TIMEOUT", "5"))
     poll_seconds = max(1, int(os.getenv("PTA_MANUAL_LOGIN_POLL_SECONDS", "5")))
-    raw_scope = os.getenv("PTA_COOKIE_SCOPE") or os.getenv("PTA_USERNAME")
-    if not raw_scope:
-        raise RuntimeError("PTA_COOKIE_SCOPE or PTA_USERNAME is required")
-    client = spider_mod.PTAClient(
-        allow_env_fallback=False,
-        credential_scope=raw_scope,
-        require_scoped_credentials=True,
-    )
-    cookie_json = Path(client.manual_cookie_file)
+    cookie_json = spider_mod.RUNTIME_DIR / "manual_cookies.json"
     cookie_json.parent.mkdir(parents=True, exist_ok=True)
-    driver = build_driver(client.credential_scope)
+    driver = build_driver()
     try:
         driver.get(f"{spider_mod.BASE_URL}/auth/login")
         print("A visible PTA login window has been opened.")
@@ -163,7 +152,10 @@ def main():
             ok, status = cookie_valid(cookies)
             print(f"Cookie check: {status}")
             if ok:
-                client.save_manual_cookies(cookies)
+                cookie_json.write_text(
+                    json.dumps(cookies, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
                 print(f"Saved authenticated cookies to: {cookie_json}")
                 return
             remaining = deadline - time.time()

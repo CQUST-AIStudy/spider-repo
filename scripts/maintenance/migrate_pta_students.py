@@ -9,7 +9,7 @@ But are missing:
   - class_student records (can't be queried by legacy paths)
 
 After running this script, PTA students will be able to:
-  1. Login with an operator-issued non-predictable initial credential
+  1. Login with student_no / student_no (default password)
   2. See their experiment data in the student portal
 
 Usage:
@@ -22,17 +22,8 @@ Environment variables (same as sync_to_db.py):
 import os
 import sys
 import argparse
-from pathlib import Path
 
 import pymysql
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from pta_spider.initial_credentials import (
-    create_initial_password,
-    escrow_initial_credential,
-)
 
 try:
     import bcrypt
@@ -91,9 +82,10 @@ def main():
             tap_user_id = tu_row[0]
             print(f"  [EXISTING] tap_user({tap_user_id}) already exists for {student_no}")
         else:
-            initial_password, needs_escrow = create_initial_password(student_no)
+            # Generate BCrypt hash
+            default_password = str(student_no)
             password_hash = bcrypt.hashpw(
-                initial_password.encode("utf-8"), bcrypt.gensalt()
+                default_password.encode("utf-8"), bcrypt.gensalt()
             ).decode("utf-8")
 
             if args.dry_run:
@@ -108,13 +100,8 @@ def main():
                 (student_no, real_name, password_hash),
             )
             tap_user_id = cursor.lastrowid
-            if needs_escrow:
-                escrow_initial_credential(student_no, initial_password)
             created_users += 1
-            print(
-                f"  [CREATED] tap_user({tap_user_id}) for {student_no} ({real_name}); "
-                "initial credential issued through the configured operator channel"
-            )
+            print(f"  [CREATED] tap_user({tap_user_id}) for {student_no} ({real_name})")
 
         # Bind student_profile.user_id
         if not args.dry_run and tap_user_id:

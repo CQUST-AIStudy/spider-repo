@@ -29,9 +29,6 @@ $spiderLocalEnvScript = Join-Path $scriptDir "local.env.ps1"
 if (Test-Path $spiderLocalEnvScript) {
   . $spiderLocalEnvScript
 }
-$portScript = Join-Path $scriptDir "spider_port.ps1"
-. $portScript
-Initialize-SpiderPort -ProjectRoot $scriptDir
 $runtimeDir = if ($env:PTA_RUNTIME_DIR) {
   $env:PTA_RUNTIME_DIR
 } else {
@@ -57,7 +54,7 @@ $appFile = Join-Path $scriptDir "spider_api.py"
 $pidFile = Join-Path $runtimeDir "spider_api.pid"
 $outLog = Join-Path $runtimeDir "spider_api.out.log"
 $errLog = Join-Path $runtimeDir "spider_api.err.log"
-$healthUrl = "http://127.0.0.1:$env:SPIDER_PORT/health"
+$healthUrl = "http://127.0.0.1:8100/health"
 
 function Resolve-SpiderPython {
   $candidates = @()
@@ -160,7 +157,7 @@ if (Test-Path $pidFile) {
   Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host "Starting PTA Spider API on port $env:SPIDER_PORT..." -ForegroundColor Cyan
+Write-Host "Starting PTA Spider API on port 8100..." -ForegroundColor Cyan
 $proc = Start-Process `
   -FilePath $pythonExe `
   -ArgumentList @("`"$appFile`"") `

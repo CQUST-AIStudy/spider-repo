@@ -1,6 +1,5 @@
-from db_connection import connect
-
-conn = connect()
+import pymysql
+conn = pymysql.connect(host='localhost', port=3306, user='root', password='123456', database='ptadatabase', charset='utf8mb4')
 cur = conn.cursor()
 
 # 检查problem_score_detail是否有重复

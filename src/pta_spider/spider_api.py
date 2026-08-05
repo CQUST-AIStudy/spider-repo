@@ -27,13 +27,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import re
 
-from .spider import (
-    PTAClient,
-    CrawlHistory,
-    COOKIE_DOMAIN,
-    RUNTIME_DIR,
-    PROBLEM_SET_MAX_WORKERS,
-)
+from .spider import PTAClient, CrawlHistory, RUNTIME_DIR, PROBLEM_SET_MAX_WORKERS
 from . import sync_to_db as legacy_sync
 from .sync_to_unified_db import (
     SUPPORTED_PROBLEM_TYPES,
@@ -897,8 +891,6 @@ def _bypass_phase_cooldown(mode, force=False):
 class CrawlRequest(BaseModel):
     class_id: int | None = None
     classId: int | None = None
-    teacher_id: int | None = None
-    teacherId: int | None = None
     problem_set_id: str | None = None
     problemSetId: str | None = None
     problem_set_name: str | None = None
@@ -944,12 +936,10 @@ class TaskInfo:
         force_selenium_login=False,
         headless=None,
         dry_run=False,
-        teacher_id=None,
     ):
         self.task_id = tid
         self.keyword = keyword
         self.class_id = class_id
-        self.teacher_id = teacher_id
         self.problem_set_id = problem_set_id
         self.problem_set_name = problem_set_name
         self.group_id = group_id
@@ -967,11 +957,6 @@ class TaskInfo:
         self.credential_source = credential_source or ("temporary" if username and password else "cookie")
         self.username = username
         self.password = password
-        self.credential_scope = _credential_scope(
-            class_id=class_id,
-            teacher_id=teacher_id,
-            username=username,
-        )
         self.force_selenium_login = force_selenium_login
         self.headless = headless
         self.dry_run = bool(dry_run)
@@ -995,7 +980,6 @@ class TaskInfo:
         return {
             "task_id": self.task_id,
             "class_id": self.class_id,
-            "teacher_id": self.teacher_id,
             "problem_set_id": self.problem_set_id,
             "problem_set_name": self.problem_set_name,
             "group_id": self.group_id,
@@ -1040,7 +1024,6 @@ def _keyword_in_queue(
     group_id=None,
     problem_set_id=None,
     problem_set_name=None,
-    credential_scope=None,
 ):
     for t in _task_store.values():
         if (
@@ -1051,7 +1034,6 @@ def _keyword_in_queue(
             and t.group_id == group_id
             and t.problem_set_id == problem_set_id
             and t.problem_set_name == problem_set_name
-            and t.credential_scope == credential_scope
             and t.status in (TaskStatus.QUEUED, TaskStatus.RUNNING)
         ):
             return t
@@ -1196,17 +1178,6 @@ def _safe_path_fragment(value):
     return text[:80] or "none"
 
 
-def _credential_scope(class_id=None, teacher_id=None, username=None):
-    if class_id is not None:
-        return f"class:{class_id}"
-    if teacher_id is not None:
-        return f"teacher:{teacher_id}"
-    if username and str(username).strip():
-        digest = hashlib.sha256(str(username).strip().encode("utf-8")).hexdigest()
-        return f"account:{digest}"
-    return None
-
-
 def _env_bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -1215,15 +1186,12 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def _crawl_cache_scope(task: TaskInfo) -> str:
-    parts = []
     if task.class_id is not None:
-        parts.append(f"class-{task.class_id}")
+        return f"class-{task.class_id}"
     if task.group_id:
-        parts.append(f"group-{_safe_path_fragment(task.group_id)}")
-    elif task.group_name:
-        parts.append(f"group-{_safe_path_fragment(task.group_name)}")
-    if parts:
-        return "-".join(parts)
+        return f"group-{_safe_path_fragment(task.group_id)}"
+    if task.group_name:
+        return f"group-{_safe_path_fragment(task.group_name)}"
     if task.keyword:
         return f"keyword-{_safe_path_fragment(task.keyword)}"
     return "default"
@@ -1397,26 +1365,7 @@ def _run_crawl(task):
         task.status = TaskStatus.RUNNING
         task.phase = "AUTHENTICATING"
         task.started_at = datetime.now().isoformat()
-        client = PTAClient(
-            task.username,
-            task.password,
-            allow_env_fallback=False,
-            credential_scope=task.credential_scope,
-            require_scoped_credentials=True,
-        )
-        history_group = task.group_id or task.group_name or task.keyword
-        history_account = getattr(
-            client,
-            "credential_scope",
-            _safe_path_fragment(task.credential_scope),
-        )
-        client.history = CrawlHistory(
-            RUNTIME_DIR
-            / "history"
-            / history_account
-            / _safe_path_fragment(history_group)
-            / "crawl_history.json"
-        )
+        client = PTAClient(task.username, task.password, allow_env_fallback=False)
         base_crawl_dir = Path(client.crawl_dir).resolve()
         task_crawl_dir = _task_crawl_dir(base_crawl_dir, task)
         task_crawl_dir.mkdir(parents=True, exist_ok=True)
@@ -1877,7 +1826,6 @@ def _parse_submission_policy(value, mode):
 @app.post("/crawl")
 async def crawl(req: CrawlRequest):
     class_id = req.class_id if req.class_id is not None else req.classId
-    teacher_id = req.teacher_id if req.teacher_id is not None else req.teacherId
     group_id = _first_text(req.group_id, req.groupId, req.ptaGroupId)
     group_name = _first_text(req.group_name, req.groupName, req.ptaGroupName, req.keyword, req.ptaKeyword)
     problem_set_id = _first_text(req.problem_set_id, req.problemSetId)
@@ -1897,11 +1845,6 @@ async def crawl(req: CrawlRequest):
         raise HTTPException(400, "group_id or group_name required")
     if bool(req.username and req.username.strip()) != bool(req.password):
         raise HTTPException(400, "username and password must be provided together")
-    if _credential_scope(class_id, teacher_id, req.username) is None:
-        raise HTTPException(
-            400,
-            "class_id, teacher_id, or scoped username credentials are required",
-        )
     existing = _keyword_in_queue(
         keyword,
         mode,
@@ -1910,7 +1853,6 @@ async def crawl(req: CrawlRequest):
         group_id,
         problem_set_id,
         problem_set_name,
-        _credential_scope(class_id, teacher_id, req.username),
     )
     if existing and not req.force:
         return {"task_id": existing.task_id, "status": existing.status.value, "message": "same task already queued"}
@@ -1937,7 +1879,6 @@ async def crawl(req: CrawlRequest):
         force_selenium_login,
         req.headless,
         dry_run,
-        teacher_id,
     )
     _task_store[tid] = task
     await q.put(tid)
@@ -1976,11 +1917,6 @@ class CookieStatusRequest(BaseModel):
 
 class ManualCookieRequest(BaseModel):
     cookies: str
-    class_id: int | None = None
-    classId: int | None = None
-    teacher_id: int | None = None
-    teacherId: int | None = None
-    username: str | None = None
 
 @app.put("/cookie/status")
 async def update_cookie_status(req: CookieStatusRequest):
@@ -1995,37 +1931,24 @@ async def get_cookie_status():
 
 @app.post("/cookie/update")
 async def manual_update_cookie(req: ManualCookieRequest):
-    class_id = req.class_id if req.class_id is not None else req.classId
-    teacher_id = req.teacher_id if req.teacher_id is not None else req.teacherId
-    scope = _credential_scope(class_id, teacher_id, req.username)
-    if scope is None:
-        raise HTTPException(
-            400,
-            "class_id, teacher_id, or username is required to isolate the cookie",
-        )
     try:
         cookies = json_mod.loads(req.cookies)
-        if (
-            not isinstance(cookies, list)
-            or len(cookies) == 0
-            or not all(isinstance(cookie, dict) for cookie in cookies)
-        ):
+        if not isinstance(cookies, list) or len(cookies) == 0:
             raise HTTPException(400, "Cookie format error, need JSON array")
     except json_mod.JSONDecodeError:
         raise HTTPException(400, "Cookie is not valid JSON")
-    client = PTAClient(
-        allow_env_fallback=False,
-        credential_scope=scope,
-        require_scoped_credentials=True,
-    )
+    cookie_path = RUNTIME_DIR / "manual_cookies.json"
+    cookie_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cookie_path, "w", encoding="utf-8") as f:
+        json_mod.dump(cookies, f, ensure_ascii=False, indent=2)
+    client = PTAClient()
     for c in cookies:
         name = c.get("name", c.get("Name", ""))
         value = c.get("value", c.get("Value", ""))
-        domain = c.get("domain", c.get("Domain", COOKIE_DOMAIN))
+        domain = c.get("domain", c.get("Domain", ".pintia.cn"))
         if name and value:
             client.session.cookies.set(name, value, domain=domain)
     if client._check_cookie_valid():
-        await asyncio.to_thread(client.save_manual_cookies, cookies)
         client._save_cookies(cookies)
         _cookie_status.update({"status": "OK", "error": "", "updated_at": datetime.now().isoformat()})
         return {"valid": True, "message": "Cookie valid, saved. Sync restored."}

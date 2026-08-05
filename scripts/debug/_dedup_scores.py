@@ -1,14 +1,5 @@
-import argparse
-
-from db_connection import connect
-
-parser = argparse.ArgumentParser(description="Deduplicate legacy score rows")
-parser.add_argument("--apply", action="store_true", help="Delete duplicates; default is dry-run")
-parser.add_argument("--verify-student-no")
-parser.add_argument("--verify-experiment-id", type=int)
-args = parser.parse_args()
-
-conn = connect()
+import pymysql
+conn = pymysql.connect(host='localhost', port=3306, user='root', password='123456', database='ptadatabase', charset='utf8mb4')
 cur = conn.cursor()
 
 # 统计去重前
@@ -38,41 +29,40 @@ cur.execute("SELECT COUNT(*) FROM keep_ids")
 keep_count = cur.fetchone()[0]
 print(f"保留记录数: {keep_count}")
 
-deleted = 0
-if args.apply:
-    cur.execute("DELETE FROM score WHERE score_id NOT IN (SELECT keep_id FROM keep_ids)")
-    deleted = cur.rowcount
-    conn.commit()
-    print(f"已删除 {deleted} 条重复记录")
-else:
-    print(f"Dry-run: would delete {total_before - unique_pairs} duplicate records")
+# 删除不在保留列表中的记录
+cur.execute("""
+    DELETE FROM score WHERE score_id NOT IN (SELECT keep_id FROM keep_ids)
+""")
+deleted = cur.rowcount
+conn.commit()
+print(f"已删除 {deleted} 条重复记录")
 
 # 验证
 cur.execute("SELECT COUNT(*) FROM score")
 total_after = cur.fetchone()[0]
 print(f"去重后 score 总记录: {total_after}")
 
-if args.verify_student_no:
-    cur.execute("""
-        SELECT e.name, s.score
-        FROM score s JOIN experiment e ON s.experiment_id = e.experiment_id
-        WHERE s.username = %s
-        ORDER BY s.experiment_id
-    """, (args.verify_student_no,))
-    print(f"\n=== {args.verify_student_no} 去重后 ===")
-    total = 0
-    for r in cur.fetchall():
-        print(f"  {r[0]}: {r[1]}")
-        if r[1]: total += float(r[1])
-    print(f"  总分合计: {total}")
+# 验证student1
+cur.execute("""
+    SELECT e.name, s.score
+    FROM score s JOIN experiment e ON s.experiment_id = e.experiment_id
+    WHERE s.username = '2023442246'
+    ORDER BY s.experiment_id
+""")
+print(f"\n=== student1 去重后 ===")
+total = 0
+for r in cur.fetchall():
+    print(f"  {r[0]}: {r[1]}")
+    if r[1]: total += float(r[1])
+print(f"  总分合计: {total}")
 
-if args.verify_experiment_id:
-    cur.execute("""
-        SELECT COUNT(*), MIN(score), MAX(score), AVG(score)
-        FROM score WHERE experiment_id = %s
-    """, (args.verify_experiment_id,))
-    r = cur.fetchone()
-    print(f"\nexperiment_id={args.verify_experiment_id}: {r[0]} records, min={r[1]}, max={r[2]}, avg={r[3]}")
+# 验证计科23第1次作业
+cur.execute("""
+    SELECT COUNT(*), MIN(score), MAX(score), AVG(score)
+    FROM score WHERE experiment_id = 1
+""")
+r = cur.fetchone()
+print(f"\n计科23第1次作业: {r[0]} records, min={r[1]}, max={r[2]}, avg={r[3]:.1f}")
 
 cur.execute("DROP TEMPORARY TABLE IF EXISTS keep_ids")
 cur.close()

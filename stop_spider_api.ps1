@@ -3,14 +3,6 @@
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$localEnvScript = Join-Path $scriptDir "local.env.ps1"
-if (Test-Path $localEnvScript) {
-  . $localEnvScript
-}
-$portScript = Join-Path $scriptDir "spider_port.ps1"
-. $portScript
-Initialize-SpiderPort -ProjectRoot $scriptDir
-$spiderPort = $env:SPIDER_PORT
 $runtimeDir = if ($env:PTA_RUNTIME_DIR) {
   $env:PTA_RUNTIME_DIR
 } else {
@@ -36,7 +28,7 @@ if (Test-Path $pidFile) {
 }
 
 if (-not $stopped) {
-  $portLines = netstat -ano -p tcp | Select-String "LISTENING" | Select-String ":$spiderPort\s"
+  $portLines = netstat -ano | Select-String ":8100"
   if ($portLines) {
     $pids = @()
     foreach ($line in $portLines) {

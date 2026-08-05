@@ -1138,14 +1138,9 @@ def _ensure_tap_user_and_bind(cursor, student_profile_id, student_no, student_na
     if row:
         tap_user_id = row[0]
     else:
-        from .initial_credentials import (
-            create_initial_password,
-            escrow_initial_credential,
-        )
-
-        initial_password, needs_escrow = create_initial_password(student_no)
+        # Default password = student_no, hashed with BCrypt (compatible with Java BCryptPasswordEncoder)
         password_hash = _bcrypt.hashpw(
-            initial_password.encode("utf-8"),
+            student_no.encode("utf-8"),
             _bcrypt.gensalt(),
         ).decode("utf-8")
 
@@ -1157,12 +1152,7 @@ def _ensure_tap_user_and_bind(cursor, student_profile_id, student_no, student_na
             (student_no, student_name, password_hash),
         )
         tap_user_id = cursor.lastrowid
-        if needs_escrow:
-            escrow_initial_credential(student_no, initial_password)
-        print(
-            f"  [INFO] Created tap_user account for {student_no} (id={tap_user_id}); "
-            "initial credential issued through the configured operator channel"
-        )
+        print(f"  [INFO] Created tap_user account for {student_no} (id={tap_user_id})")
 
     # Bind tap_user.id to student_profile.user_id (only if still NULL)
     cursor.execute(

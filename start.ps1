@@ -8,9 +8,6 @@ $localEnv = Join-Path $PSScriptRoot "local.env.ps1"
 if (Test-Path $localEnv) {
   . $localEnv
 }
-$portScript = Join-Path $PSScriptRoot "spider_port.ps1"
-. $portScript
-Initialize-SpiderPort -ProjectRoot $PSScriptRoot
 
 $runtimeDir = if ($env:PTA_RUNTIME_DIR) {
   $env:PTA_RUNTIME_DIR
@@ -53,6 +50,6 @@ if (-not (Test-Path $pythonExe)) {
   $pythonExe = $pythonCommand.Source
 }
 
-Write-Host "Starting PTA Spider API on http://127.0.0.1:$env:SPIDER_PORT ..." -ForegroundColor Cyan
+Write-Host "Starting PTA Spider API on http://127.0.0.1:8100 ..." -ForegroundColor Cyan
 & $pythonExe $appFile
 exit $LASTEXITCODE
